@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>C.Barnickel Artwork — Virtual Gallery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --bg: #0a0908;
+    --wall: #1c1715;
+    --ink: #efe7d7;
+    --ink-dim: rgba(239, 231, 215, 0.55);
+    --ink-faint: rgba(239, 231, 215, 0.25);
+    --gold: #c9a96e;
+    --gold-dim: rgba(201, 169, 110, 0.6);
+    --serif: 'Cormorant Garamond', Georgia, serif;
+    --sans: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  html, body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--serif);
+    overflow: hidden; height: 100%; width: 100%;
+    user-select: none; -webkit-user-select: none;
+  }
+  canvas { display: block; }
+
+  .top-bar {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 22px 32px;
+    display: flex; justify-content: space-between; align-items: center;
+    z-index: 50; pointer-events: none;
+    background: linear-gradient(to bottom, rgba(10,9,8,0.6), transparent);
+  }
+  .brand {
+    pointer-events: auto;
+    font-weight: 400; font-size: 18px;
+    letter-spacing: 0.32em; text-transform: uppercase;
+  }
+  .brand .dot { color: var(--gold); margin: 0 0.15em; }
+
+  .view-toggle {
+    pointer-events: auto;
+    display: flex;
+    border: 1px solid var(--ink-faint);
+  }
+  .view-toggle button {
+    background: transparent; border: none;
+    color: var(--ink-dim);
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.22em;
+    text-transform: uppercase;
+    padding: 10px 18px; cursor: pointer;
+    transition: all 0.25s ease;
+  }
+  .view-toggle button:hover { color: var(--ink); }
+  .view-toggle button.active {
+    background: rgba(239, 231, 215, 0.08);
+    color: var(--ink);
+  }
+  .view-toggle button + button { border-left: 1px solid var(--ink-faint); }
+
+  #entry {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at center, #1a1512 0%, #050403 80%);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 200; cursor: pointer;
+    transition: opacity 0.8s ease;
+  }
+  #entry.fade { opacity: 0; pointer-events: none; }
+  #entry .ornament {
+    width: 80px; height: 1px; background: var(--gold-dim);
+    margin: 0 auto 28px; position: relative;
+  }
+  #entry .ornament::before, #entry .ornament::after {
+    content: ''; position: absolute; top: -2px; width: 5px; height: 5px;
+    background: var(--gold); border-radius: 50%;
+  }
+  #entry .ornament::before { left: -3px; }
+  #entry .ornament::after { right: -3px; }
+  #entry h1 {
+    font-weight: 300;
+    font-size: clamp(36px, 6vw, 64px);
+    letter-spacing: 0.18em; text-transform: uppercase;
+    text-align: center;
+  }
+  #entry h1 .dot { color: var(--gold); margin: 0 0.1em; font-style: italic; }
+  #entry .sub {
+    font-style: italic; font-weight: 300;
+    font-size: 18px; color: var(--ink-dim);
+    margin-top: 14px; letter-spacing: 0.04em;
+  }
+  #entry .enter-btn {
+    margin-top: 60px; background: transparent;
+    border: 1px solid var(--gold-dim);
+    color: var(--ink); font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.32em;
+    text-transform: uppercase; padding: 16px 44px;
+    cursor: pointer; transition: all 0.3s ease;
+  }
+  #entry .enter-btn:hover:not(:disabled) {
+    background: var(--gold); color: #1a1512; border-color: var(--gold);
+  }
+  #entry .enter-btn:disabled { opacity: 0.4; cursor: wait; }
+  #entry .hint {
+    position: absolute; bottom: 40px;
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.25em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+
+  .crosshair {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none; z-index: 40;
+    opacity: 0; transition: opacity 0.4s;
+  }
+  .crosshair.visible { opacity: 0.6; }
+  .crosshair::before, .crosshair::after {
+    content: ''; position: absolute; background: var(--ink);
+  }
+  .crosshair::before { width: 14px; height: 1px; top: 0; left: -7px; }
+  .crosshair::after { width: 1px; height: 14px; top: -7px; left: 0; }
+  .crosshair.over-painting::before, .crosshair.over-painting::after {
+    background: var(--gold);
+  }
+  .crosshair.over-painting {
+    opacity: 1; transform: translate(-50%, -50%) scale(1.4);
+  }
+
+  .controls-hint {
+    position: fixed; bottom: 28px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 40; pointer-events: none;
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--ink-faint);
+    text-align: center;
+    opacity: 0; transition: opacity 0.6s;
+  }
+  .controls-hint.visible { opacity: 1; }
+  .controls-hint .key {
+    border: 1px solid var(--ink-faint);
+    padding: 3px 7px; margin: 0 2px;
+    border-radius: 2px; color: var(--ink-dim);
+  }
+  .controls-hint .sep { margin: 0 12px; color: var(--ink-faint); }
+
+  .mobile-controls {
+    position: fixed; bottom: 24px; left: 24px;
+    z-index: 40; display: none; pointer-events: auto;
+  }
+  .joy {
+    width: 110px; height: 110px;
+    border: 1px solid var(--ink-faint);
+    border-radius: 50%; position: relative;
+    background: rgba(0,0,0,0.3);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .joy .stick {
+    position: absolute; top: 50%; left: 50%;
+    width: 38px; height: 38px;
+    background: var(--ink-dim);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  #modal {
+    position: fixed; inset: 0;
+    background: rgba(5, 4, 3, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: none; z-index: 300;
+    opacity: 0; transition: opacity 0.4s ease;
+  }
+  #modal.open { display: flex; opacity: 1; }
+  #modal-inner {
+    margin: auto;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 60px;
+    max-width: 1200px; width: 92%;
+    max-height: 92vh; align-items: center;
+    padding: 40px 0;
+  }
+  #modal-img-wrap {
+    display: flex; align-items: center; justify-content: center;
+    min-width: 0;
+  }
+  #modal-img {
+    max-width: 100%; max-height: 80vh; object-fit: contain;
+    box-shadow: 0 30px 100px rgba(0,0,0,0.7), 0 0 0 1px rgba(201,169,110,0.15);
+  }
+  #modal-info {
+    width: 320px; padding: 20px 0 20px 40px;
+    border-left: 1px solid var(--ink-faint);
+  }
+  #modal-info .label {
+    font-family: var(--sans);
+    font-size: 9px; letter-spacing: 0.32em;
+    text-transform: uppercase; color: var(--gold);
+    margin-bottom: 12px;
+  }
+  #modal-title {
+    font-weight: 300; font-size: 38px;
+    line-height: 1.05; letter-spacing: 0.01em;
+    margin-bottom: 18px;
+  }
+  #modal-meta {
+    font-style: italic; font-weight: 300;
+    font-size: 15px; color: var(--ink-dim);
+    margin-bottom: 28px; line-height: 1.6;
+  }
+  #modal-desc {
+    font-weight: 300; font-size: 17px;
+    line-height: 1.7; color: rgba(239, 231, 215, 0.78);
+  }
+  #modal-close, .modal-nav {
+    position: fixed; background: transparent;
+    border: 1px solid var(--ink-faint);
+    color: var(--ink); cursor: pointer;
+    border-radius: 50%; transition: all 0.25s;
+    z-index: 310;
+    font-family: var(--serif);
+  }
+  #modal-close {
+    top: 28px; right: 32px;
+    width: 42px; height: 42px;
+    font-size: 14px;
+  }
+  .modal-nav {
+    top: 50%; transform: translateY(-50%);
+    width: 48px; height: 48px;
+    font-size: 22px; line-height: 1;
+  }
+  #modal-prev { left: 24px; }
+  #modal-next { right: 24px; }
+  #modal-close:hover { background: var(--ink); color: var(--bg); }
+  .modal-nav:hover { background: rgba(239,231,215,0.1); }
+
+  #grid-view {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    overflow-y: auto; overflow-x: hidden;
+    z-index: 100; display: none;
+    padding: 110px 48px 80px;
+  }
+  #grid-view.open { display: block; }
+  .grid-intro {
+    max-width: 700px;
+    margin: 0 auto 80px;
+    text-align: center;
+  }
+  .grid-intro .ornament {
+    width: 60px; height: 1px;
+    background: var(--gold-dim);
+    margin: 0 auto 24px;
+  }
+  .grid-intro h2 {
+    font-weight: 300; font-size: 44px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .grid-intro .dot { color: var(--gold); }
+  .grid-intro p {
+    font-style: italic; font-weight: 300;
+    font-size: 17px; color: var(--ink-dim);
+    line-height: 1.7;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 56px 40px;
+    max-width: 1400px; margin: 0 auto;
+  }
+  .grid-item { cursor: pointer; }
+  .grid-img-wrap {
+    overflow: hidden; background: #0f0d0c;
+    aspect-ratio: 1 / 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    transition: all 0.4s ease;
+  }
+  .grid-img-wrap img {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+    transition: transform 0.6s ease;
+  }
+  .grid-item:hover .grid-img-wrap {
+    box-shadow: 0 16px 50px rgba(0,0,0,0.6), 0 0 0 1px rgba(201,169,110,0.3);
+  }
+  .grid-item:hover img { transform: scale(1.04); }
+  .grid-info { padding: 18px 4px 0; }
+  .grid-info .num {
+    font-family: var(--sans);
+    font-size: 9px; letter-spacing: 0.3em;
+    color: var(--gold); margin-bottom: 6px;
+  }
+  .grid-info h3 {
+    font-weight: 400; font-size: 22px;
+    margin-bottom: 4px;
+  }
+  .grid-info .meta {
+    font-style: italic; font-weight: 300;
+    font-size: 13px; color: var(--ink-dim);
+  }
+
+  #error-box {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(20, 15, 13, 0.98);
+    border: 1px solid var(--gold-dim);
+    padding: 32px 40px; max-width: 500px;
+    z-index: 500; display: none;
+    color: var(--ink); font-size: 14px; line-height: 1.6;
+  }
+  #error-box.show { display: block; }
+  #error-box h3 {
+    color: var(--gold); font-size: 14px;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    margin-bottom: 12px; font-family: var(--sans); font-weight: 500;
+  }
+  #error-box code {
+    background: rgba(0,0,0,0.4); padding: 2px 6px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+    color: var(--gold);
+  }
+
+  @media (max-width: 768px) {
+    #modal-inner { grid-template-columns: 1fr; gap: 24px; }
+    #modal-info {
+      border-left: none;
+      border-top: 1px solid var(--ink-faint);
+      padding: 24px 0 0; width: 100%;
+    }
+    #modal-title { font-size: 28px; }
+    .top-bar { padding: 16px 18px; }
+    .brand { font-size: 13px; }
+    #grid-view { padding: 90px 20px 60px; }
+    .grid-intro h2 { font-size: 28px; }
+    .controls-hint { display: none; }
+    .mobile-controls.show { display: block; }
+    .modal-nav { width: 38px; height: 38px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="entry">
+  <div style="text-align:center">
+    <div class="ornament"></div>
+    <h1>C<span class="dot">.</span>Barnickel <span style="font-style:italic; opacity:0.85">Artwork</span></h1>
+    <div class="sub">A virtual exhibition of plein air painting</div>
+    <button class="enter-btn" id="enterBtn" disabled>Preparing exhibition…</button>
+  </div>
+  <div class="hint">Click anywhere to begin</div>
+</div>
+
+<div class="top-bar">
+  <div class="brand">C<span class="dot">.</span>Barnickel <span style="opacity:0.7">Artwork</span></div>
+  <div class="view-toggle">
+    <button id="btn-3d" class="active">Gallery</button>
+    <button id="btn-grid">Index</button>
+  </div>
+</div>
+
+<div class="crosshair" id="crosshair"></div>
+<div class="controls-hint" id="hint">
+  <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> Move
+  <span class="sep">·</span>
+  Drag to look
+  <span class="sep">·</span>
+  Click painting
+</div>
+
+<div class="mobile-controls" id="mobile-ctrls">
+  <div class="joy" id="joy"><div class="stick" id="stick"></div></div>
+</div>
+
+<div id="canvas-container" style="position:fixed; inset:0; z-index:1;"></div>
+
+<div id="modal">
+  <button id="modal-close">✕</button>
+  <button id="modal-prev" class="modal-nav">‹</button>
+  <button id="modal-next" class="modal-nav">›</button>
+  <div id="modal-inner">
+    <div id="modal-img-wrap"><img id="modal-img" alt="" /></div>
+    <div id="modal-info">
+      <div class="label" id="modal-num">Work 01</div>
+      <h2 id="modal-title"></h2>
+      <div id="modal-meta"></div>
+      <p id="modal-desc"></p>
+    </div>
+  </div>
+</div>
+
+<div id="grid-view">
+  <div class="grid-intro">
+    <div class="ornament"></div>
+    <h2>The Index<span class="dot">.</span></h2>
+    <p>A complete catalogue of works currently on view.</p>
+  </div>
+  <div class="grid" id="grid-container"></div>
+</div>
+
+<div id="error-box">
+  <h3>Couldn't load paintings</h3>
+  <p>The browser blocked loading local images. To preview the gallery, run a local server in this folder:</p>
+  <p style="margin-top: 14px"><code>python3 -m http.server 8000</code></p>
+  <p style="margin-top: 14px">Then open <code>http://localhost:8000</code> in your browser. Or upload to any web host (Netlify, GitHub Pages, etc.) and it'll work directly.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════
+                          YOUR PAINTINGS
+
+   To add a painting:
+     1. Save the image file in the "paintings/" folder
+     2. Copy any block below, paste it into this list, edit the values
+     3. Save this file
+
+   The room will automatically expand and re-arrange to fit.
+
+   Image notes:
+     • JPG or PNG, 1000–1500 px on the longer side works best
+     • Aspect ratio is detected automatically (portrait, landscape, panoramic)
+     • Use a forward-slash path even on Windows: "paintings/my-piece.jpg"
+   ═══════════════════════════════════════════════════════════════════ */
+
+const ARTWORKS = [
+
+  {
+    image: "paintings/01-coastal-headland.jpg",
+    title: "Coastal Headland",
+    medium: "Oil on board",
+    year: "plein air",
+    description: "A windswept ridge falling away to a pale, cool sea. Painted on location, working quickly to catch the shifting afternoon light on the cliff face."
+  },
+
+  {
+    image: "paintings/02-hillside-in-blue.jpg",
+    title: "Hillside in Blue",
+    medium: "Oil on board",
+    year: "plein air",
+    description: "Rolling hills resolved into bands of teal, ochre and shadow. The sea sits low on the horizon, cool against the warm broken color of the foreground."
+  },
+
+  {
+    image: "paintings/03-valley-lights.jpg",
+    title: "Valley Lights",
+    medium: "Oil on board",
+    year: "plein air",
+    description: "A broad valley at dusk, dotted with the first lights of evening. The mountainside in the foreground holds onto the day's last warmth."
+  },
+
+  {
+    image: "paintings/04-botchers-gap.jpg",
+    title: "Botchers Gap",
+    medium: "Oil on panel",
+    year: "plein air",
+    description: "Looking through a wooden fence at sunset light catching the far ridges. A small framed study from a high overlook."
+  },
+
+  {
+    image: "paintings/05-desert-wash.jpg",
+    title: "Desert Wash",
+    medium: "Oil on board",
+    year: "plein air",
+    description: "High desert in late spring — pale earth, scattered sage, and the long pink shadows of an afternoon coming to a close."
+  },
+
+  {
+    image: "paintings/06-structure-study.jpg",
+    title: "Structure Study",
+    medium: "Oil on canvas",
+    year: "",
+    description: "A semi-abstract investigation of overhead architecture — beams, light, and the geometry of a constructed space resolving into planes of color."
+  },
+
+  /* ── ADD A NEW PAINTING HERE ──
+  ,{
+    image: "paintings/07-your-new-piece.jpg",
+    title: "Title goes here",
+    medium: "Oil on canvas",
+    year: "2024",
+    description: "A short description that appears when someone clicks the painting."
+  }
+  */
+
+];
+
+/* ═══════════════════════════════════════════════════════════════════
+   Below this line: the gallery engine. You shouldn't need to edit it.
+   ═══════════════════════════════════════════════════════════════════ */
+
+let scene, camera, renderer, raycaster;
+const mouse = new THREE.Vector2(0, 0);
+const paintingMeshes = [];
+let hoveredPainting = null;
+let ROOM = { w: 24, h: 7, d: 14 };
+
+const keys = { w:false, a:false, s:false, d:false };
+let yaw = Math.PI, pitch = 0;
+let dragging = false, dragStartX = 0, dragStartY = 0;
+let dragYawStart = 0, dragPitchStart = 0, dragMoved = 0;
+const PLAYER_BUFFER = 1.4;
+const MOVE_SPEED = 4.0;
+let lastTime = performance.now();
+const isMobile = matchMedia('(max-width: 768px)').matches;
+
+// ───── Layout planning ─────
+function planLayout(N) {
+  // Distribute N paintings: [north, south, east, west]
+  let dist;
+  if (N === 0) dist = [0,0,0,0];
+  else if (N === 1) dist = [1, 0, 0, 0];
+  else if (N === 2) dist = [1, 1, 0, 0];
+  else if (N === 3) dist = [3, 0, 0, 0];
+  else if (N === 4) dist = [2, 2, 0, 0];
+  else if (N === 5) dist = [3, 2, 0, 0];
+  else if (N === 6) dist = [3, 3, 0, 0];
+  else if (N === 7) dist = [3, 3, 1, 0];
+  else if (N === 8) dist = [3, 3, 1, 1];
+  else if (N === 9) dist = [3, 3, 2, 1];
+  else if (N === 10) dist = [3, 3, 2, 2];
+  else if (N === 11) dist = [3, 3, 3, 2];
+  else if (N === 12) dist = [3, 3, 3, 3];
+  else if (N <= 16) dist = [4, 4, 4, 4];
+  else if (N <= 20) dist = [5, 5, 5, 5];
+  else dist = [Math.ceil(N/4), Math.ceil(N/4), Math.floor(N/4), Math.floor(N/4)];
+
+  // Trim to N (in case dist sums to more)
+  let total = dist.reduce((a,b) => a+b, 0);
+  while (total > N) {
+    for (let i = 3; i >= 0 && total > N; i--) {
+      if (dist[i] > 0) { dist[i]--; total--; }
+    }
+  }
+
+  // Room size based on max paintings per wall axis
+  const longCount = Math.max(dist[0], dist[1]);
+  const shortCount = Math.max(dist[2], dist[3]);
+  const w = Math.max(20, longCount * 5.5 + 10);
+  const d = Math.max(14, shortCount * 5.5 + 10);
+  const h = 7;
+
+  return { dist, room: { w, h, d } };
+}
+
+function spacedPositions(n, length) {
+  if (n === 0) return [];
+  if (n === 1) return [0];
+  const usable = length * 0.72;
+  const step = usable / (n - 1);
+  return Array.from({length: n}, (_, i) => -usable/2 + i * step);
+}
+
+// ───── Procedural textures ─────
+function makeFloorTexture() {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 1024;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#1a1310';
+  ctx.fillRect(0, 0, 1024, 1024);
+  for (let y = 0; y < 1024; y += 64) {
+    const tone = 18 + Math.floor(Math.random() * 14);
+    ctx.fillStyle = `rgb(${tone+4}, ${tone}, ${tone-3})`;
+    ctx.fillRect(0, y, 1024, 63);
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      const yOff = y + 8 + i * 12 + Math.random() * 6;
+      ctx.moveTo(0, yOff);
+      for (let x = 0; x < 1024; x += 40) {
+        ctx.lineTo(x, yOff + (Math.random() - 0.5) * 3);
+      }
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#050302';
+    ctx.fillRect(0, y + 63, 1024, 1);
+    let xPos = Math.random() * 200;
+    while (xPos < 1024) {
+      ctx.fillRect(xPos, y, 1, 64);
+      xPos += 200 + Math.random() * 200;
+    }
+  }
+  for (let i = 0; i < 2000; i++) {
+    ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.1})`;
+    ctx.fillRect(Math.random() * 1024, Math.random() * 1024, 1, 1);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  return tex;
+}
+
+function makePlaqueTexture(title, medium, year) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#efe7d7';
+  ctx.textAlign = 'center';
+  ctx.font = '300 32px "Cormorant Garamond", Georgia, serif';
+  ctx.fillText(title, 256, 50);
+  ctx.font = 'italic 300 20px "Cormorant Garamond", Georgia, serif';
+  ctx.fillStyle = 'rgba(239, 231, 215, 0.6)';
+  const subtitle = year ? `${medium} · ${year}` : medium;
+  ctx.fillText(subtitle, 256, 84);
+  ctx.strokeStyle = '#c9a96e';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(206, 110); ctx.lineTo(306, 110);
+  ctx.stroke();
+  return new THREE.CanvasTexture(c);
+}
+
+function makeNameTexture() {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#c9a96e';
+  ctx.textAlign = 'center';
+  ctx.font = '300 64px "Cormorant Garamond", Georgia, serif';
+  ctx.fillText('C . B A R N I C K E L', 512, 110);
+  ctx.font = 'italic 300 32px "Cormorant Garamond", Georgia, serif';
+  ctx.fillStyle = 'rgba(201, 169, 110, 0.5)';
+  ctx.fillText('Artwork', 512, 170);
+  return new THREE.CanvasTexture(c);
+}
+
+// ───── Build the room ─────
+function buildRoom(layout) {
+  const { dist, room } = layout;
+  ROOM = room;
+
+  // Floor
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(room.w, room.d),
+    new THREE.MeshStandardMaterial({ map: makeFloorTexture(), roughness: 0.85 })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+
+  // Ceiling
+  const ceiling = new THREE.Mesh(
+    new THREE.PlaneGeometry(room.w, room.d),
+    new THREE.MeshStandardMaterial({ color: 0x100c0a, roughness: 1.0 })
+  );
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.y = room.h;
+  scene.add(ceiling);
+
+  // Walls (charcoal)
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x1c1715, roughness: 0.95 });
+  const walls = [
+    { geo: [room.w, room.h], pos: [0, room.h/2, -room.d/2], rot: 0 },              // north
+    { geo: [room.w, room.h], pos: [0, room.h/2,  room.d/2], rot: Math.PI },        // south
+    { geo: [room.d, room.h], pos: [ room.w/2, room.h/2, 0], rot: -Math.PI/2 },     // east
+    { geo: [room.d, room.h], pos: [-room.w/2, room.h/2, 0], rot:  Math.PI/2 },     // west
+  ];
+  walls.forEach(w => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(...w.geo), wallMat);
+    m.position.set(...w.pos);
+    m.rotation.y = w.rot;
+    scene.add(m);
+  });
+
+  // Gallery name on walls without paintings
+  const nameTex = makeNameTexture();
+  const nameMat = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.7 });
+  const nameGeo = new THREE.PlaneGeometry(6, 1.5);
+  // East wall (if no paintings there)
+  if (dist[2] === 0) {
+    const eastName = new THREE.Mesh(nameGeo, nameMat);
+    eastName.position.set(room.w/2 - 0.05, 3.5, 0);
+    eastName.rotation.y = -Math.PI / 2;
+    scene.add(eastName);
+  }
+  if (dist[3] === 0) {
+    const westName = new THREE.Mesh(nameGeo, nameMat);
+    westName.position.set(-room.w/2 + 0.05, 3.5, 0);
+    westName.rotation.y = Math.PI / 2;
+    scene.add(westName);
+  }
+  if (dist[1] === 0 && dist[0] > 0) {
+    // Put name on south wall if it's empty (less likely since we fill N first)
+    const southName = new THREE.Mesh(nameGeo, nameMat);
+    southName.position.set(0, 3.5, room.d/2 - 0.05);
+    southName.rotation.y = Math.PI;
+    scene.add(southName);
+  }
+
+  // ── Lighting ──
+  scene.add(new THREE.AmbientLight(0xfff5e6, 0.18));
+  scene.add(new THREE.HemisphereLight(0xfff0d8, 0x100806, 0.15));
+  const centerGlow = new THREE.PointLight(0xffe8c4, 0.35, room.w * 0.7, 2);
+  centerGlow.position.set(0, room.h - 0.4, 0);
+  scene.add(centerGlow);
+
+  // Decorative ceiling bulbs
+  const bulbGeo = new THREE.SphereGeometry(0.06, 8, 8);
+  const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff0d0 });
+  const bulbsPerSide = Math.ceil(room.w / 6);
+  for (let z of [-room.d/2 + 3, room.d/2 - 3]) {
+    for (let i = 0; i < bulbsPerSide; i++) {
+      const x = (i + 0.5) * (room.w / bulbsPerSide) - room.w/2;
+      const bulb = new THREE.Mesh(bulbGeo, bulbMat);
+      bulb.position.set(x, room.h - 0.15, z);
+      scene.add(bulb);
+    }
+  }
+}
+
+// ───── Place paintings ─────
+function placeAllPaintings(layout) {
+  const { dist } = layout;
+  const wallNames = ['north', 'south', 'east', 'west'];
+  const wallLengths = [ROOM.w, ROOM.w, ROOM.d, ROOM.d];
+
+  // Build a flat list: [{wall, coord}]
+  const slots = [];
+  for (let w = 0; w < 4; w++) {
+    if (dist[w] === 0) continue;
+    const positions = spacedPositions(dist[w], wallLengths[w]);
+    for (const c of positions) {
+      slots.push({ wall: wallNames[w], coord: c });
+    }
+  }
+
+  // Strategy: put paintings in slot order. If 6 paintings total with [3,3,0,0] dist,
+  // smartly place a portrait in center if one exists.
+  const ordered = smartArtworkOrder(ARTWORKS, slots);
+  ordered.forEach((art, i) => placePainting(art, i, slots[i].wall, slots[i].coord));
+}
+
+function smartArtworkOrder(artworks, slots) {
+  // Try to put the most "feature-worthy" piece in the center of a long wall.
+  // For now: keep input order. (Could be enhanced to put portraits in centers, etc.)
+  return artworks.slice();
+}
+
+function placePainting(art, index, wall, coord) {
+  // Wall geometry
+  const wallZ = wall === 'north' ? -ROOM.d/2 : (wall === 'south' ? ROOM.d/2 : 0);
+  const wallX = wall === 'east' ? ROOM.w/2 : (wall === 'west' ? -ROOM.w/2 : 0);
+  const facingY = wall === 'north' ? 0
+                : wall === 'south' ? Math.PI
+                : wall === 'east' ? -Math.PI/2
+                : Math.PI/2;
+  const inwardN = wall === 'north' ? 1 : (wall === 'south' ? -1 : 0);
+  const inwardX = wall === 'west' ? 1 : (wall === 'east' ? -1 : 0);
+
+  const baseX = wall === 'north' || wall === 'south' ? coord : wallX;
+  const baseZ = wall === 'east' || wall === 'west' ? coord : wallZ;
+  const wallNormalZ = inwardN * 0.02;
+  const wallNormalX = inwardX * 0.02;
+
+  const yCenter = 2.85;
+
+  new THREE.TextureLoader().load(
+    art.image,
+    (tex) => {
+      const aspect = tex.image.width / tex.image.height;
+      art.aspect = aspect;
+      tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      // Painting dimensions
+      let pH = 1.85;
+      let pW = aspect * pH;
+      if (pW > 2.85) { pW = 2.85; pH = pW / aspect; }
+
+      // Frame
+      const frame = new THREE.Mesh(
+        new THREE.PlaneGeometry(pW + 0.18, pH + 0.18),
+        new THREE.MeshStandardMaterial({ color: 0x0d0a08, roughness: 0.7, metalness: 0.1 })
+      );
+      frame.position.set(baseX + wallNormalX*0.5, yCenter, baseZ + wallNormalZ*0.5);
+      frame.rotation.y = facingY;
+      scene.add(frame);
+
+      // Mat
+      const mat = new THREE.Mesh(
+        new THREE.PlaneGeometry(pW + 0.06, pH + 0.06),
+        new THREE.MeshStandardMaterial({ color: 0x1a1612, roughness: 0.9 })
+      );
+      mat.position.set(baseX + wallNormalX*0.75, yCenter, baseZ + wallNormalZ*0.75);
+      mat.rotation.y = facingY;
+      scene.add(mat);
+
+      // Painting
+      const painting = new THREE.Mesh(
+        new THREE.PlaneGeometry(pW, pH),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 })
+      );
+      painting.position.set(baseX + wallNormalX, yCenter, baseZ + wallNormalZ);
+      painting.rotation.y = facingY;
+      painting.userData = { artIndex: index, isPainting: true };
+      scene.add(painting);
+      paintingMeshes.push(painting);
+
+      // Plaque
+      const plaqueTex = makePlaqueTexture(art.title, art.medium, art.year);
+      const plaque = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.3, 0.32),
+        new THREE.MeshBasicMaterial({ map: plaqueTex, transparent: true, opacity: 0.85 })
+      );
+      plaque.position.set(baseX + wallNormalX, yCenter - pH/2 - 0.32, baseZ + wallNormalZ);
+      plaque.rotation.y = facingY;
+      scene.add(plaque);
+
+      // Spotlight
+      const lightOffsetZ = inwardN * 2.5;
+      const lightOffsetX = inwardX * 2.5;
+      const spot = new THREE.SpotLight(0xfff2dc, 1.6, 8, Math.PI / 6, 0.45, 1.2);
+      spot.position.set(baseX + lightOffsetX, ROOM.h - 0.3, baseZ + lightOffsetZ);
+      spot.target = painting;
+      scene.add(spot);
+      scene.add(spot.target);
+    },
+    undefined,
+    (err) => {
+      console.error('Failed to load painting:', art.image, err);
+      showLoadError();
+    }
+  );
+}
+
+function showLoadError() {
+  document.getElementById('error-box').classList.add('show');
+}
+
+// ───── Three.js scene init ─────
+function initScene() {
+  const container = document.getElementById('canvas-container');
+  scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x0a0908, 0.025);
+  camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 1.65, Math.min(4, ROOM.d / 4));
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x0a0908, 1);
+  container.appendChild(renderer.domElement);
+  raycaster = new THREE.Raycaster();
+  yaw = Math.PI;
+  window.addEventListener('resize', onResize);
+  setupControls();
+  animate();
+}
+
+// ───── Controls ─────
+function setupControls() {
+  const dom = renderer.domElement;
+  dom.style.cursor = 'grab';
+
+  dom.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    dragging = true;
+    dragStartX = e.clientX; dragStartY = e.clientY;
+    dragYawStart = yaw; dragPitchStart = pitch;
+    dragMoved = 0;
+    dom.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', e => {
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    if (dragging) {
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      dragMoved += Math.abs(dx) + Math.abs(dy);
+      yaw = dragYawStart - dx * 0.0035;
+      pitch = dragPitchStart - dy * 0.0035;
+      pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+    }
+  });
+  window.addEventListener('mouseup', e => {
+    if (dragging && dragMoved < 6) tryPaintingClick();
+    dragging = false;
+    dom.style.cursor = 'grab';
+  });
+
+  // Touch
+  let touchLook = null;
+  let joyTouch = null;
+  let joyVec = { x: 0, y: 0 };
+  const joy = document.getElementById('joy');
+  const stick = document.getElementById('stick');
+  window.__joyVec = joyVec;
+
+  dom.addEventListener('touchstart', e => {
+    for (const t of e.touches) {
+      const r = joy.getBoundingClientRect();
+      if (t.clientX >= r.left && t.clientX <= r.right && t.clientY >= r.top && t.clientY <= r.bottom) continue;
+      if (touchLook === null) {
+        touchLook = { id: t.identifier, x: t.clientX, y: t.clientY, yaw, pitch, moved: 0 };
+      }
+    }
+  }, { passive: true });
+  dom.addEventListener('touchmove', e => {
+    for (const t of e.touches) {
+      if (touchLook && t.identifier === touchLook.id) {
+        const dx = t.clientX - touchLook.x;
+        const dy = t.clientY - touchLook.y;
+        touchLook.moved += Math.abs(dx) + Math.abs(dy);
+        yaw = touchLook.yaw - dx * 0.005;
+        pitch = touchLook.pitch - dy * 0.005;
+        pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+      }
+    }
+  }, { passive: true });
+  dom.addEventListener('touchend', e => {
+    for (const t of e.changedTouches) {
+      if (touchLook && t.identifier === touchLook.id) {
+        if (touchLook.moved < 10) {
+          mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
+          mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
+          tryPaintingClick();
+        }
+        touchLook = null;
+      }
+    }
+  });
+  joy.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    const r = joy.getBoundingClientRect();
+    joyTouch = { id: t.identifier, cx: r.left + r.width/2, cy: r.top + r.height/2 };
+  });
+  joy.addEventListener('touchmove', e => {
+    if (!joyTouch) return;
+    e.preventDefault();
+    for (const t of e.touches) {
+      if (t.identifier === joyTouch.id) {
+        let dx = t.clientX - joyTouch.cx;
+        let dy = t.clientY - joyTouch.cy;
+        const max = 40, dist = Math.hypot(dx, dy);
+        if (dist > max) { dx = dx/dist*max; dy = dy/dist*max; }
+        joyVec.x = dx / max;
+        joyVec.y = dy / max;
+        stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      }
+    }
+  });
+  const endJoy = e => {
+    for (const t of e.changedTouches) {
+      if (joyTouch && t.identifier === joyTouch.id) {
+        joyTouch = null;
+        joyVec.x = 0; joyVec.y = 0;
+        stick.style.transform = 'translate(-50%, -50%)';
+      }
+    }
+  };
+  joy.addEventListener('touchend', endJoy);
+  joy.addEventListener('touchcancel', endJoy);
+
+  // Keyboard
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'w' || e.key === 'ArrowUp') keys.w = true;
+    if (k === 'a' || e.key === 'ArrowLeft') keys.a = true;
+    if (k === 's' || e.key === 'ArrowDown') keys.s = true;
+    if (k === 'd' || e.key === 'ArrowRight') keys.d = true;
+    if (e.key === 'Escape' && document.getElementById('modal').classList.contains('open')) closeModal();
+    if (document.getElementById('modal').classList.contains('open')) {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); navModal(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navModal(1); }
+    }
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'w' || e.key === 'ArrowUp') keys.w = false;
+    if (k === 'a' || e.key === 'ArrowLeft') keys.a = false;
+    if (k === 's' || e.key === 'ArrowDown') keys.s = false;
+    if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
+  });
+}
+
+function tryPaintingClick() {
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(paintingMeshes, false);
+  if (hits.length > 0) openModal(hits[0].object.userData.artIndex);
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
+
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+
+  let mx = 0, mz = 0;
+  if (keys.w) mz -= 1;
+  if (keys.s) mz += 1;
+  if (keys.a) mx -= 1;
+  if (keys.d) mx += 1;
+  if (window.__joyVec) { mx += window.__joyVec.x; mz += window.__joyVec.y; }
+  const len = Math.hypot(mx, mz);
+  if (len > 1) { mx /= len; mz /= len; }
+  if (mx !== 0 || mz !== 0) {
+    const sin = Math.sin(yaw), cos = Math.cos(yaw);
+    camera.position.x += (mx * cos + mz * sin) * MOVE_SPEED * dt;
+    camera.position.z += (-mx * sin + mz * cos) * MOVE_SPEED * dt;
+    const limX = ROOM.w/2 - PLAYER_BUFFER;
+    const limZ = ROOM.d/2 - PLAYER_BUFFER;
+    camera.position.x = Math.max(-limX, Math.min(limX, camera.position.x));
+    camera.position.z = Math.max(-limZ, Math.min(limZ, camera.position.z));
+  }
+
+  // Crosshair hover
+  const modalOpen = document.getElementById('modal').classList.contains('open');
+  const gridOpen = document.getElementById('grid-view').classList.contains('open');
+  if (!modalOpen && !gridOpen) {
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const hits = raycaster.intersectObjects(paintingMeshes, false);
+    const cross = document.getElementById('crosshair');
+    if (hits.length > 0 && hits[0].distance < 8) {
+      if (hoveredPainting !== hits[0].object) {
+        hoveredPainting = hits[0].object;
+        cross.classList.add('over-painting');
+      }
+    } else if (hoveredPainting) {
+      hoveredPainting = null;
+      cross.classList.remove('over-painting');
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ───── Modal ─────
+let currentModalIndex = 0;
+function openModal(index) {
+  currentModalIndex = index;
+  const art = ARTWORKS[index];
+  document.getElementById('modal-img').src = art.image;
+  document.getElementById('modal-title').textContent = art.title;
+  const meta = [art.medium]; if (art.year) meta.push(art.year);
+  document.getElementById('modal-meta').textContent = meta.join(' · ');
+  document.getElementById('modal-desc').textContent = art.description || '';
+  document.getElementById('modal-num').textContent =
+    `Work ${String(index + 1).padStart(2, '0')} of ${String(ARTWORKS.length).padStart(2, '0')}`;
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+function navModal(dir) {
+  let i = currentModalIndex + dir;
+  if (i < 0) i = ARTWORKS.length - 1;
+  if (i >= ARTWORKS.length) i = 0;
+  openModal(i);
+}
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-prev').addEventListener('click', () => navModal(-1));
+document.getElementById('modal-next').addEventListener('click', () => navModal(1));
+document.getElementById('modal').addEventListener('click', e => {
+  if (e.target.id === 'modal' || e.target.id === 'modal-inner' || e.target.id === 'modal-img-wrap') closeModal();
+});
+
+// ───── Grid view ─────
+function buildGrid() {
+  const container = document.getElementById('grid-container');
+  container.innerHTML = '';
+  ARTWORKS.forEach((art, i) => {
+    const item = document.createElement('div');
+    item.className = 'grid-item';
+    item.innerHTML = `
+      <div class="grid-img-wrap"><img src="${art.image}" alt="${art.title}" loading="lazy" /></div>
+      <div class="grid-info">
+        <div class="num">${String(i + 1).padStart(2, '0')}${art.year ? ' — ' + art.year : ''}</div>
+        <h3>${art.title}</h3>
+        <div class="meta"><em>${art.medium || ''}</em></div>
+      </div>`;
+    item.addEventListener('click', () => openModal(i));
+    container.appendChild(item);
+  });
+}
+
+// ───── View switcher ─────
+function setView(mode) {
+  const grid = document.getElementById('grid-view');
+  const canvas = document.getElementById('canvas-container');
+  const cross = document.getElementById('crosshair');
+  const hint = document.getElementById('hint');
+  const mobileCtrls = document.getElementById('mobile-ctrls');
+  const btn3d = document.getElementById('btn-3d');
+  const btnGrid = document.getElementById('btn-grid');
+  if (mode === 'grid') {
+    grid.classList.add('open');
+    canvas.style.display = 'none';
+    cross.classList.remove('visible');
+    hint.classList.remove('visible');
+    mobileCtrls.classList.remove('show');
+    btn3d.classList.remove('active'); btnGrid.classList.add('active');
+  } else {
+    grid.classList.remove('open');
+    canvas.style.display = 'block';
+    cross.classList.add('visible');
+    hint.classList.add('visible');
+    if (isMobile) mobileCtrls.classList.add('show');
+    btn3d.classList.add('active'); btnGrid.classList.remove('active');
+  }
+}
+document.getElementById('btn-3d').addEventListener('click', () => setView('3d'));
+document.getElementById('btn-grid').addEventListener('click', () => setView('grid'));
+
+// ───── Entry ─────
+function enterGallery() {
+  const entry = document.getElementById('entry');
+  entry.classList.add('fade');
+  setTimeout(() => { entry.style.display = 'none'; }, 800);
+  document.getElementById('crosshair').classList.add('visible');
+  document.getElementById('hint').classList.add('visible');
+  if (isMobile) document.getElementById('mobile-ctrls').classList.add('show');
+}
+document.getElementById('entry').addEventListener('click', () => {
+  const btn = document.getElementById('enterBtn');
+  if (!btn.disabled) enterGallery();
+});
+
+// ───── Boot ─────
+(function boot() {
+  if (ARTWORKS.length === 0) {
+    document.getElementById('enterBtn').textContent = 'No paintings yet';
+    return;
+  }
+  const layout = planLayout(ARTWORKS.length);
+  initScene();
+  buildRoom(layout);
+  placeAllPaintings(layout);
+  buildGrid();
+
+  // Enable entry button after a brief moment so initial textures have time to start loading
+  setTimeout(() => {
+    const btn = document.getElementById('enterBtn');
+    btn.disabled = false;
+    btn.textContent = 'Enter the gallery';
+  }, 600);
+})();
+</script>
+</body>
+</html>
