@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Add a Painting — C.Barnickel Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --bg: #0a0908;
+    --panel: #14100e;
+    --panel-2: #1c1715;
+    --ink: #efe7d7;
+    --ink-dim: rgba(239, 231, 215, 0.6);
+    --ink-faint: rgba(239, 231, 215, 0.28);
+    --gold: #c9a96e;
+    --gold-dim: rgba(201, 169, 110, 0.55);
+    --rust: #b07158;
+    --green: #7a9d6a;
+    --serif: 'Cormorant Garamond', Georgia, serif;
+    --sans: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  html, body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans);
+    min-height: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    padding: 32px 20px 80px;
+    background: radial-gradient(ellipse at top, #1a1512 0%, #0a0908 50%);
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--ink-faint);
+  }
+  .ornament {
+    width: 60px; height: 1px;
+    background: var(--gold-dim);
+    margin: 0 auto 16px; position: relative;
+  }
+  .ornament::before, .ornament::after {
+    content: ''; position: absolute; top: -2px;
+    width: 4px; height: 4px;
+    background: var(--gold); border-radius: 50%;
+  }
+  .ornament::before { left: -2px; }
+  .ornament::after { right: -2px; }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: 32px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  h1 .dot { color: var(--gold); margin: 0 0.1em; font-style: italic; }
+  .tagline {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 300;
+    color: var(--ink-dim);
+    font-size: 15px;
+  }
+  .back-link {
+    display: inline-block;
+    margin-top: 14px;
+    color: var(--gold-dim);
+    text-decoration: none;
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    transition: color 0.2s;
+  }
+  .back-link:hover { color: var(--gold); }
+
+  section {
+    background: var(--panel);
+    border: 1px solid rgba(239, 231, 215, 0.06);
+    padding: 28px;
+    margin-bottom: 24px;
+  }
+  section h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 22px;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+  section .desc {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 300;
+    color: var(--ink-dim);
+    font-size: 14px;
+    margin-bottom: 22px;
+    line-height: 1.5;
+  }
+
+  .field { margin-bottom: 18px; }
+  .field label {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+  .field label .required { color: var(--rust); }
+  .field label .opt {
+    color: var(--ink-faint);
+    font-weight: 400;
+    margin-left: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-style: italic;
+    font-family: var(--serif);
+    font-size: 13px;
+  }
+  .field input[type="text"],
+  .field input[type="number"],
+  .field textarea {
+    width: 100%;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--ink-faint);
+    color: var(--ink);
+    padding: 12px 14px;
+    font-family: var(--serif);
+    font-size: 16px;
+    font-weight: 300;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--gold-dim);
+    background: rgba(0,0,0,0.45);
+  }
+  .field input::placeholder, .field textarea::placeholder {
+    color: var(--ink-faint);
+    font-style: italic;
+  }
+  .field textarea {
+    resize: vertical;
+    min-height: 90px;
+    line-height: 1.5;
+  }
+  .field-hint {
+    font-size: 12px;
+    color: var(--ink-faint);
+    font-style: italic;
+    font-family: var(--serif);
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+
+  .size-row {
+    display: grid;
+    grid-template-columns: 1fr 22px 1fr 1fr;
+    gap: 10px;
+    align-items: end;
+  }
+  .size-x {
+    text-align: center;
+    color: var(--ink-dim);
+    font-family: var(--serif);
+    font-size: 22px;
+    padding-bottom: 12px;
+  }
+  .size-row select {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--ink-faint);
+    color: var(--ink);
+    padding: 12px 8px;
+    font-family: var(--sans);
+    font-size: 14px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23c9a96e' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+  }
+
+  .image-drop {
+    border: 1px dashed var(--ink-faint);
+    padding: 22px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .image-drop:hover, .image-drop.over {
+    border-color: var(--gold-dim);
+    background: rgba(201, 169, 110, 0.04);
+  }
+  .image-drop input[type="file"] {
+    position: absolute; inset: 0;
+    opacity: 0; cursor: pointer;
+  }
+  .image-drop .icon {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--gold);
+    font-size: 28px;
+    margin-bottom: 6px;
+  }
+  .image-drop .label-text {
+    color: var(--ink);
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+  .image-drop .sub-text {
+    color: var(--ink-faint);
+    font-size: 12px;
+    font-style: italic;
+    font-family: var(--serif);
+  }
+  .preview-box {
+    margin-top: 18px;
+    padding: 16px;
+    background: rgba(0,0,0,0.25);
+    display: none;
+    align-items: center;
+    gap: 18px;
+  }
+  .preview-box.show { display: flex; }
+  .preview-box img {
+    max-width: 140px;
+    max-height: 140px;
+    object-fit: contain;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  .preview-info {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--ink-dim);
+    font-family: var(--serif);
+  }
+  .preview-info .key {
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .preview-info .warn {
+    color: var(--rust);
+    font-style: italic;
+    margin-top: 8px;
+    display: block;
+  }
+  .preview-info .ok {
+    color: var(--green);
+    font-style: italic;
+    margin-top: 8px;
+    display: block;
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 24px;
+  }
+  button.btn {
+    background: transparent;
+    border: 1px solid var(--gold-dim);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    padding: 14px 24px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    flex: 1;
+    min-width: 180px;
+  }
+  button.btn.primary {
+    background: var(--gold);
+    color: #1a1512;
+    border-color: var(--gold);
+    font-weight: 500;
+  }
+  button.btn.primary:hover { background: #d6b67c; border-color: #d6b67c; }
+  button.btn.ghost {
+    border-color: var(--ink-faint);
+    color: var(--ink-dim);
+  }
+  button.btn.ghost:hover { color: var(--ink); border-color: var(--ink-dim); }
+
+  .output-box {
+    background: #0a0807;
+    border: 1px solid var(--gold-dim);
+    margin-top: 20px;
+    display: none;
+  }
+  .output-box.show { display: block; }
+  .output-tabs {
+    display: flex;
+    border-bottom: 1px solid rgba(239,231,215,0.08);
+  }
+  .output-tab {
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    padding: 14px 22px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-right: 1px solid rgba(239,231,215,0.08);
+  }
+  .output-tab.active {
+    color: var(--gold);
+    background: rgba(201, 169, 110, 0.06);
+  }
+  .output-tab:hover { color: var(--ink); }
+  .output-content {
+    position: relative;
+    padding: 0;
+  }
+  .output-content pre {
+    padding: 24px;
+    color: #e8e0d2;
+    font-family: ui-monospace, 'SF Mono', Monaco, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 12px; right: 12px;
+    background: rgba(20, 16, 14, 0.95);
+    border: 1px solid var(--gold-dim);
+    color: var(--gold);
+    padding: 8px 14px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.25s;
+    z-index: 2;
+  }
+  .copy-btn:hover { background: var(--gold); color: #1a1512; }
+  .copy-btn.copied {
+    background: var(--green);
+    color: #0a0908;
+    border-color: var(--green);
+  }
+  .next-steps {
+    padding: 18px 24px;
+    border-top: 1px solid rgba(239,231,215,0.08);
+    background: rgba(201, 169, 110, 0.03);
+  }
+  .next-steps .step-title {
+    font-size: 10px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 10px;
+    font-weight: 500;
+  }
+  .next-steps ol {
+    margin-left: 18px;
+    font-family: var(--serif);
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--ink-dim);
+  }
+  .next-steps ol li::marker { color: var(--gold); }
+  .next-steps code {
+    background: rgba(0,0,0,0.4);
+    padding: 1px 6px;
+    color: var(--gold);
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+  }
+
+  .existing-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .existing-item {
+    background: rgba(0,0,0,0.25);
+    padding: 12px 14px;
+    border-left: 2px solid var(--gold-dim);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .existing-item:hover {
+    background: rgba(201, 169, 110, 0.08);
+    border-left-color: var(--gold);
+  }
+  .existing-item .num {
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    color: var(--gold);
+    margin-bottom: 4px;
+  }
+  .existing-item .title {
+    font-family: var(--serif);
+    font-size: 17px;
+    font-weight: 400;
+    margin-bottom: 2px;
+  }
+  .existing-item .meta {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 12px;
+    color: var(--ink-dim);
+  }
+  .existing-empty {
+    color: var(--ink-faint);
+    font-style: italic;
+    font-family: var(--serif);
+    text-align: center;
+    padding: 16px;
+  }
+  .existing-error {
+    color: var(--rust);
+    font-style: italic;
+    font-family: var(--serif);
+    padding: 12px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 30px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--gold);
+    color: #0a0908;
+    padding: 12px 24px;
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    font-weight: 500;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    opacity: 0;
+    transition: all 0.3s ease;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  @media (max-width: 600px) {
+    body { padding: 20px 14px 60px; }
+    section { padding: 20px; }
+    h1 { font-size: 24px; letter-spacing: 0.12em; }
+    .size-row { grid-template-columns: 1fr 18px 1fr; row-gap: 14px; }
+    .size-row select { grid-column: 1 / -1; }
+    .btn-row { flex-direction: column; }
+    button.btn { min-width: 0; }
+    .preview-box { flex-direction: column; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <div class="ornament"></div>
+  <h1>C<span class="dot">.</span>Barnickel Admin</h1>
+  <div class="tagline">Add a painting to your gallery</div>
+  <a href="index.html" class="back-link">← Back to gallery</a>
+</header>
+
+<section>
+  <h2>Current paintings</h2>
+  <p class="desc">Tap any to copy its details into the form below as a starting template.</p>
+  <div class="existing-list" id="existing-list">
+    <div class="existing-empty">Loading…</div>
+  </div>
+</section>
+
+<section>
+  <h2>New painting details</h2>
+  <p class="desc">Fill in everything you know. Required fields are marked with <span style="color:var(--rust)">●</span>.</p>
+
+  <div class="field">
+    <label>Title <span class="required">●</span></label>
+    <input type="text" id="f-title" placeholder="e.g. Redwood Shadows" autocomplete="off" />
+  </div>
+
+  <div class="field">
+    <label>Image filename <span class="required">●</span> <span class="opt">— must match the file you upload to the paintings/ folder</span></label>
+    <input type="text" id="f-file" placeholder="e.g. 07-redwood-shadows.jpg" autocomplete="off" />
+    <div class="field-hint">Lowercase, dashes for spaces, ends in .jpg or .png. Will auto-fill if you drop an image below.</div>
+  </div>
+
+  <div class="field">
+    <label>Size <span class="required">●</span></label>
+    <div class="size-row">
+      <input type="number" id="f-width" placeholder="Width" min="0" step="0.5" inputmode="decimal" />
+      <div class="size-x">×</div>
+      <input type="number" id="f-height" placeholder="Height" min="0" step="0.5" inputmode="decimal" />
+      <select id="f-unit">
+        <option value="in">inches</option>
+        <option value="cm">cm</option>
+      </select>
+    </div>
+    <div class="field-hint">Width × Height. A 9 × 12 inch painting is a portrait (9 wide, 12 tall).</div>
+  </div>
+
+  <div class="field">
+    <label>Medium <span class="opt">— optional</span></label>
+    <input type="text" id="f-medium" placeholder="e.g. Oil on board" autocomplete="off" />
+  </div>
+
+  <div class="field">
+    <label>Year <span class="opt">— or leave blank, or write something like "plein air"</span></label>
+    <input type="text" id="f-year" placeholder="e.g. 2024" autocomplete="off" />
+  </div>
+
+  <div class="field">
+    <label>Description <span class="opt">— shown when a visitor clicks the painting</span></label>
+    <textarea id="f-desc" placeholder="A short paragraph about the work — when, where, how, why."></textarea>
+  </div>
+
+  <div class="field">
+    <label>Image preview <span class="opt">— optional, helps verify the size you entered</span></label>
+    <div class="image-drop" id="image-drop">
+      <input type="file" id="f-image-file" accept="image/jpeg,image/png" />
+      <div class="icon">+</div>
+      <div class="label-text">Tap to choose an image, or drag one here</div>
+      <div class="sub-text">Used only for preview &amp; aspect-ratio sanity check — not uploaded anywhere</div>
+    </div>
+    <div class="preview-box" id="preview-box">
+      <img id="preview-img" alt="" />
+      <div class="preview-info" id="preview-info"></div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn primary" id="btn-generate">Generate JSON</button>
+    <button class="btn ghost" id="btn-clear">Clear form</button>
+  </div>
+</section>
+
+<div class="output-box" id="output-box">
+  <div class="output-tabs">
+    <button class="output-tab active" data-tab="snippet">Just the new entry</button>
+    <button class="output-tab" data-tab="full">Full updated paintings.json</button>
+  </div>
+  <div class="output-content">
+    <button class="copy-btn" id="copy-btn">Copy</button>
+    <pre id="output-text"></pre>
+  </div>
+  <div class="next-steps">
+    <div class="step-title">Next steps</div>
+    <ol id="next-steps-list"></ol>
+  </div>
+</div>
+
+</div>
+
+<div class="toast" id="toast">Copied to clipboard</div>
+
+<script>
+'use strict';
+
+let CURRENT_PAINTINGS = [];
+let CURRENT_FILE_DATA = null;
+let CURRENT_OUTPUT_TAB = 'snippet';
+let CURRENT_ENTRY = null;
+
+async function loadExisting() {
+  const list = document.getElementById('existing-list');
+  try {
+    const res = await fetch('paintings.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    CURRENT_PAINTINGS = data.paintings || [];
+    renderExisting();
+  } catch (err) {
+    if (window.location.protocol === 'file:') {
+      list.innerHTML = '<div class="existing-error">Can\'t load paintings.json directly from a file:// URL. This is fine — you can still use the form below to generate new entries. (Once deployed to Netlify or GitHub Pages, this list will load.)</div>';
+    } else {
+      list.innerHTML = '<div class="existing-error">Couldn\'t load paintings.json: ' + err.message + '. Make sure it\'s in the same folder as this admin page.</div>';
+    }
+  }
+}
+
+function renderExisting() {
+  const list = document.getElementById('existing-list');
+  if (CURRENT_PAINTINGS.length === 0) {
+    list.innerHTML = '<div class="existing-empty">No paintings yet — your form below will be the first.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  CURRENT_PAINTINGS.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'existing-item';
+    const meta = [p.size, p.medium].filter(Boolean).join(' · ');
+    div.innerHTML = `
+      <div class="num">${String(i + 1).padStart(2, '0')}</div>
+      <div class="title">${escapeHtml(p.title || '(untitled)')}</div>
+      <div class="meta">${escapeHtml(meta)}</div>
+    `;
+    div.addEventListener('click', () => loadAsTemplate(p));
+    list.appendChild(div);
+  });
+}
+
+function loadAsTemplate(p) {
+  document.getElementById('f-title').value = p.title || '';
+  document.getElementById('f-file').value = '';
+  const parsed = parseSizeStr(p.size);
+  if (parsed) {
+    document.getElementById('f-width').value = parsed.w;
+    document.getElementById('f-height').value = parsed.h;
+    document.getElementById('f-unit').value = parsed.unit;
+  }
+  document.getElementById('f-medium').value = p.medium || '';
+  document.getElementById('f-year').value = p.year || '';
+  document.getElementById('f-desc').value = '';
+  showToast('Loaded as template — change the title, filename, size & description');
+  document.getElementById('f-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setTimeout(() => document.getElementById('f-title').focus(), 400);
+}
+
+function parseSizeStr(s) {
+  if (!s) return null;
+  const m = String(s).trim().toLowerCase().replace(/\s+/g, '')
+    .match(/^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(in|cm|inch|inches|m|mm)?$/);
+  if (!m) return null;
+  let unit = (m[3] || 'in').replace(/^inch(es)?$/, 'in');
+  if (unit !== 'in' && unit !== 'cm') unit = 'in';
+  return { w: parseFloat(m[1]), h: parseFloat(m[2]), unit };
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function suggestFilename(title) {
+  const base = title.toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  const used = new Set(CURRENT_PAINTINGS.map(p => {
+    const m = (p.file || '').match(/^(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+  }));
+  let n = 1;
+  while (used.has(n)) n++;
+  return `${String(n).padStart(2, '0')}-${base || 'untitled'}.jpg`;
+}
+
+const imageInput = document.getElementById('f-image-file');
+const dropZone = document.getElementById('image-drop');
+const previewBox = document.getElementById('preview-box');
+const previewImg = document.getElementById('preview-img');
+const previewInfo = document.getElementById('preview-info');
+
+imageInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) handleImageFile(file);
+});
+
+['dragenter', 'dragover'].forEach(ev => {
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.add('over');
+  });
+});
+['dragleave', 'drop'].forEach(ev => {
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.remove('over');
+  });
+});
+dropZone.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) handleImageFile(file);
+});
+
+function handleImageFile(file) {
+  const fileField = document.getElementById('f-file');
+  if (!fileField.value.trim()) fileField.value = file.name;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const dataUrl = e.target.result;
+    const img = new Image();
+    img.onload = () => {
+      CURRENT_FILE_DATA = { name: file.name, w: img.width, h: img.height, dataUrl };
+      previewImg.src = dataUrl;
+      previewBox.classList.add('show');
+      updatePreviewInfo();
+    };
+    img.src = dataUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+function updatePreviewInfo() {
+  if (!CURRENT_FILE_DATA) return;
+  const enteredW = parseFloat(document.getElementById('f-width').value);
+  const enteredH = parseFloat(document.getElementById('f-height').value);
+  const fileAspect = CURRENT_FILE_DATA.w / CURRENT_FILE_DATA.h;
+  let html = `
+    <div><span class="key">File</span> ${escapeHtml(CURRENT_FILE_DATA.name)}</div>
+    <div><span class="key">Image</span> ${CURRENT_FILE_DATA.w} × ${CURRENT_FILE_DATA.h} px (aspect ${fileAspect.toFixed(2)}:1)</div>
+  `;
+  if (enteredW > 0 && enteredH > 0) {
+    const enteredAspect = enteredW / enteredH;
+    const diff = Math.abs(fileAspect - enteredAspect) / fileAspect;
+    if (diff > 0.10) {
+      html += `<span class="warn">⚠ Heads up — image aspect (${fileAspect.toFixed(2)}) doesn't match entered dimensions (aspect ${enteredAspect.toFixed(2)}). One might be off, or the image needs cropping.</span>`;
+    } else {
+      html += `<span class="ok">✓ Aspect ratio matches the entered size.</span>`;
+    }
+  }
+  previewInfo.innerHTML = html;
+}
+document.getElementById('f-width').addEventListener('input', updatePreviewInfo);
+document.getElementById('f-height').addEventListener('input', updatePreviewInfo);
+
+const titleField = document.getElementById('f-title');
+const fileField = document.getElementById('f-file');
+let userEditedFile = false;
+fileField.addEventListener('input', () => { userEditedFile = true; });
+titleField.addEventListener('blur', () => {
+  if (!userEditedFile && !fileField.value.trim() && titleField.value.trim()) {
+    fileField.value = suggestFilename(titleField.value.trim());
+  }
+});
+
+function buildEntry() {
+  const title = document.getElementById('f-title').value.trim();
+  const file = document.getElementById('f-file').value.trim();
+  const w = parseFloat(document.getElementById('f-width').value);
+  const h = parseFloat(document.getElementById('f-height').value);
+  const unit = document.getElementById('f-unit').value;
+  const medium = document.getElementById('f-medium').value.trim();
+  const year = document.getElementById('f-year').value.trim();
+  const desc = document.getElementById('f-desc').value.trim();
+
+  const errors = [];
+  if (!title) errors.push('Title is required.');
+  if (!file) errors.push('Image filename is required.');
+  if (!(w > 0)) errors.push('Width must be a positive number.');
+  if (!(h > 0)) errors.push('Height must be a positive number.');
+  if (errors.length) return { errors };
+
+  return {
+    entry: {
+      file: file,
+      title: title,
+      size: `${w}x${h}${unit}`,
+      medium: medium,
+      year: year,
+      description: desc,
+    }
+  };
+}
+
+document.getElementById('btn-generate').addEventListener('click', () => {
+  const result = buildEntry();
+  if (result.errors) {
+    showToast('Missing: ' + result.errors.join(' '));
+    return;
+  }
+  CURRENT_ENTRY = result.entry;
+  showOutput();
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  if (!confirm('Clear all form fields?')) return;
+  ['f-title','f-file','f-width','f-height','f-medium','f-year','f-desc'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('f-unit').value = 'in';
+  CURRENT_FILE_DATA = null;
+  userEditedFile = false;
+  previewBox.classList.remove('show');
+  document.getElementById('output-box').classList.remove('show');
+});
+
+function showOutput() {
+  const box = document.getElementById('output-box');
+  box.classList.add('show');
+  CURRENT_OUTPUT_TAB = 'snippet';
+  document.querySelectorAll('.output-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === 'snippet');
+  });
+  renderOutputContent();
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderOutputContent() {
+  if (!CURRENT_ENTRY) return;
+  const pre = document.getElementById('output-text');
+  const stepsList = document.getElementById('next-steps-list');
+
+  if (CURRENT_OUTPUT_TAB === 'snippet') {
+    const indented = JSON.stringify(CURRENT_ENTRY, null, 2)
+      .split('\n').map(line => '    ' + line).join('\n');
+    pre.textContent = ',\n' + indented;
+    stepsList.innerHTML = `
+      <li>Open <code>paintings.json</code> in your GitHub repo and click the pencil icon to edit.</li>
+      <li>Find the <strong>last entry</strong> in the <code>"paintings"</code> array — the one just before the closing <code>]</code>.</li>
+      <li>Place your cursor right after that entry's closing <code>}</code> and paste the snippet above. (It already starts with the comma you need.)</li>
+      <li>Upload the image to the <code>paintings/</code> folder. Name it exactly: <code>${escapeHtml(CURRENT_ENTRY.file)}</code></li>
+      <li>Commit both changes.</li>
+    `;
+  } else {
+    const fullData = {
+      _comment: "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. You can mix units across paintings.",
+      paintings: [...CURRENT_PAINTINGS, CURRENT_ENTRY].map(stripInternal),
+    };
+    pre.textContent = JSON.stringify(fullData, null, 2);
+    stepsList.innerHTML = `
+      <li>Open <code>paintings.json</code> in your GitHub repo and click the pencil icon to edit.</li>
+      <li>Select all the existing content and delete it.</li>
+      <li>Paste the full file above.</li>
+      <li>Upload the image to the <code>paintings/</code> folder. Name it exactly: <code>${escapeHtml(CURRENT_ENTRY.file)}</code></li>
+      <li>Commit both changes.</li>
+    `;
+  }
+}
+
+function stripInternal(p) {
+  const out = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (!k.startsWith('_')) out[k] = v;
+  }
+  return out;
+}
+
+document.querySelectorAll('.output-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    CURRENT_OUTPUT_TAB = tab.dataset.tab;
+    document.querySelectorAll('.output-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.tab === CURRENT_OUTPUT_TAB);
+    });
+    renderOutputContent();
+  });
+});
+
+document.getElementById('copy-btn').addEventListener('click', async () => {
+  const text = document.getElementById('output-text').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied ✓';
+    btn.classList.add('copied');
+    showToast('Copied to clipboard');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 2200);
+  } catch (e) {
+    const range = document.createRange();
+    range.selectNode(document.getElementById('output-text'));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    showToast('Selected — press Cmd/Ctrl+C to copy');
+  }
+});
+
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+loadExisting();
+</script>
+
+</body>
+</html>
