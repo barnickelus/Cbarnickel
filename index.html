@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>C.Barnickel Artwork — Virtual Gallery</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -154,6 +154,10 @@
     position: fixed; bottom: 24px; left: 24px;
     z-index: 40; display: none; pointer-events: auto;
   }
+  .mobile-controls-right {
+    position: fixed; bottom: 24px; right: 24px;
+    z-index: 40; display: none; pointer-events: auto;
+  }
   .joy {
     width: 110px; height: 110px;
     border: 1px solid var(--ink-faint);
@@ -169,6 +173,113 @@
     border-radius: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;
+  }
+  .joy-label {
+    position: absolute; top: -22px; left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--sans);
+    font-size: 9px; letter-spacing: 0.22em;
+    color: var(--ink-faint); text-transform: uppercase;
+    pointer-events: none; white-space: nowrap;
+  }
+
+  /* ── Controls mode menu (touch only) ── */
+  .mode-toggle {
+    pointer-events: auto;
+    position: relative;
+    margin-right: 12px;
+    display: none;
+  }
+  .mode-toggle.show { display: block; }
+  .mode-btn {
+    background: transparent;
+    border: 1px solid var(--ink-faint);
+    color: var(--ink-dim);
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 10px 14px; cursor: pointer;
+    transition: all 0.25s ease;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .mode-btn:hover { color: var(--ink); }
+  .mode-btn .gear {
+    width: 12px; height: 12px;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    position: relative;
+  }
+  .mode-btn .gear::after {
+    content: ''; position: absolute;
+    top: 50%; left: 50%; width: 4px; height: 4px;
+    background: currentColor;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .mode-menu {
+    position: absolute; top: calc(100% + 6px); right: 0;
+    min-width: 220px;
+    background: rgba(15, 12, 10, 0.96);
+    border: 1px solid var(--ink-faint);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: none; z-index: 60;
+  }
+  .mode-menu.open { display: block; }
+  .mode-menu-header {
+    padding: 14px 18px 8px;
+    font-family: var(--sans);
+    font-size: 9px; letter-spacing: 0.28em;
+    text-transform: uppercase; color: var(--gold);
+    border-bottom: 1px solid rgba(239,231,215,0.08);
+  }
+  .mode-option {
+    display: block; width: 100%;
+    background: transparent; border: none;
+    color: var(--ink-dim);
+    font-family: var(--serif);
+    font-size: 14px; line-height: 1.3;
+    text-align: left; padding: 12px 18px;
+    cursor: pointer;
+    transition: all 0.2s;
+    border-bottom: 1px solid rgba(239,231,215,0.05);
+  }
+  .mode-option:last-child { border-bottom: none; }
+  .mode-option:hover { background: rgba(239,231,215,0.05); color: var(--ink); }
+  .mode-option .opt-title {
+    display: block;
+    font-size: 14px;
+    color: var(--ink);
+    margin-bottom: 2px;
+  }
+  .mode-option .opt-desc {
+    display: block;
+    font-style: italic;
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  .mode-option.active {
+    background: rgba(201, 169, 110, 0.08);
+  }
+  .mode-option.active .opt-title { color: var(--gold); }
+  .mode-option.active::before {
+    content: '— '; color: var(--gold);
+  }
+
+  /* Tap-to-walk visual feedback */
+  .tap-marker {
+    position: fixed;
+    width: 30px; height: 30px;
+    border: 2px solid var(--gold);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 35;
+    animation: tapPulse 0.7s ease-out forwards;
+  }
+  @keyframes tapPulse {
+    0% { opacity: 0.9; transform: translate(-50%, -50%) scale(0.6); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.8); }
   }
 
   #modal {
@@ -331,6 +442,13 @@
     color: var(--gold);
   }
 
+  /* Touch device behavior — applied via .is-touch class on body */
+  body.is-touch .controls-hint { display: none; }
+  body.is-touch .crosshair { display: none; }
+  body.is-touch .mobile-controls.show { display: block; }
+  body.is-touch .mobile-controls-right.show { display: block; }
+  body.is-touch .mode-toggle { display: block; }
+
   @media (max-width: 768px) {
     #modal-inner { grid-template-columns: 1fr; gap: 24px; }
     #modal-info {
@@ -341,11 +459,22 @@
     #modal-title { font-size: 28px; }
     .top-bar { padding: 16px 18px; }
     .brand { font-size: 13px; }
+    .brand .gallery-suffix { display: none; }
     #grid-view { padding: 90px 20px 60px; }
     .grid-intro h2 { font-size: 28px; }
-    .controls-hint { display: none; }
-    .mobile-controls.show { display: block; }
     .modal-nav { width: 38px; height: 38px; }
+    .mode-btn { padding: 8px 10px; font-size: 9px; }
+    .mode-btn .mode-label { display: none; }
+    .joy { width: 95px; height: 95px; }
+    .joy .stick { width: 32px; height: 32px; }
+    #modal-close { top: 16px; right: 16px; }
+  }
+  /* Larger touch screens (tablets) */
+  @media (min-width: 769px) and (pointer: coarse) {
+    .joy { width: 130px; height: 130px; }
+    .joy .stick { width: 44px; height: 44px; }
+    .mobile-controls { bottom: 36px; left: 36px; }
+    .mobile-controls-right { bottom: 36px; right: 36px; }
   }
 </style>
 </head>
@@ -362,10 +491,33 @@
 </div>
 
 <div class="top-bar">
-  <div class="brand">C<span class="dot">.</span>Barnickel <span style="opacity:0.7">Artwork</span></div>
-  <div class="view-toggle">
-    <button id="btn-3d" class="active">Gallery</button>
-    <button id="btn-grid">Index</button>
+  <div class="brand">C<span class="dot">.</span>Barnickel <span class="gallery-suffix" style="opacity:0.7">Artwork</span></div>
+  <div style="display:flex; align-items:center; pointer-events:auto;">
+    <div class="mode-toggle" id="mode-toggle">
+      <button class="mode-btn" id="mode-btn">
+        <span class="gear"></span>
+        <span class="mode-label">Controls: <span id="mode-current">Joystick + drag</span></span>
+      </button>
+      <div class="mode-menu" id="mode-menu">
+        <div class="mode-menu-header">Movement style</div>
+        <button class="mode-option" data-mode="one-stick">
+          <span class="opt-title">Joystick + drag</span>
+          <span class="opt-desc">Left thumb walks, drag to look around</span>
+        </button>
+        <button class="mode-option" data-mode="dual-stick">
+          <span class="opt-title">Two joysticks</span>
+          <span class="opt-desc">Left walks, right looks (game-style)</span>
+        </button>
+        <button class="mode-option" data-mode="tap-walk">
+          <span class="opt-title">Tap to walk</span>
+          <span class="opt-desc">Tap the floor to walk there, drag to look</span>
+        </button>
+      </div>
+    </div>
+    <div class="view-toggle">
+      <button id="btn-3d" class="active">Gallery</button>
+      <button id="btn-grid">Index</button>
+    </div>
   </div>
 </div>
 
@@ -379,7 +531,17 @@
 </div>
 
 <div class="mobile-controls" id="mobile-ctrls">
-  <div class="joy" id="joy"><div class="stick" id="stick"></div></div>
+  <div class="joy" id="joy">
+    <div class="joy-label">Move</div>
+    <div class="stick" id="stick"></div>
+  </div>
+</div>
+
+<div class="mobile-controls-right" id="mobile-ctrls-right">
+  <div class="joy" id="joy-right">
+    <div class="joy-label">Look</div>
+    <div class="stick" id="stick-right"></div>
+  </div>
 </div>
 
 <div id="canvas-container" style="position:fixed; inset:0; z-index:1;"></div>
@@ -513,8 +675,28 @@ let dragging = false, dragStartX = 0, dragStartY = 0;
 let dragYawStart = 0, dragPitchStart = 0, dragMoved = 0;
 const PLAYER_BUFFER = 1.4;
 const MOVE_SPEED = 4.0;
+const LOOK_SPEED = 2.0; // radians/sec for joystick look
 let lastTime = performance.now();
-const isMobile = matchMedia('(max-width: 768px)').matches;
+
+// Touch detection — true touch device (not just narrow screen)
+const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+if (hasTouch) document.body.classList.add('is-touch');
+
+// Control mode state — three movement schemes for touch
+const CONTROL_MODES = ['one-stick', 'dual-stick', 'tap-walk'];
+let controlMode = 'one-stick';
+try {
+  const stored = localStorage.getItem('cb-control-mode');
+  if (CONTROL_MODES.includes(stored)) controlMode = stored;
+} catch (e) {}
+
+// Tap-to-walk state
+let walkTarget = null;       // {x, z} world coords
+let floorMesh = null;        // for raycasting
+let entered = false;         // gallery entered yet?
+
+// Right joystick (look) state
+window.__joyRightVec = { x: 0, y: 0 };
 
 // ───── Layout planning ─────
 function planLayout(N) {
@@ -643,12 +825,12 @@ function buildRoom(layout) {
   ROOM = room;
 
   // Floor
-  const floor = new THREE.Mesh(
+  floorMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
     new THREE.MeshStandardMaterial({ map: makeFloorTexture(), roughness: 0.85 })
   );
-  floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
+  floorMesh.rotation.x = -Math.PI / 2;
+  scene.add(floorMesh);
 
   // Ceiling
   const ceiling = new THREE.Mesh(
@@ -862,7 +1044,9 @@ function initScene() {
 function setupControls() {
   const dom = renderer.domElement;
   dom.style.cursor = 'grab';
+  dom.style.touchAction = 'none'; // prevent default scroll/zoom on canvas
 
+  // ── Mouse (desktop) ──
   dom.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
     dragging = true;
@@ -884,28 +1068,36 @@ function setupControls() {
     }
   });
   window.addEventListener('mouseup', e => {
-    if (dragging && dragMoved < 6) tryPaintingClick();
+    if (dragging && dragMoved < 6) handleTap(e.clientX, e.clientY);
     dragging = false;
     dom.style.cursor = 'grab';
   });
 
-  // Touch
+  // ── Touch: look (drag anywhere on canvas, except joysticks) ──
   let touchLook = null;
-  let joyTouch = null;
-  let joyVec = { x: 0, y: 0 };
   const joy = document.getElementById('joy');
-  const stick = document.getElementById('stick');
-  window.__joyVec = joyVec;
+  const joyR = document.getElementById('joy-right');
+
+  function inEl(t, el) {
+    const r = el.getBoundingClientRect();
+    return t.clientX >= r.left && t.clientX <= r.right
+        && t.clientY >= r.top  && t.clientY <= r.bottom;
+  }
 
   dom.addEventListener('touchstart', e => {
-    for (const t of e.touches) {
-      const r = joy.getBoundingClientRect();
-      if (t.clientX >= r.left && t.clientX <= r.right && t.clientY >= r.top && t.clientY <= r.bottom) continue;
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      // Skip touches that started on a joystick
+      if (inEl(t, joy)) continue;
+      if (inEl(t, joyR) && controlMode === 'dual-stick') continue;
       if (touchLook === null) {
-        touchLook = { id: t.identifier, x: t.clientX, y: t.clientY, yaw, pitch, moved: 0 };
+        touchLook = { id: t.identifier, x: t.clientX, y: t.clientY,
+                      startX: t.clientX, startY: t.clientY,
+                      yaw, pitch, moved: 0 };
       }
     }
-  }, { passive: true });
+  }, { passive: false });
+
   dom.addEventListener('touchmove', e => {
     for (const t of e.touches) {
       if (touchLook && t.identifier === touchLook.id) {
@@ -918,58 +1110,32 @@ function setupControls() {
       }
     }
   }, { passive: true });
+
   dom.addEventListener('touchend', e => {
     for (const t of e.changedTouches) {
       if (touchLook && t.identifier === touchLook.id) {
-        if (touchLook.moved < 10) {
-          mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
-          mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
-          tryPaintingClick();
+        if (touchLook.moved < 12) {
+          handleTap(t.clientX, t.clientY);
         }
         touchLook = null;
       }
     }
   });
-  joy.addEventListener('touchstart', e => {
-    e.preventDefault();
-    const t = e.changedTouches[0];
-    const r = joy.getBoundingClientRect();
-    joyTouch = { id: t.identifier, cx: r.left + r.width/2, cy: r.top + r.height/2 };
-  });
-  joy.addEventListener('touchmove', e => {
-    if (!joyTouch) return;
-    e.preventDefault();
-    for (const t of e.touches) {
-      if (t.identifier === joyTouch.id) {
-        let dx = t.clientX - joyTouch.cx;
-        let dy = t.clientY - joyTouch.cy;
-        const max = 40, dist = Math.hypot(dx, dy);
-        if (dist > max) { dx = dx/dist*max; dy = dy/dist*max; }
-        joyVec.x = dx / max;
-        joyVec.y = dy / max;
-        stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-      }
-    }
-  });
-  const endJoy = e => {
-    for (const t of e.changedTouches) {
-      if (joyTouch && t.identifier === joyTouch.id) {
-        joyTouch = null;
-        joyVec.x = 0; joyVec.y = 0;
-        stick.style.transform = 'translate(-50%, -50%)';
-      }
-    }
-  };
-  joy.addEventListener('touchend', endJoy);
-  joy.addEventListener('touchcancel', endJoy);
 
-  // Keyboard
+  // ── Left joystick (movement) — works in all modes ──
+  setupJoystick(joy, document.getElementById('stick'), v => { window.__joyVec = v; });
+  window.__joyVec = { x: 0, y: 0 };
+
+  // ── Right joystick (look) — only used in dual-stick mode ──
+  setupJoystick(joyR, document.getElementById('stick-right'), v => { window.__joyRightVec = v; });
+
+  // ── Keyboard ──
   window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
-    if (k === 'w' || e.key === 'ArrowUp') keys.w = true;
-    if (k === 'a' || e.key === 'ArrowLeft') keys.a = true;
-    if (k === 's' || e.key === 'ArrowDown') keys.s = true;
-    if (k === 'd' || e.key === 'ArrowRight') keys.d = true;
+    if (k === 'w' || e.key === 'ArrowUp') { keys.w = true; walkTarget = null; }
+    if (k === 'a' || e.key === 'ArrowLeft') { keys.a = true; walkTarget = null; }
+    if (k === 's' || e.key === 'ArrowDown') { keys.s = true; walkTarget = null; }
+    if (k === 'd' || e.key === 'ArrowRight') { keys.d = true; walkTarget = null; }
     if (e.key === 'Escape' && document.getElementById('modal').classList.contains('open')) closeModal();
     if (document.getElementById('modal').classList.contains('open')) {
       if (e.key === 'ArrowLeft') { e.preventDefault(); navModal(-1); }
@@ -983,9 +1149,158 @@ function setupControls() {
     if (k === 's' || e.key === 'ArrowDown') keys.s = false;
     if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
   });
+
+  // ── Mode toggle UI ──
+  setupModeToggle();
+}
+
+function setupJoystick(container, stick, onChange) {
+  let activeId = null;
+  let cx = 0, cy = 0;
+  const max = 40;
+
+  container.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (activeId !== null) return;
+    const t = e.changedTouches[0];
+    activeId = t.identifier;
+    const r = container.getBoundingClientRect();
+    cx = r.left + r.width/2;
+    cy = r.top + r.height/2;
+    updateStick(t.clientX - cx, t.clientY - cy);
+  }, { passive: false });
+
+  container.addEventListener('touchmove', e => {
+    if (activeId === null) return;
+    e.preventDefault();
+    for (const t of e.touches) {
+      if (t.identifier === activeId) {
+        updateStick(t.clientX - cx, t.clientY - cy);
+      }
+    }
+  }, { passive: false });
+
+  const end = e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === activeId) {
+        activeId = null;
+        updateStick(0, 0);
+      }
+    }
+  };
+  container.addEventListener('touchend', end);
+  container.addEventListener('touchcancel', end);
+
+  function updateStick(dx, dy) {
+    const dist = Math.hypot(dx, dy);
+    if (dist > max) { dx = dx/dist*max; dy = dy/dist*max; }
+    onChange({ x: dx / max, y: dy / max });
+    stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  }
+}
+
+function setupModeToggle() {
+  const btn = document.getElementById('mode-btn');
+  const menu = document.getElementById('mode-menu');
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    menu.classList.toggle('open');
+  });
+
+  document.addEventListener('click', e => {
+    if (!menu.contains(e.target) && e.target !== btn) {
+      menu.classList.remove('open');
+    }
+  });
+
+  document.querySelectorAll('.mode-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      setControlMode(opt.dataset.mode);
+      menu.classList.remove('open');
+    });
+  });
+
+  applyControlModeUI();
+}
+
+function setControlMode(mode) {
+  controlMode = mode;
+  try { localStorage.setItem('cb-control-mode', mode); } catch (e) {}
+  walkTarget = null; // cancel any in-progress auto-walk
+  applyControlModeUI();
+}
+
+function applyControlModeUI() {
+  const labels = {
+    'one-stick': 'Joystick + drag',
+    'dual-stick': 'Two joysticks',
+    'tap-walk': 'Tap to walk',
+  };
+  const labelEl = document.getElementById('mode-current');
+  if (labelEl) labelEl.textContent = labels[controlMode] || 'Joystick + drag';
+
+  document.querySelectorAll('.mode-option').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === controlMode);
+  });
+
+  // Show/hide joysticks based on mode (only relevant once entered)
+  if (entered) updateTouchUIVisibility();
+}
+
+function updateTouchUIVisibility() {
+  const left = document.getElementById('mobile-ctrls');
+  const right = document.getElementById('mobile-ctrls-right');
+  if (!hasTouch || !entered) {
+    left.classList.remove('show');
+    right.classList.remove('show');
+    return;
+  }
+  // Left joystick: visible in one-stick and dual-stick modes (not tap-walk)
+  left.classList.toggle('show', controlMode === 'one-stick' || controlMode === 'dual-stick');
+  // Right joystick: visible only in dual-stick mode
+  right.classList.toggle('show', controlMode === 'dual-stick');
+}
+
+function showTapMarker(clientX, clientY) {
+  const m = document.createElement('div');
+  m.className = 'tap-marker';
+  m.style.left = clientX + 'px';
+  m.style.top = clientY + 'px';
+  document.body.appendChild(m);
+  setTimeout(() => m.remove(), 800);
+}
+
+function handleTap(clientX, clientY) {
+  mouse.x = (clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  // Painting first
+  const paintingHits = raycaster.intersectObjects(paintingMeshes, false);
+  if (paintingHits.length > 0) {
+    openModal(paintingHits[0].object.userData.artIndex);
+    return;
+  }
+
+  // Tap-walk only in that mode
+  if (controlMode === 'tap-walk' && floorMesh) {
+    const floorHits = raycaster.intersectObject(floorMesh, false);
+    if (floorHits.length > 0) {
+      const pt = floorHits[0].point;
+      const limX = ROOM.w/2 - PLAYER_BUFFER;
+      const limZ = ROOM.d/2 - PLAYER_BUFFER;
+      walkTarget = {
+        x: Math.max(-limX, Math.min(limX, pt.x)),
+        z: Math.max(-limZ, Math.min(limZ, pt.z)),
+      };
+      showTapMarker(clientX, clientY);
+    }
+  }
 }
 
 function tryPaintingClick() {
+  // Legacy alias kept for any old call sites
   raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObjects(paintingMeshes, false);
   if (hits.length > 0) openModal(hits[0].object.userData.artIndex);
@@ -1003,10 +1318,21 @@ function animate() {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
+  // Right joystick → camera look (dual-stick mode)
+  if (controlMode === 'dual-stick' && window.__joyRightVec) {
+    const rj = window.__joyRightVec;
+    if (rj.x !== 0 || rj.y !== 0) {
+      yaw   -= rj.x * LOOK_SPEED * dt;
+      pitch -= rj.y * LOOK_SPEED * dt;
+      pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+    }
+  }
+
   camera.rotation.order = 'YXZ';
   camera.rotation.y = yaw;
   camera.rotation.x = pitch;
 
+  // Manual movement input (WASD + left joystick)
   let mx = 0, mz = 0;
   if (keys.w) mz -= 1;
   if (keys.s) mz += 1;
@@ -1015,20 +1341,40 @@ function animate() {
   if (window.__joyVec) { mx += window.__joyVec.x; mz += window.__joyVec.y; }
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
+
   if (mx !== 0 || mz !== 0) {
+    walkTarget = null; // manual input cancels auto-walk
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     camera.position.x += (mx * cos + mz * sin) * MOVE_SPEED * dt;
     camera.position.z += (-mx * sin + mz * cos) * MOVE_SPEED * dt;
-    const limX = ROOM.w/2 - PLAYER_BUFFER;
-    const limZ = ROOM.d/2 - PLAYER_BUFFER;
-    camera.position.x = Math.max(-limX, Math.min(limX, camera.position.x));
-    camera.position.z = Math.max(-limZ, Math.min(limZ, camera.position.z));
+  } else if (walkTarget) {
+    // Auto-walk toward tapped point
+    const dx = walkTarget.x - camera.position.x;
+    const dz = walkTarget.z - camera.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.08) {
+      walkTarget = null;
+    } else {
+      const step = Math.min(dist, MOVE_SPEED * 1.2 * dt);
+      camera.position.x += (dx / dist) * step;
+      camera.position.z += (dz / dist) * step;
+      // Smoothly rotate yaw to face direction of travel
+      const targetYaw = Math.atan2(dx, dz) + Math.PI;
+      let yawDiff = ((targetYaw - yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      yaw += yawDiff * Math.min(1, dt * 2.5);
+    }
   }
 
-  // Crosshair hover
+  // Clamp position to room bounds
+  const limX = ROOM.w/2 - PLAYER_BUFFER;
+  const limZ = ROOM.d/2 - PLAYER_BUFFER;
+  camera.position.x = Math.max(-limX, Math.min(limX, camera.position.x));
+  camera.position.z = Math.max(-limZ, Math.min(limZ, camera.position.z));
+
+  // Crosshair hover (desktop only — hidden on touch via CSS)
   const modalOpen = document.getElementById('modal').classList.contains('open');
   const gridOpen = document.getElementById('grid-view').classList.contains('open');
-  if (!modalOpen && !gridOpen) {
+  if (!hasTouch && !modalOpen && !gridOpen) {
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const hits = raycaster.intersectObjects(paintingMeshes, false);
     const cross = document.getElementById('crosshair');
@@ -1101,7 +1447,6 @@ function setView(mode) {
   const canvas = document.getElementById('canvas-container');
   const cross = document.getElementById('crosshair');
   const hint = document.getElementById('hint');
-  const mobileCtrls = document.getElementById('mobile-ctrls');
   const btn3d = document.getElementById('btn-3d');
   const btnGrid = document.getElementById('btn-grid');
   if (mode === 'grid') {
@@ -1109,14 +1454,17 @@ function setView(mode) {
     canvas.style.display = 'none';
     cross.classList.remove('visible');
     hint.classList.remove('visible');
-    mobileCtrls.classList.remove('show');
+    document.getElementById('mobile-ctrls').classList.remove('show');
+    document.getElementById('mobile-ctrls-right').classList.remove('show');
     btn3d.classList.remove('active'); btnGrid.classList.add('active');
   } else {
     grid.classList.remove('open');
     canvas.style.display = 'block';
-    cross.classList.add('visible');
-    hint.classList.add('visible');
-    if (isMobile) mobileCtrls.classList.add('show');
+    if (!hasTouch) {
+      cross.classList.add('visible');
+      hint.classList.add('visible');
+    }
+    updateTouchUIVisibility();
     btn3d.classList.add('active'); btnGrid.classList.remove('active');
   }
 }
@@ -1128,9 +1476,12 @@ function enterGallery() {
   const entry = document.getElementById('entry');
   entry.classList.add('fade');
   setTimeout(() => { entry.style.display = 'none'; }, 800);
-  document.getElementById('crosshair').classList.add('visible');
-  document.getElementById('hint').classList.add('visible');
-  if (isMobile) document.getElementById('mobile-ctrls').classList.add('show');
+  entered = true;
+  if (!hasTouch) {
+    document.getElementById('crosshair').classList.add('visible');
+    document.getElementById('hint').classList.add('visible');
+  }
+  updateTouchUIVisibility();
 }
 document.getElementById('entry').addEventListener('click', () => {
   const btn = document.getElementById('enterBtn');
@@ -1148,6 +1499,7 @@ document.getElementById('entry').addEventListener('click', () => {
   buildRoom(layout);
   placeAllPaintings(layout);
   buildGrid();
+  applyControlModeUI(); // sync menu highlight with stored preference
 
   // Enable entry button after a brief moment so initial textures have time to start loading
   setTimeout(() => {
