@@ -1,0 +1,54 @@
+{
+  "_comment": "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). The first dimension is width, the second is height. You can mix units across paintings.",
+
+  "paintings": [
+    {
+      "file": "01-coastal-headland.jpg",
+      "title": "Coastal Headland",
+      "size": "12x9in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A windswept ridge falling away to a pale, cool sea. Painted on location, working quickly to catch the shifting afternoon light on the cliff face."
+    },
+    {
+      "file": "02-hillside-in-blue.jpg",
+      "title": "Hillside in Blue",
+      "size": "14x11in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "Rolling hills resolved into bands of teal, ochre and shadow. The sea sits low on the horizon, cool against the warm broken color of the foreground."
+    },
+    {
+      "file": "03-valley-lights.jpg",
+      "title": "Valley Lights",
+      "size": "12x9in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A broad valley at dusk, dotted with the first lights of evening. The mountainside in the foreground holds onto the day's last warmth."
+    },
+    {
+      "file": "04-botchers-gap.jpg",
+      "title": "Botchers Gap",
+      "size": "8x10in",
+      "medium": "Oil on panel",
+      "year": "plein air",
+      "description": "Looking through a wooden fence at sunset light catching the far ridges. A small framed study from a high overlook."
+    },
+    {
+      "file": "05-desert-wash.jpg",
+      "title": "Desert Wash",
+      "size": "8x6in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "High desert in late spring — pale earth, scattered sage, and the long pink shadows of an afternoon coming to a close."
+    },
+    {
+      "file": "06-structure-study.jpg",
+      "title": "Structure Study",
+      "size": "16x8in",
+      "medium": "Oil on canvas",
+      "year": "",
+      "description": "A semi-abstract investigation of overhead architecture — beams, light, and the geometry of a constructed space resolving into planes of color."
+    }
+  ]
+}
