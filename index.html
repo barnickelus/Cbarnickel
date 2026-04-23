@@ -25,9 +25,11 @@
     font-family: var(--serif);
     overflow: hidden; height: 100%; width: 100%;
     user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
   canvas { display: block; }
 
+  /* ── Top bar ── */
   .top-bar {
     position: fixed; top: 0; left: 0; right: 0;
     padding: 22px 32px;
@@ -41,7 +43,6 @@
     letter-spacing: 0.32em; text-transform: uppercase;
   }
   .brand .dot { color: var(--gold); margin: 0 0.15em; }
-
   .view-toggle {
     pointer-events: auto;
     display: flex;
@@ -63,6 +64,7 @@
   }
   .view-toggle button + button { border-left: 1px solid var(--ink-faint); }
 
+  /* ── Entry ── */
   #entry {
     position: fixed; inset: 0;
     background: radial-gradient(ellipse at center, #1a1512 0%, #050403 80%);
@@ -113,6 +115,7 @@
     text-transform: uppercase; color: var(--ink-faint);
   }
 
+  /* ── 3D HUD ── */
   .crosshair {
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
@@ -150,138 +153,110 @@
   }
   .controls-hint .sep { margin: 0 12px; color: var(--ink-faint); }
 
-  .mobile-controls {
-    position: fixed; bottom: 24px; left: 24px;
-    z-index: 40; display: none; pointer-events: auto;
+  /* ── Joystick (more obvious now) ── */
+  .joystick-wrap {
+    position: fixed; bottom: 32px; left: 32px;
+    z-index: 40; display: none;
+    pointer-events: auto;
+    text-align: center;
   }
-  .mobile-controls-right {
-    position: fixed; bottom: 24px; right: 24px;
-    z-index: 40; display: none; pointer-events: auto;
-  }
+  .joystick-wrap.show { display: block; }
   .joy {
-    width: 110px; height: 110px;
-    border: 1px solid var(--ink-faint);
-    border-radius: 50%; position: relative;
-    background: rgba(0,0,0,0.3);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    width: 130px; height: 130px;
+    position: relative;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at center, rgba(239,231,215,0.10) 0%, rgba(0,0,0,0.45) 70%);
+    border: 2px solid rgba(201, 169, 110, 0.35);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow:
+      0 8px 30px rgba(0,0,0,0.5),
+      inset 0 0 24px rgba(0,0,0,0.3);
+  }
+  .joy.idle { animation: joyPulse 2.4s ease-in-out 1.2s 2; }
+  @keyframes joyPulse {
+    0%, 100% { box-shadow: 0 8px 30px rgba(0,0,0,0.5), inset 0 0 24px rgba(0,0,0,0.3), 0 0 0 0 rgba(201,169,110,0.6); }
+    50%      { box-shadow: 0 8px 30px rgba(0,0,0,0.5), inset 0 0 24px rgba(0,0,0,0.3), 0 0 0 14px rgba(201,169,110,0); }
+  }
+  /* Compass arrows around joystick */
+  .joy::before, .joy::after,
+  .joy .arrow-l, .joy .arrow-r {
+    content: '';
+    position: absolute;
+    width: 0; height: 0;
+    opacity: 0.35;
+    pointer-events: none;
+  }
+  .joy::before {
+    top: 8px; left: 50%; transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 7px solid var(--ink);
+  }
+  .joy::after {
+    bottom: 8px; left: 50%; transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--ink);
+  }
+  .joy .arrow-l {
+    left: 8px; top: 50%; transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-right: 7px solid var(--ink);
+  }
+  .joy .arrow-r {
+    right: 8px; top: 50%; transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 7px solid var(--ink);
   }
   .joy .stick {
     position: absolute; top: 50%; left: 50%;
-    width: 38px; height: 38px;
-    background: var(--ink-dim);
+    width: 50px; height: 50px;
+    background: linear-gradient(145deg, #efe7d7, #b8ad9a);
     border-radius: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;
+    box-shadow:
+      0 4px 12px rgba(0,0,0,0.5),
+      inset 0 -4px 8px rgba(0,0,0,0.2),
+      inset 0 2px 4px rgba(255,255,255,0.4);
   }
   .joy-label {
-    position: absolute; top: -22px; left: 50%;
-    transform: translateX(-50%);
+    margin-top: 10px;
     font-family: var(--sans);
-    font-size: 9px; letter-spacing: 0.22em;
-    color: var(--ink-faint); text-transform: uppercase;
-    pointer-events: none; white-space: nowrap;
+    font-size: 10px; letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
   }
+  .joy-label .gold { color: var(--gold); }
 
-  /* ── Controls mode menu (touch only) ── */
-  .mode-toggle {
-    pointer-events: auto;
-    position: relative;
-    margin-right: 12px;
+  .look-hint {
+    position: fixed;
+    top: 50%; right: 40px;
+    transform: translateY(-50%);
+    z-index: 40;
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--ink-faint);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    text-align: right;
+    line-height: 1.8;
     display: none;
   }
-  .mode-toggle.show { display: block; }
-  .mode-btn {
-    background: transparent;
-    border: 1px solid var(--ink-faint);
-    color: var(--ink-dim);
-    font-family: var(--sans);
-    font-size: 10px; letter-spacing: 0.18em;
-    text-transform: uppercase;
-    padding: 10px 14px; cursor: pointer;
-    transition: all 0.25s ease;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .mode-btn:hover { color: var(--ink); }
-  .mode-btn .gear {
-    width: 12px; height: 12px;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-    position: relative;
-  }
-  .mode-btn .gear::after {
-    content: ''; position: absolute;
-    top: 50%; left: 50%; width: 4px; height: 4px;
-    background: currentColor;
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-  }
-  .mode-menu {
-    position: absolute; top: calc(100% + 6px); right: 0;
-    min-width: 220px;
-    background: rgba(15, 12, 10, 0.96);
-    border: 1px solid var(--ink-faint);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    display: none; z-index: 60;
-  }
-  .mode-menu.open { display: block; }
-  .mode-menu-header {
-    padding: 14px 18px 8px;
-    font-family: var(--sans);
-    font-size: 9px; letter-spacing: 0.28em;
-    text-transform: uppercase; color: var(--gold);
-    border-bottom: 1px solid rgba(239,231,215,0.08);
-  }
-  .mode-option {
-    display: block; width: 100%;
-    background: transparent; border: none;
-    color: var(--ink-dim);
-    font-family: var(--serif);
-    font-size: 14px; line-height: 1.3;
-    text-align: left; padding: 12px 18px;
-    cursor: pointer;
-    transition: all 0.2s;
-    border-bottom: 1px solid rgba(239,231,215,0.05);
-  }
-  .mode-option:last-child { border-bottom: none; }
-  .mode-option:hover { background: rgba(239,231,215,0.05); color: var(--ink); }
-  .mode-option .opt-title {
-    display: block;
-    font-size: 14px;
-    color: var(--ink);
-    margin-bottom: 2px;
-  }
-  .mode-option .opt-desc {
-    display: block;
-    font-style: italic;
-    font-size: 12px;
-    color: var(--ink-faint);
-  }
-  .mode-option.active {
-    background: rgba(201, 169, 110, 0.08);
-  }
-  .mode-option.active .opt-title { color: var(--gold); }
-  .mode-option.active::before {
-    content: '— '; color: var(--gold);
+  .look-hint.show { display: block; opacity: 1; }
+  .look-hint.hide { opacity: 0; }
+  .look-hint .arrow {
+    display: inline-block;
+    margin-right: 6px;
+    color: var(--gold);
   }
 
-  /* Tap-to-walk visual feedback */
-  .tap-marker {
-    position: fixed;
-    width: 30px; height: 30px;
-    border: 2px solid var(--gold);
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-    z-index: 35;
-    animation: tapPulse 0.7s ease-out forwards;
-  }
-  @keyframes tapPulse {
-    0% { opacity: 0.9; transform: translate(-50%, -50%) scale(0.6); }
-    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.8); }
-  }
-
+  /* ── Modal (Index click) ── */
   #modal {
     position: fixed; inset: 0;
     background: rgba(5, 4, 3, 0.95);
@@ -355,6 +330,81 @@
   #modal-close:hover { background: var(--ink); color: var(--bg); }
   .modal-nav:hover { background: rgba(239,231,215,0.1); }
 
+  /* ── Slideshow view ── */
+  #slideshow-view {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    z-index: 100;
+    display: none;
+    flex-direction: column;
+    padding: 90px 40px 40px;
+  }
+  #slideshow-view.open { display: flex; }
+  .slide-stage {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 0;
+    position: relative;
+  }
+  .slide-img {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain;
+    box-shadow:
+      0 40px 80px rgba(0,0,0,0.6),
+      0 0 0 1px rgba(201,169,110,0.12);
+    transition: opacity 0.4s ease;
+  }
+  .slide-info {
+    text-align: center;
+    margin-top: 32px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .slide-num {
+    font-family: var(--sans);
+    font-size: 9px; letter-spacing: 0.32em;
+    color: var(--gold);
+    margin-bottom: 10px;
+  }
+  .slide-title {
+    font-weight: 300;
+    font-size: 32px;
+    letter-spacing: 0.02em;
+    margin-bottom: 6px;
+  }
+  .slide-meta {
+    font-style: italic;
+    font-weight: 300;
+    font-size: 15px;
+    color: var(--ink-dim);
+    margin-bottom: 14px;
+  }
+  .slide-desc {
+    font-weight: 300;
+    font-size: 15px;
+    line-height: 1.6;
+    color: rgba(239, 231, 215, 0.7);
+    max-width: 620px;
+    margin: 0 auto;
+  }
+  .slide-nav {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    background: transparent;
+    border: 1px solid var(--ink-faint);
+    color: var(--ink);
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    font-family: var(--serif);
+    font-size: 26px; line-height: 1;
+    cursor: pointer;
+    transition: all 0.25s;
+  }
+  .slide-nav:hover { background: rgba(239,231,215,0.1); border-color: var(--ink-dim); }
+  .slide-prev { left: 24px; }
+  .slide-next { right: 24px; }
+
+  /* ── Grid (Index) view ── */
   #grid-view {
     position: fixed; inset: 0;
     background: var(--bg);
@@ -364,9 +414,7 @@
   }
   #grid-view.open { display: block; }
   .grid-intro {
-    max-width: 700px;
-    margin: 0 auto 80px;
-    text-align: center;
+    max-width: 700px; margin: 0 auto 80px; text-align: center;
   }
   .grid-intro .ornament {
     width: 60px; height: 1px;
@@ -420,13 +468,19 @@
     font-style: italic; font-weight: 300;
     font-size: 13px; color: var(--ink-dim);
   }
+  .grid-info .size {
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.18em;
+    color: var(--ink-faint);
+    margin-top: 4px;
+  }
 
   #error-box {
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     background: rgba(20, 15, 13, 0.98);
     border: 1px solid var(--gold-dim);
-    padding: 32px 40px; max-width: 500px;
+    padding: 32px 40px; max-width: 540px;
     z-index: 500; display: none;
     color: var(--ink); font-size: 14px; line-height: 1.6;
   }
@@ -442,12 +496,9 @@
     color: var(--gold);
   }
 
-  /* Touch device behavior — applied via .is-touch class on body */
   body.is-touch .controls-hint { display: none; }
   body.is-touch .crosshair { display: none; }
-  body.is-touch .mobile-controls.show { display: block; }
-  body.is-touch .mobile-controls-right.show { display: block; }
-  body.is-touch .mode-toggle { display: block; }
+  body.is-touch .joystick-wrap.show { display: block; }
 
   @media (max-width: 768px) {
     #modal-inner { grid-template-columns: 1fr; gap: 24px; }
@@ -460,21 +511,19 @@
     .top-bar { padding: 16px 18px; }
     .brand { font-size: 13px; }
     .brand .gallery-suffix { display: none; }
+    .view-toggle button { padding: 9px 12px; font-size: 9px; letter-spacing: 0.16em; }
     #grid-view { padding: 90px 20px 60px; }
     .grid-intro h2 { font-size: 28px; }
-    .modal-nav { width: 38px; height: 38px; }
-    .mode-btn { padding: 8px 10px; font-size: 9px; }
-    .mode-btn .mode-label { display: none; }
-    .joy { width: 95px; height: 95px; }
-    .joy .stick { width: 32px; height: 32px; }
+    .modal-nav, .slide-nav { width: 38px; height: 38px; font-size: 18px; }
     #modal-close { top: 16px; right: 16px; }
-  }
-  /* Larger touch screens (tablets) */
-  @media (min-width: 769px) and (pointer: coarse) {
-    .joy { width: 130px; height: 130px; }
+    .joy { width: 110px; height: 110px; }
     .joy .stick { width: 44px; height: 44px; }
-    .mobile-controls { bottom: 36px; left: 36px; }
-    .mobile-controls-right { bottom: 36px; right: 36px; }
+    .joystick-wrap { bottom: 24px; left: 24px; }
+    .look-hint { right: 20px; font-size: 10px; }
+    #slideshow-view { padding: 80px 20px 20px; }
+    .slide-title { font-size: 22px; }
+    .slide-prev { left: 8px; }
+    .slide-next { right: 8px; }
   }
 </style>
 </head>
@@ -485,39 +534,17 @@
     <div class="ornament"></div>
     <h1>C<span class="dot">.</span>Barnickel <span style="font-style:italic; opacity:0.85">Artwork</span></h1>
     <div class="sub">A virtual exhibition of plein air painting</div>
-    <button class="enter-btn" id="enterBtn" disabled>Preparing exhibition…</button>
+    <button class="enter-btn" id="enterBtn" disabled>Loading exhibition…</button>
   </div>
   <div class="hint">Click anywhere to begin</div>
 </div>
 
 <div class="top-bar">
   <div class="brand">C<span class="dot">.</span>Barnickel <span class="gallery-suffix" style="opacity:0.7">Artwork</span></div>
-  <div style="display:flex; align-items:center; pointer-events:auto;">
-    <div class="mode-toggle" id="mode-toggle">
-      <button class="mode-btn" id="mode-btn">
-        <span class="gear"></span>
-        <span class="mode-label">Controls: <span id="mode-current">Joystick + drag</span></span>
-      </button>
-      <div class="mode-menu" id="mode-menu">
-        <div class="mode-menu-header">Movement style</div>
-        <button class="mode-option" data-mode="one-stick">
-          <span class="opt-title">Joystick + drag</span>
-          <span class="opt-desc">Left thumb walks, drag to look around</span>
-        </button>
-        <button class="mode-option" data-mode="dual-stick">
-          <span class="opt-title">Two joysticks</span>
-          <span class="opt-desc">Left walks, right looks (game-style)</span>
-        </button>
-        <button class="mode-option" data-mode="tap-walk">
-          <span class="opt-title">Tap to walk</span>
-          <span class="opt-desc">Tap the floor to walk there, drag to look</span>
-        </button>
-      </div>
-    </div>
-    <div class="view-toggle">
-      <button id="btn-3d" class="active">Gallery</button>
-      <button id="btn-grid">Index</button>
-    </div>
+  <div class="view-toggle">
+    <button id="btn-3d" class="active">Gallery</button>
+    <button id="btn-slideshow">Slideshow</button>
+    <button id="btn-grid">Index</button>
   </div>
 </div>
 
@@ -530,18 +557,17 @@
   Click painting
 </div>
 
-<div class="mobile-controls" id="mobile-ctrls">
-  <div class="joy" id="joy">
-    <div class="joy-label">Move</div>
+<div class="joystick-wrap" id="joystick-wrap">
+  <div class="joy idle" id="joy">
+    <span class="arrow-l"></span>
+    <span class="arrow-r"></span>
     <div class="stick" id="stick"></div>
   </div>
+  <div class="joy-label"><span class="gold">●</span> Drag to walk</div>
 </div>
 
-<div class="mobile-controls-right" id="mobile-ctrls-right">
-  <div class="joy" id="joy-right">
-    <div class="joy-label">Look</div>
-    <div class="stick" id="stick-right"></div>
-  </div>
+<div class="look-hint" id="look-hint">
+  <span class="arrow">↺</span> Drag the screen<br>to look around
 </div>
 
 <div id="canvas-container" style="position:fixed; inset:0; z-index:1;"></div>
@@ -561,6 +587,20 @@
   </div>
 </div>
 
+<div id="slideshow-view">
+  <div class="slide-stage">
+    <button class="slide-nav slide-prev" id="slide-prev">‹</button>
+    <img class="slide-img" id="slide-img" alt="" />
+    <button class="slide-nav slide-next" id="slide-next">›</button>
+  </div>
+  <div class="slide-info">
+    <div class="slide-num" id="slide-num">Work 01 of 06</div>
+    <div class="slide-title" id="slide-title"></div>
+    <div class="slide-meta" id="slide-meta"></div>
+    <div class="slide-desc" id="slide-desc"></div>
+  </div>
+</div>
+
 <div id="grid-view">
   <div class="grid-intro">
     <div class="ornament"></div>
@@ -571,10 +611,10 @@
 </div>
 
 <div id="error-box">
-  <h3>Couldn't load paintings</h3>
-  <p>The browser blocked loading local images. To preview the gallery, run a local server in this folder:</p>
+  <h3 id="error-title">Couldn't load paintings</h3>
+  <p id="error-body">The browser blocked loading local files. To preview the gallery, run a local server in this folder:</p>
   <p style="margin-top: 14px"><code>python3 -m http.server 8000</code></p>
-  <p style="margin-top: 14px">Then open <code>http://localhost:8000</code> in your browser. Or upload to any web host (Netlify, GitHub Pages, etc.) and it'll work directly.</p>
+  <p style="margin-top: 14px">Then open <code>http://localhost:8000</code> in your browser. Once deployed to Netlify, GitHub Pages, or any static host, it'll work directly.</p>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -582,86 +622,22 @@
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════════════
-                          YOUR PAINTINGS
-
+   The painting list lives in `paintings.json`, next to this file.
    To add a painting:
-     1. Save the image file in the "paintings/" folder
-     2. Copy any block below, paste it into this list, edit the values
-     3. Save this file
-
-   The room will automatically expand and re-arrange to fit.
-
-   Image notes:
-     • JPG or PNG, 1000–1500 px on the longer side works best
-     • Aspect ratio is detected automatically (portrait, landscape, panoramic)
-     • Use a forward-slash path even on Windows: "paintings/my-piece.jpg"
+     1. Drop the image into the `paintings/` folder.
+     2. Add an entry to `paintings.json`. Example:
+        {
+          "file": "07-redwood-shadows.jpg",
+          "title": "Redwood Shadows",
+          "size": "9x12in",      ← width × height. Use "in" or "cm" suffix.
+          "medium": "Oil on board",
+          "year": "2024",
+          "description": "A short paragraph for the modal."
+        }
+     3. Save and refresh.
    ═══════════════════════════════════════════════════════════════════ */
 
-const ARTWORKS = [
-
-  {
-    image: "paintings/01-coastal-headland.jpg",
-    title: "Coastal Headland",
-    medium: "Oil on board",
-    year: "plein air",
-    description: "A windswept ridge falling away to a pale, cool sea. Painted on location, working quickly to catch the shifting afternoon light on the cliff face."
-  },
-
-  {
-    image: "paintings/02-hillside-in-blue.jpg",
-    title: "Hillside in Blue",
-    medium: "Oil on board",
-    year: "plein air",
-    description: "Rolling hills resolved into bands of teal, ochre and shadow. The sea sits low on the horizon, cool against the warm broken color of the foreground."
-  },
-
-  {
-    image: "paintings/03-valley-lights.jpg",
-    title: "Valley Lights",
-    medium: "Oil on board",
-    year: "plein air",
-    description: "A broad valley at dusk, dotted with the first lights of evening. The mountainside in the foreground holds onto the day's last warmth."
-  },
-
-  {
-    image: "paintings/04-botchers-gap.jpg",
-    title: "Botchers Gap",
-    medium: "Oil on panel",
-    year: "plein air",
-    description: "Looking through a wooden fence at sunset light catching the far ridges. A small framed study from a high overlook."
-  },
-
-  {
-    image: "paintings/05-desert-wash.jpg",
-    title: "Desert Wash",
-    medium: "Oil on board",
-    year: "plein air",
-    description: "High desert in late spring — pale earth, scattered sage, and the long pink shadows of an afternoon coming to a close."
-  },
-
-  {
-    image: "paintings/06-structure-study.jpg",
-    title: "Structure Study",
-    medium: "Oil on canvas",
-    year: "",
-    description: "A semi-abstract investigation of overhead architecture — beams, light, and the geometry of a constructed space resolving into planes of color."
-  },
-
-  /* ── ADD A NEW PAINTING HERE ──
-  ,{
-    image: "paintings/07-your-new-piece.jpg",
-    title: "Title goes here",
-    medium: "Oil on canvas",
-    year: "2024",
-    description: "A short description that appears when someone clicks the painting."
-  }
-  */
-
-];
-
-/* ═══════════════════════════════════════════════════════════════════
-   Below this line: the gallery engine. You shouldn't need to edit it.
-   ═══════════════════════════════════════════════════════════════════ */
+let ARTWORKS = [];
 
 let scene, camera, renderer, raycaster;
 const mouse = new THREE.Vector2(0, 0);
@@ -675,77 +651,97 @@ let dragging = false, dragStartX = 0, dragStartY = 0;
 let dragYawStart = 0, dragPitchStart = 0, dragMoved = 0;
 const PLAYER_BUFFER = 1.4;
 const MOVE_SPEED = 4.0;
-const LOOK_SPEED = 2.0; // radians/sec for joystick look
 let lastTime = performance.now();
 
-// Touch detection — true touch device (not just narrow screen)
 const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 if (hasTouch) document.body.classList.add('is-touch');
 
-// Control mode state — three movement schemes for touch
-const CONTROL_MODES = ['one-stick', 'dual-stick', 'tap-walk'];
-let controlMode = 'one-stick';
-try {
-  const stored = localStorage.getItem('cb-control-mode');
-  if (CONTROL_MODES.includes(stored)) controlMode = stored;
-} catch (e) {}
+let entered = false;
+let hasLookedYet = false;
+let floorMesh = null;
 
-// Tap-to-walk state
-let walkTarget = null;       // {x, z} world coords
-let floorMesh = null;        // for raycasting
-let entered = false;         // gallery entered yet?
+window.__joyVec = { x: 0, y: 0 };
 
-// Right joystick (look) state
-window.__joyRightVec = { x: 0, y: 0 };
+/* ─────── Size parsing ─────── */
+function parseSize(str) {
+  if (!str || typeof str !== 'string') return null;
+  const s = str.trim().toLowerCase().replace(/\s+/g, '');
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(in|cm|inch|inches|m|mm)?$/);
+  if (!m) return null;
+  const w = parseFloat(m[1]);
+  const h = parseFloat(m[2]);
+  let unit = (m[3] || 'in').replace(/^inch(es)?$/, 'in');
+  let scale;
+  if (unit === 'in') scale = 0.0254;
+  else if (unit === 'cm') scale = 0.01;
+  else if (unit === 'mm') scale = 0.001;
+  else if (unit === 'm') scale = 1.0;
+  else scale = 0.0254;
+  return { wM: w * scale, hM: h * scale, wDisplay: w, hDisplay: h, unit };
+}
+function formatSize(parsed) {
+  if (!parsed) return '';
+  const u = parsed.unit === 'in' ? '"' : ' ' + parsed.unit;
+  return `${parsed.wDisplay}${u} × ${parsed.hDisplay}${u}`;
+}
 
-// ───── Layout planning ─────
-function planLayout(N) {
-  // Distribute N paintings: [north, south, east, west]
-  let dist;
-  if (N === 0) dist = [0,0,0,0];
-  else if (N === 1) dist = [1, 0, 0, 0];
-  else if (N === 2) dist = [1, 1, 0, 0];
-  else if (N === 3) dist = [3, 0, 0, 0];
-  else if (N === 4) dist = [2, 2, 0, 0];
-  else if (N === 5) dist = [3, 2, 0, 0];
-  else if (N === 6) dist = [3, 3, 0, 0];
-  else if (N === 7) dist = [3, 3, 1, 0];
-  else if (N === 8) dist = [3, 3, 1, 1];
-  else if (N === 9) dist = [3, 3, 2, 1];
-  else if (N === 10) dist = [3, 3, 2, 2];
-  else if (N === 11) dist = [3, 3, 3, 2];
-  else if (N === 12) dist = [3, 3, 3, 3];
-  else if (N <= 16) dist = [4, 4, 4, 4];
-  else if (N <= 20) dist = [5, 5, 5, 5];
-  else dist = [Math.ceil(N/4), Math.ceil(N/4), Math.floor(N/4), Math.floor(N/4)];
+/* ─────── Layout planning ─────── */
+function planLayout(artworks) {
+  const FRAME_PAD = 0.5;
+  const widths = artworks.map(a => (a._size ? a._size.wM : 0.5) + FRAME_PAD);
+  const totalW = widths.reduce((a, b) => a + b, 0);
+  const longWallTarget = Math.max(8, totalW * 0.4);
+  const shortWallTarget = Math.max(6, totalW * 0.18);
 
-  // Trim to N (in case dist sums to more)
-  let total = dist.reduce((a,b) => a+b, 0);
-  while (total > N) {
-    for (let i = 3; i >= 0 && total > N; i--) {
-      if (dist[i] > 0) { dist[i]--; total--; }
+  const walls = [[], [], [], []];
+  const wallTargets = [longWallTarget, longWallTarget, shortWallTarget, shortWallTarget];
+  const wallUsed = [0, 0, 0, 0];
+
+  artworks.forEach((art, i) => {
+    let placed = false;
+    for (let w = 0; w < 4; w++) {
+      if (wallUsed[w] + widths[i] <= wallTargets[w]) {
+        walls[w].push(i);
+        wallUsed[w] += widths[i];
+        placed = true;
+        break;
+      }
     }
-  }
+    if (!placed) {
+      let minW = 0;
+      for (let w = 1; w < 4; w++) {
+        if (wallUsed[w] < wallUsed[minW]) minW = w;
+      }
+      walls[minW].push(i);
+      wallUsed[minW] += widths[i];
+    }
+  });
 
-  // Room size based on max paintings per wall axis
-  const longCount = Math.max(dist[0], dist[1]);
-  const shortCount = Math.max(dist[2], dist[3]);
-  const w = Math.max(20, longCount * 5.5 + 10);
-  const d = Math.max(14, shortCount * 5.5 + 10);
+  const w = Math.max(18, Math.max(wallUsed[0], wallUsed[1]) + 5);
+  const d = Math.max(12, Math.max(wallUsed[2], wallUsed[3]) + 5);
   const h = 7;
 
-  return { dist, room: { w, h, d } };
+  return { walls, room: { w, h, d } };
 }
 
-function spacedPositions(n, length) {
-  if (n === 0) return [];
-  if (n === 1) return [0];
-  const usable = length * 0.72;
-  const step = usable / (n - 1);
-  return Array.from({length: n}, (_, i) => -usable/2 + i * step);
+function spaceWallPaintings(indices, artworks, wallLength) {
+  if (indices.length === 0) return [];
+  const FRAME_PAD = 0.5;
+  const widths = indices.map(i => (artworks[i]._size ? artworks[i]._size.wM : 0.5) + FRAME_PAD);
+  const totalUsed = widths.reduce((a, b) => a + b, 0);
+  const gap = (wallLength - totalUsed) / (indices.length + 1);
+  let cursor = -wallLength / 2 + gap;
+  const result = [];
+  indices.forEach((idx, i) => {
+    const halfW = widths[i] / 2;
+    cursor += halfW;
+    result.push({ artworkIndex: idx, coord: cursor });
+    cursor += halfW + gap;
+  });
+  return result;
 }
 
-// ───── Procedural textures ─────
+/* ─────── Procedural textures ─────── */
 function makeFloorTexture() {
   const c = document.createElement('canvas');
   c.width = 1024; c.height = 1024;
@@ -785,9 +781,9 @@ function makeFloorTexture() {
   return tex;
 }
 
-function makePlaqueTexture(title, medium, year) {
+function makePlaqueTexture(title, medium, year, sizeStr) {
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 128;
+  c.width = 512; c.height = 160;
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#efe7d7';
   ctx.textAlign = 'center';
@@ -797,10 +793,15 @@ function makePlaqueTexture(title, medium, year) {
   ctx.fillStyle = 'rgba(239, 231, 215, 0.6)';
   const subtitle = year ? `${medium} · ${year}` : medium;
   ctx.fillText(subtitle, 256, 84);
+  if (sizeStr) {
+    ctx.font = '300 16px "Inter", sans-serif';
+    ctx.fillStyle = 'rgba(201, 169, 110, 0.7)';
+    ctx.fillText(sizeStr, 256, 112);
+  }
   ctx.strokeStyle = '#c9a96e';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(206, 110); ctx.lineTo(306, 110);
+  ctx.moveTo(206, 138); ctx.lineTo(306, 138);
   ctx.stroke();
   return new THREE.CanvasTexture(c);
 }
@@ -819,12 +820,10 @@ function makeNameTexture() {
   return new THREE.CanvasTexture(c);
 }
 
-// ───── Build the room ─────
 function buildRoom(layout) {
-  const { dist, room } = layout;
+  const room = layout.room;
   ROOM = room;
 
-  // Floor
   floorMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
     new THREE.MeshStandardMaterial({ map: makeFloorTexture(), roughness: 0.85 })
@@ -832,7 +831,6 @@ function buildRoom(layout) {
   floorMesh.rotation.x = -Math.PI / 2;
   scene.add(floorMesh);
 
-  // Ceiling
   const ceiling = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
     new THREE.MeshStandardMaterial({ color: 0x100c0a, roughness: 1.0 })
@@ -841,57 +839,45 @@ function buildRoom(layout) {
   ceiling.position.y = room.h;
   scene.add(ceiling);
 
-  // Walls (charcoal)
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x1c1715, roughness: 0.95 });
-  const walls = [
-    { geo: [room.w, room.h], pos: [0, room.h/2, -room.d/2], rot: 0 },              // north
-    { geo: [room.w, room.h], pos: [0, room.h/2,  room.d/2], rot: Math.PI },        // south
-    { geo: [room.d, room.h], pos: [ room.w/2, room.h/2, 0], rot: -Math.PI/2 },     // east
-    { geo: [room.d, room.h], pos: [-room.w/2, room.h/2, 0], rot:  Math.PI/2 },     // west
+  const wallSpecs = [
+    { geo: [room.w, room.h], pos: [0, room.h/2, -room.d/2], rot: 0 },
+    { geo: [room.w, room.h], pos: [0, room.h/2,  room.d/2], rot: Math.PI },
+    { geo: [room.d, room.h], pos: [ room.w/2, room.h/2, 0], rot: -Math.PI/2 },
+    { geo: [room.d, room.h], pos: [-room.w/2, room.h/2, 0], rot:  Math.PI/2 },
   ];
-  walls.forEach(w => {
+  wallSpecs.forEach(w => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(...w.geo), wallMat);
     m.position.set(...w.pos);
     m.rotation.y = w.rot;
     scene.add(m);
   });
 
-  // Gallery name on walls without paintings
   const nameTex = makeNameTexture();
   const nameMat = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.7 });
   const nameGeo = new THREE.PlaneGeometry(6, 1.5);
-  // East wall (if no paintings there)
-  if (dist[2] === 0) {
+  if (layout.walls[2].length === 0) {
     const eastName = new THREE.Mesh(nameGeo, nameMat);
     eastName.position.set(room.w/2 - 0.05, 3.5, 0);
     eastName.rotation.y = -Math.PI / 2;
     scene.add(eastName);
   }
-  if (dist[3] === 0) {
+  if (layout.walls[3].length === 0) {
     const westName = new THREE.Mesh(nameGeo, nameMat);
     westName.position.set(-room.w/2 + 0.05, 3.5, 0);
     westName.rotation.y = Math.PI / 2;
     scene.add(westName);
   }
-  if (dist[1] === 0 && dist[0] > 0) {
-    // Put name on south wall if it's empty (less likely since we fill N first)
-    const southName = new THREE.Mesh(nameGeo, nameMat);
-    southName.position.set(0, 3.5, room.d/2 - 0.05);
-    southName.rotation.y = Math.PI;
-    scene.add(southName);
-  }
 
-  // ── Lighting ──
   scene.add(new THREE.AmbientLight(0xfff5e6, 0.18));
   scene.add(new THREE.HemisphereLight(0xfff0d8, 0x100806, 0.15));
   const centerGlow = new THREE.PointLight(0xffe8c4, 0.35, room.w * 0.7, 2);
   centerGlow.position.set(0, room.h - 0.4, 0);
   scene.add(centerGlow);
 
-  // Decorative ceiling bulbs
   const bulbGeo = new THREE.SphereGeometry(0.06, 8, 8);
   const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff0d0 });
-  const bulbsPerSide = Math.ceil(room.w / 6);
+  const bulbsPerSide = Math.max(2, Math.ceil(room.w / 6));
   for (let z of [-room.d/2 + 3, room.d/2 - 3]) {
     for (let i = 0; i < bulbsPerSide; i++) {
       const x = (i + 0.5) * (room.w / bulbsPerSide) - room.w/2;
@@ -902,36 +888,19 @@ function buildRoom(layout) {
   }
 }
 
-// ───── Place paintings ─────
 function placeAllPaintings(layout) {
-  const { dist } = layout;
   const wallNames = ['north', 'south', 'east', 'west'];
   const wallLengths = [ROOM.w, ROOM.w, ROOM.d, ROOM.d];
-
-  // Build a flat list: [{wall, coord}]
-  const slots = [];
   for (let w = 0; w < 4; w++) {
-    if (dist[w] === 0) continue;
-    const positions = spacedPositions(dist[w], wallLengths[w]);
-    for (const c of positions) {
-      slots.push({ wall: wallNames[w], coord: c });
-    }
+    if (layout.walls[w].length === 0) continue;
+    const placements = spaceWallPaintings(layout.walls[w], ARTWORKS, wallLengths[w]);
+    placements.forEach(p => {
+      placePainting(ARTWORKS[p.artworkIndex], p.artworkIndex, wallNames[w], p.coord);
+    });
   }
-
-  // Strategy: put paintings in slot order. If 6 paintings total with [3,3,0,0] dist,
-  // smartly place a portrait in center if one exists.
-  const ordered = smartArtworkOrder(ARTWORKS, slots);
-  ordered.forEach((art, i) => placePainting(art, i, slots[i].wall, slots[i].coord));
-}
-
-function smartArtworkOrder(artworks, slots) {
-  // Try to put the most "feature-worthy" piece in the center of a long wall.
-  // For now: keep input order. (Could be enhanced to put portraits in centers, etc.)
-  return artworks.slice();
 }
 
 function placePainting(art, index, wall, coord) {
-  // Wall geometry
   const wallZ = wall === 'north' ? -ROOM.d/2 : (wall === 'south' ? ROOM.d/2 : 0);
   const wallX = wall === 'east' ? ROOM.w/2 : (wall === 'west' ? -ROOM.w/2 : 0);
   const facingY = wall === 'north' ? 0
@@ -941,87 +910,85 @@ function placePainting(art, index, wall, coord) {
   const inwardN = wall === 'north' ? 1 : (wall === 'south' ? -1 : 0);
   const inwardX = wall === 'west' ? 1 : (wall === 'east' ? -1 : 0);
 
-  const baseX = wall === 'north' || wall === 'south' ? coord : wallX;
-  const baseZ = wall === 'east' || wall === 'west' ? coord : wallZ;
-  const wallNormalZ = inwardN * 0.02;
-  const wallNormalX = inwardX * 0.02;
+  const baseX = (wall === 'north' || wall === 'south') ? coord : wallX;
+  const baseZ = (wall === 'east'  || wall === 'west')  ? coord : wallZ;
 
-  const yCenter = 2.85;
+  const pW = art._size.wM;
+  const pH = art._size.hM;
+
+  // Hang at standard eye-line for the center; clamp so painting fits in room
+  const eyeLine = 1.55;
+  let yCenter = eyeLine + pH * 0.15;
+  if (yCenter + pH/2 > ROOM.h - 0.5) yCenter = ROOM.h - 0.5 - pH/2;
+  if (yCenter - pH/2 < 0.4) yCenter = 0.4 + pH/2;
+
+  const frameThickness = Math.max(0.06, Math.min(0.14, pH * 0.08));
+  const frame = new THREE.Mesh(
+    new THREE.PlaneGeometry(pW + frameThickness*2, pH + frameThickness*2),
+    new THREE.MeshStandardMaterial({ color: 0x0d0a08, roughness: 0.7, metalness: 0.1 })
+  );
+  frame.position.set(baseX + inwardX * 0.012, yCenter, baseZ + inwardN * 0.012);
+  frame.rotation.y = facingY;
+  scene.add(frame);
+
+  const matInset = frameThickness * 0.4;
+  const mat = new THREE.Mesh(
+    new THREE.PlaneGeometry(pW + matInset*2, pH + matInset*2),
+    new THREE.MeshStandardMaterial({ color: 0x1a1612, roughness: 0.9 })
+  );
+  mat.position.set(baseX + inwardX * 0.018, yCenter, baseZ + inwardN * 0.018);
+  mat.rotation.y = facingY;
+  scene.add(mat);
 
   new THREE.TextureLoader().load(
-    art.image,
+    'paintings/' + art.file,
     (tex) => {
-      const aspect = tex.image.width / tex.image.height;
-      art.aspect = aspect;
       tex.encoding = THREE.sRGBEncoding;
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-      // Painting dimensions
-      let pH = 1.85;
-      let pW = aspect * pH;
-      if (pW > 2.85) { pW = 2.85; pH = pW / aspect; }
-
-      // Frame
-      const frame = new THREE.Mesh(
-        new THREE.PlaneGeometry(pW + 0.18, pH + 0.18),
-        new THREE.MeshStandardMaterial({ color: 0x0d0a08, roughness: 0.7, metalness: 0.1 })
-      );
-      frame.position.set(baseX + wallNormalX*0.5, yCenter, baseZ + wallNormalZ*0.5);
-      frame.rotation.y = facingY;
-      scene.add(frame);
-
-      // Mat
-      const mat = new THREE.Mesh(
-        new THREE.PlaneGeometry(pW + 0.06, pH + 0.06),
-        new THREE.MeshStandardMaterial({ color: 0x1a1612, roughness: 0.9 })
-      );
-      mat.position.set(baseX + wallNormalX*0.75, yCenter, baseZ + wallNormalZ*0.75);
-      mat.rotation.y = facingY;
-      scene.add(mat);
-
-      // Painting
       const painting = new THREE.Mesh(
         new THREE.PlaneGeometry(pW, pH),
         new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 })
       );
-      painting.position.set(baseX + wallNormalX, yCenter, baseZ + wallNormalZ);
+      painting.position.set(baseX + inwardX * 0.025, yCenter, baseZ + inwardN * 0.025);
       painting.rotation.y = facingY;
       painting.userData = { artIndex: index, isPainting: true };
       scene.add(painting);
       paintingMeshes.push(painting);
-
-      // Plaque
-      const plaqueTex = makePlaqueTexture(art.title, art.medium, art.year);
-      const plaque = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.3, 0.32),
-        new THREE.MeshBasicMaterial({ map: plaqueTex, transparent: true, opacity: 0.85 })
-      );
-      plaque.position.set(baseX + wallNormalX, yCenter - pH/2 - 0.32, baseZ + wallNormalZ);
-      plaque.rotation.y = facingY;
-      scene.add(plaque);
-
-      // Spotlight
-      const lightOffsetZ = inwardN * 2.5;
-      const lightOffsetX = inwardX * 2.5;
-      const spot = new THREE.SpotLight(0xfff2dc, 1.6, 8, Math.PI / 6, 0.45, 1.2);
-      spot.position.set(baseX + lightOffsetX, ROOM.h - 0.3, baseZ + lightOffsetZ);
-      spot.target = painting;
-      scene.add(spot);
-      scene.add(spot.target);
     },
     undefined,
-    (err) => {
-      console.error('Failed to load painting:', art.image, err);
-      showLoadError();
+    () => {
+      showLoadError('Image failed to load: paintings/' + art.file,
+        "Make sure the file exists in the paintings/ folder and the name in paintings.json matches exactly (case-sensitive).");
     }
   );
+
+  const plaqueWidth = Math.min(1.4, Math.max(0.9, pW * 1.1));
+  const plaqueTex = makePlaqueTexture(art.title, art.medium, art.year, formatSize(art._size));
+  const plaque = new THREE.Mesh(
+    new THREE.PlaneGeometry(plaqueWidth, plaqueWidth * 0.31),
+    new THREE.MeshBasicMaterial({ map: plaqueTex, transparent: true, opacity: 0.85 })
+  );
+  plaque.position.set(baseX + inwardX * 0.025, yCenter - pH/2 - 0.30, baseZ + inwardN * 0.025);
+  plaque.rotation.y = facingY;
+  scene.add(plaque);
+
+  const lightZ = baseZ + inwardN * Math.min(2.5, ROOM.d / 4);
+  const lightX = baseX + inwardX * Math.min(2.5, ROOM.w / 4);
+  const spot = new THREE.SpotLight(0xfff2dc, 1.6, 8, Math.PI / 6, 0.45, 1.2);
+  spot.position.set(lightX, ROOM.h - 0.3, lightZ);
+  spot.target = new THREE.Object3D();
+  spot.target.position.set(baseX + inwardX * 0.025, yCenter, baseZ + inwardN * 0.025);
+  scene.add(spot);
+  scene.add(spot.target);
 }
 
-function showLoadError() {
+function showLoadError(title, body) {
+  document.getElementById('error-title').textContent = title || "Couldn't load paintings";
+  if (body) document.getElementById('error-body').textContent = body;
   document.getElementById('error-box').classList.add('show');
 }
 
-// ───── Three.js scene init ─────
+/* ─────── Three.js init & controls ─────── */
 function initScene() {
   const container = document.getElementById('canvas-container');
   scene = new THREE.Scene();
@@ -1040,13 +1007,11 @@ function initScene() {
   animate();
 }
 
-// ───── Controls ─────
 function setupControls() {
   const dom = renderer.domElement;
   dom.style.cursor = 'grab';
-  dom.style.touchAction = 'none'; // prevent default scroll/zoom on canvas
+  dom.style.touchAction = 'none';
 
-  // ── Mouse (desktop) ──
   dom.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
     dragging = true;
@@ -1065,6 +1030,7 @@ function setupControls() {
       yaw = dragYawStart - dx * 0.0035;
       pitch = dragPitchStart - dy * 0.0035;
       pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+      if (!hasLookedYet && dragMoved > 30) markLooked();
     }
   });
   window.addEventListener('mouseup', e => {
@@ -1073,31 +1039,22 @@ function setupControls() {
     dom.style.cursor = 'grab';
   });
 
-  // ── Touch: look (drag anywhere on canvas, except joysticks) ──
   let touchLook = null;
   const joy = document.getElementById('joy');
-  const joyR = document.getElementById('joy-right');
-
-  function inEl(t, el) {
-    const r = el.getBoundingClientRect();
-    return t.clientX >= r.left && t.clientX <= r.right
-        && t.clientY >= r.top  && t.clientY <= r.bottom;
+  function inJoy(t) {
+    const r = joy.getBoundingClientRect();
+    return t.clientX >= r.left - 20 && t.clientX <= r.right + 20
+        && t.clientY >= r.top - 20  && t.clientY <= r.bottom + 20;
   }
-
   dom.addEventListener('touchstart', e => {
     e.preventDefault();
     for (const t of e.changedTouches) {
-      // Skip touches that started on a joystick
-      if (inEl(t, joy)) continue;
-      if (inEl(t, joyR) && controlMode === 'dual-stick') continue;
+      if (inJoy(t)) continue;
       if (touchLook === null) {
-        touchLook = { id: t.identifier, x: t.clientX, y: t.clientY,
-                      startX: t.clientX, startY: t.clientY,
-                      yaw, pitch, moved: 0 };
+        touchLook = { id: t.identifier, x: t.clientX, y: t.clientY, yaw, pitch, moved: 0 };
       }
     }
   }, { passive: false });
-
   dom.addEventListener('touchmove', e => {
     for (const t of e.touches) {
       if (touchLook && t.identifier === touchLook.id) {
@@ -1107,39 +1064,35 @@ function setupControls() {
         yaw = touchLook.yaw - dx * 0.005;
         pitch = touchLook.pitch - dy * 0.005;
         pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+        if (!hasLookedYet && touchLook.moved > 30) markLooked();
       }
     }
   }, { passive: true });
-
   dom.addEventListener('touchend', e => {
     for (const t of e.changedTouches) {
       if (touchLook && t.identifier === touchLook.id) {
-        if (touchLook.moved < 12) {
-          handleTap(t.clientX, t.clientY);
-        }
+        if (touchLook.moved < 12) handleTap(t.clientX, t.clientY);
         touchLook = null;
       }
     }
   });
 
-  // ── Left joystick (movement) — works in all modes ──
-  setupJoystick(joy, document.getElementById('stick'), v => { window.__joyVec = v; });
-  window.__joyVec = { x: 0, y: 0 };
+  setupJoystick(joy, document.getElementById('stick'));
 
-  // ── Right joystick (look) — only used in dual-stick mode ──
-  setupJoystick(joyR, document.getElementById('stick-right'), v => { window.__joyRightVec = v; });
-
-  // ── Keyboard ──
   window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
-    if (k === 'w' || e.key === 'ArrowUp') { keys.w = true; walkTarget = null; }
-    if (k === 'a' || e.key === 'ArrowLeft') { keys.a = true; walkTarget = null; }
-    if (k === 's' || e.key === 'ArrowDown') { keys.s = true; walkTarget = null; }
-    if (k === 'd' || e.key === 'ArrowRight') { keys.d = true; walkTarget = null; }
+    if (k === 'w' || e.key === 'ArrowUp') keys.w = true;
+    if (k === 'a' || e.key === 'ArrowLeft') keys.a = true;
+    if (k === 's' || e.key === 'ArrowDown') keys.s = true;
+    if (k === 'd' || e.key === 'ArrowRight') keys.d = true;
     if (e.key === 'Escape' && document.getElementById('modal').classList.contains('open')) closeModal();
     if (document.getElementById('modal').classList.contains('open')) {
       if (e.key === 'ArrowLeft') { e.preventDefault(); navModal(-1); }
       if (e.key === 'ArrowRight') { e.preventDefault(); navModal(1); }
+    }
+    if (document.getElementById('slideshow-view').classList.contains('open')) {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); navSlide(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navSlide(1); }
     }
   });
   window.addEventListener('keyup', e => {
@@ -1149,161 +1102,75 @@ function setupControls() {
     if (k === 's' || e.key === 'ArrowDown') keys.s = false;
     if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
   });
-
-  // ── Mode toggle UI ──
-  setupModeToggle();
 }
 
-function setupJoystick(container, stick, onChange) {
+function setupJoystick(container, stick) {
   let activeId = null;
   let cx = 0, cy = 0;
-  const max = 40;
+  const max = 50;
 
   container.addEventListener('touchstart', e => {
     e.preventDefault();
     if (activeId !== null) return;
+    container.classList.remove('idle');
     const t = e.changedTouches[0];
     activeId = t.identifier;
     const r = container.getBoundingClientRect();
     cx = r.left + r.width/2;
     cy = r.top + r.height/2;
-    updateStick(t.clientX - cx, t.clientY - cy);
+    update(t.clientX - cx, t.clientY - cy);
   }, { passive: false });
 
   container.addEventListener('touchmove', e => {
     if (activeId === null) return;
     e.preventDefault();
     for (const t of e.touches) {
-      if (t.identifier === activeId) {
-        updateStick(t.clientX - cx, t.clientY - cy);
-      }
+      if (t.identifier === activeId) update(t.clientX - cx, t.clientY - cy);
     }
   }, { passive: false });
 
   const end = e => {
     for (const t of e.changedTouches) {
-      if (t.identifier === activeId) {
-        activeId = null;
-        updateStick(0, 0);
-      }
+      if (t.identifier === activeId) { activeId = null; update(0, 0); }
     }
   };
   container.addEventListener('touchend', end);
   container.addEventListener('touchcancel', end);
 
-  function updateStick(dx, dy) {
+  let mouseDown = false;
+  container.addEventListener('mousedown', e => {
+    e.preventDefault();
+    container.classList.remove('idle');
+    mouseDown = true;
+    const r = container.getBoundingClientRect();
+    cx = r.left + r.width/2;
+    cy = r.top + r.height/2;
+    update(e.clientX - cx, e.clientY - cy);
+  });
+  window.addEventListener('mousemove', e => { if (mouseDown) update(e.clientX - cx, e.clientY - cy); });
+  window.addEventListener('mouseup', () => { if (mouseDown) { mouseDown = false; update(0, 0); } });
+
+  function update(dx, dy) {
     const dist = Math.hypot(dx, dy);
     if (dist > max) { dx = dx/dist*max; dy = dy/dist*max; }
-    onChange({ x: dx / max, y: dy / max });
+    window.__joyVec = { x: dx / max, y: dy / max };
     stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
   }
-}
-
-function setupModeToggle() {
-  const btn = document.getElementById('mode-btn');
-  const menu = document.getElementById('mode-menu');
-
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    menu.classList.toggle('open');
-  });
-
-  document.addEventListener('click', e => {
-    if (!menu.contains(e.target) && e.target !== btn) {
-      menu.classList.remove('open');
-    }
-  });
-
-  document.querySelectorAll('.mode-option').forEach(opt => {
-    opt.addEventListener('click', () => {
-      setControlMode(opt.dataset.mode);
-      menu.classList.remove('open');
-    });
-  });
-
-  applyControlModeUI();
-}
-
-function setControlMode(mode) {
-  controlMode = mode;
-  try { localStorage.setItem('cb-control-mode', mode); } catch (e) {}
-  walkTarget = null; // cancel any in-progress auto-walk
-  applyControlModeUI();
-}
-
-function applyControlModeUI() {
-  const labels = {
-    'one-stick': 'Joystick + drag',
-    'dual-stick': 'Two joysticks',
-    'tap-walk': 'Tap to walk',
-  };
-  const labelEl = document.getElementById('mode-current');
-  if (labelEl) labelEl.textContent = labels[controlMode] || 'Joystick + drag';
-
-  document.querySelectorAll('.mode-option').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === controlMode);
-  });
-
-  // Show/hide joysticks based on mode (only relevant once entered)
-  if (entered) updateTouchUIVisibility();
-}
-
-function updateTouchUIVisibility() {
-  const left = document.getElementById('mobile-ctrls');
-  const right = document.getElementById('mobile-ctrls-right');
-  if (!hasTouch || !entered) {
-    left.classList.remove('show');
-    right.classList.remove('show');
-    return;
-  }
-  // Left joystick: visible in one-stick and dual-stick modes (not tap-walk)
-  left.classList.toggle('show', controlMode === 'one-stick' || controlMode === 'dual-stick');
-  // Right joystick: visible only in dual-stick mode
-  right.classList.toggle('show', controlMode === 'dual-stick');
-}
-
-function showTapMarker(clientX, clientY) {
-  const m = document.createElement('div');
-  m.className = 'tap-marker';
-  m.style.left = clientX + 'px';
-  m.style.top = clientY + 'px';
-  document.body.appendChild(m);
-  setTimeout(() => m.remove(), 800);
 }
 
 function handleTap(clientX, clientY) {
   mouse.x = (clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(clientY / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
-
-  // Painting first
-  const paintingHits = raycaster.intersectObjects(paintingMeshes, false);
-  if (paintingHits.length > 0) {
-    openModal(paintingHits[0].object.userData.artIndex);
-    return;
-  }
-
-  // Tap-walk only in that mode
-  if (controlMode === 'tap-walk' && floorMesh) {
-    const floorHits = raycaster.intersectObject(floorMesh, false);
-    if (floorHits.length > 0) {
-      const pt = floorHits[0].point;
-      const limX = ROOM.w/2 - PLAYER_BUFFER;
-      const limZ = ROOM.d/2 - PLAYER_BUFFER;
-      walkTarget = {
-        x: Math.max(-limX, Math.min(limX, pt.x)),
-        z: Math.max(-limZ, Math.min(limZ, pt.z)),
-      };
-      showTapMarker(clientX, clientY);
-    }
-  }
-}
-
-function tryPaintingClick() {
-  // Legacy alias kept for any old call sites
-  raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObjects(paintingMeshes, false);
   if (hits.length > 0) openModal(hits[0].object.userData.artIndex);
+}
+
+function markLooked() {
+  hasLookedYet = true;
+  const lookHint = document.getElementById('look-hint');
+  lookHint.classList.add('hide');
+  setTimeout(() => lookHint.classList.remove('show'), 600);
 }
 
 function onResize() {
@@ -1318,21 +1185,10 @@ function animate() {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
-  // Right joystick → camera look (dual-stick mode)
-  if (controlMode === 'dual-stick' && window.__joyRightVec) {
-    const rj = window.__joyRightVec;
-    if (rj.x !== 0 || rj.y !== 0) {
-      yaw   -= rj.x * LOOK_SPEED * dt;
-      pitch -= rj.y * LOOK_SPEED * dt;
-      pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
-    }
-  }
-
   camera.rotation.order = 'YXZ';
   camera.rotation.y = yaw;
   camera.rotation.x = pitch;
 
-  // Manual movement input (WASD + left joystick)
   let mx = 0, mz = 0;
   if (keys.w) mz -= 1;
   if (keys.s) mz += 1;
@@ -1341,40 +1197,21 @@ function animate() {
   if (window.__joyVec) { mx += window.__joyVec.x; mz += window.__joyVec.y; }
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
-
   if (mx !== 0 || mz !== 0) {
-    walkTarget = null; // manual input cancels auto-walk
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     camera.position.x += (mx * cos + mz * sin) * MOVE_SPEED * dt;
     camera.position.z += (-mx * sin + mz * cos) * MOVE_SPEED * dt;
-  } else if (walkTarget) {
-    // Auto-walk toward tapped point
-    const dx = walkTarget.x - camera.position.x;
-    const dz = walkTarget.z - camera.position.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < 0.08) {
-      walkTarget = null;
-    } else {
-      const step = Math.min(dist, MOVE_SPEED * 1.2 * dt);
-      camera.position.x += (dx / dist) * step;
-      camera.position.z += (dz / dist) * step;
-      // Smoothly rotate yaw to face direction of travel
-      const targetYaw = Math.atan2(dx, dz) + Math.PI;
-      let yawDiff = ((targetYaw - yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-      yaw += yawDiff * Math.min(1, dt * 2.5);
-    }
   }
 
-  // Clamp position to room bounds
   const limX = ROOM.w/2 - PLAYER_BUFFER;
   const limZ = ROOM.d/2 - PLAYER_BUFFER;
   camera.position.x = Math.max(-limX, Math.min(limX, camera.position.x));
   camera.position.z = Math.max(-limZ, Math.min(limZ, camera.position.z));
 
-  // Crosshair hover (desktop only — hidden on touch via CSS)
   const modalOpen = document.getElementById('modal').classList.contains('open');
-  const gridOpen = document.getElementById('grid-view').classList.contains('open');
-  if (!hasTouch && !modalOpen && !gridOpen) {
+  const otherViewOpen = document.getElementById('grid-view').classList.contains('open')
+                      || document.getElementById('slideshow-view').classList.contains('open');
+  if (!hasTouch && !modalOpen && !otherViewOpen) {
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const hits = raycaster.intersectObjects(paintingMeshes, false);
     const cross = document.getElementById('crosshair');
@@ -1392,23 +1229,22 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// ───── Modal ─────
+/* ─────── Modal ─────── */
 let currentModalIndex = 0;
 function openModal(index) {
   currentModalIndex = index;
   const art = ARTWORKS[index];
-  document.getElementById('modal-img').src = art.image;
+  document.getElementById('modal-img').src = 'paintings/' + art.file;
   document.getElementById('modal-title').textContent = art.title;
-  const meta = [art.medium]; if (art.year) meta.push(art.year);
-  document.getElementById('modal-meta').textContent = meta.join(' · ');
+  const meta = [art.medium, formatSize(art._size)];
+  if (art.year) meta.push(art.year);
+  document.getElementById('modal-meta').textContent = meta.filter(Boolean).join(' · ');
   document.getElementById('modal-desc').textContent = art.description || '';
   document.getElementById('modal-num').textContent =
     `Work ${String(index + 1).padStart(2, '0')} of ${String(ARTWORKS.length).padStart(2, '0')}`;
   document.getElementById('modal').classList.add('open');
 }
-function closeModal() {
-  document.getElementById('modal').classList.remove('open');
-}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
 function navModal(dir) {
   let i = currentModalIndex + dir;
   if (i < 0) i = ARTWORKS.length - 1;
@@ -1422,56 +1258,121 @@ document.getElementById('modal').addEventListener('click', e => {
   if (e.target.id === 'modal' || e.target.id === 'modal-inner' || e.target.id === 'modal-img-wrap') closeModal();
 });
 
-// ───── Grid view ─────
+/* ─────── Slideshow ─────── */
+let currentSlideIndex = 0;
+function showSlide(index) {
+  if (ARTWORKS.length === 0) return;
+  if (index < 0) index = ARTWORKS.length - 1;
+  if (index >= ARTWORKS.length) index = 0;
+  currentSlideIndex = index;
+  const art = ARTWORKS[index];
+  const img = document.getElementById('slide-img');
+  img.style.opacity = '0';
+  setTimeout(() => {
+    img.src = 'paintings/' + art.file;
+    img.alt = art.title;
+    img.onload = () => { img.style.opacity = '1'; };
+  }, 200);
+  document.getElementById('slide-title').textContent = art.title;
+  const meta = [art.medium, formatSize(art._size)];
+  if (art.year) meta.push(art.year);
+  document.getElementById('slide-meta').textContent = meta.filter(Boolean).join(' · ');
+  document.getElementById('slide-desc').textContent = art.description || '';
+  document.getElementById('slide-num').textContent =
+    `Work ${String(index + 1).padStart(2, '0')} of ${String(ARTWORKS.length).padStart(2, '0')}`;
+}
+function navSlide(dir) { showSlide(currentSlideIndex + dir); }
+document.getElementById('slide-prev').addEventListener('click', () => navSlide(-1));
+document.getElementById('slide-next').addEventListener('click', () => navSlide(1));
+
+(function setupSwipe() {
+  const stage = document.querySelector('.slide-stage');
+  let sx = 0, sy = 0, tracking = false;
+  stage.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
+  }, { passive: true });
+  stage.addEventListener('touchend', e => {
+    if (!tracking) return;
+    tracking = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx;
+    const dy = t.clientY - sy;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      navSlide(dx < 0 ? 1 : -1);
+    }
+  });
+})();
+
+/* ─────── Grid ─────── */
 function buildGrid() {
   const container = document.getElementById('grid-container');
   container.innerHTML = '';
   ARTWORKS.forEach((art, i) => {
     const item = document.createElement('div');
     item.className = 'grid-item';
+    const sizeStr = art._size ? formatSize(art._size) : '';
     item.innerHTML = `
-      <div class="grid-img-wrap"><img src="${art.image}" alt="${art.title}" loading="lazy" /></div>
+      <div class="grid-img-wrap"><img src="paintings/${art.file}" alt="${art.title}" loading="lazy" /></div>
       <div class="grid-info">
         <div class="num">${String(i + 1).padStart(2, '0')}${art.year ? ' — ' + art.year : ''}</div>
         <h3>${art.title}</h3>
         <div class="meta"><em>${art.medium || ''}</em></div>
+        ${sizeStr ? `<div class="size">${sizeStr}</div>` : ''}
       </div>`;
     item.addEventListener('click', () => openModal(i));
     container.appendChild(item);
   });
 }
 
-// ───── View switcher ─────
+/* ─────── View switcher ─────── */
 function setView(mode) {
   const grid = document.getElementById('grid-view');
+  const slideshow = document.getElementById('slideshow-view');
   const canvas = document.getElementById('canvas-container');
   const cross = document.getElementById('crosshair');
   const hint = document.getElementById('hint');
+  const joy = document.getElementById('joystick-wrap');
+  const lookHint = document.getElementById('look-hint');
   const btn3d = document.getElementById('btn-3d');
+  const btnSlide = document.getElementById('btn-slideshow');
   const btnGrid = document.getElementById('btn-grid');
+
+  grid.classList.remove('open');
+  slideshow.classList.remove('open');
+  canvas.style.display = 'none';
+  cross.classList.remove('visible');
+  hint.classList.remove('visible');
+  joy.classList.remove('show');
+  lookHint.classList.remove('show');
+  btn3d.classList.remove('active'); btnSlide.classList.remove('active'); btnGrid.classList.remove('active');
+
   if (mode === 'grid') {
     grid.classList.add('open');
-    canvas.style.display = 'none';
-    cross.classList.remove('visible');
-    hint.classList.remove('visible');
-    document.getElementById('mobile-ctrls').classList.remove('show');
-    document.getElementById('mobile-ctrls-right').classList.remove('show');
-    btn3d.classList.remove('active'); btnGrid.classList.add('active');
+    btnGrid.classList.add('active');
+  } else if (mode === 'slideshow') {
+    slideshow.classList.add('open');
+    btnSlide.classList.add('active');
+    showSlide(currentSlideIndex);
   } else {
-    grid.classList.remove('open');
     canvas.style.display = 'block';
-    if (!hasTouch) {
-      cross.classList.add('visible');
-      hint.classList.add('visible');
+    btn3d.classList.add('active');
+    if (entered) {
+      if (!hasTouch) {
+        cross.classList.add('visible');
+        hint.classList.add('visible');
+      } else {
+        joy.classList.add('show');
+        if (!hasLookedYet) lookHint.classList.add('show');
+      }
     }
-    updateTouchUIVisibility();
-    btn3d.classList.add('active'); btnGrid.classList.remove('active');
   }
 }
 document.getElementById('btn-3d').addEventListener('click', () => setView('3d'));
+document.getElementById('btn-slideshow').addEventListener('click', () => setView('slideshow'));
 document.getElementById('btn-grid').addEventListener('click', () => setView('grid'));
 
-// ───── Entry ─────
+/* ─────── Entry ─────── */
 function enterGallery() {
   const entry = document.getElementById('entry');
   entry.classList.add('fade');
@@ -1480,33 +1381,68 @@ function enterGallery() {
   if (!hasTouch) {
     document.getElementById('crosshair').classList.add('visible');
     document.getElementById('hint').classList.add('visible');
+  } else {
+    document.getElementById('joystick-wrap').classList.add('show');
+    if (!hasLookedYet) document.getElementById('look-hint').classList.add('show');
   }
-  updateTouchUIVisibility();
 }
 document.getElementById('entry').addEventListener('click', () => {
   const btn = document.getElementById('enterBtn');
   if (!btn.disabled) enterGallery();
 });
 
-// ───── Boot ─────
-(function boot() {
+/* ─────── Boot: load paintings.json ─────── */
+async function loadPaintings() {
+  try {
+    const res = await fetch('paintings.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.paintings || !Array.isArray(data.paintings)) {
+      throw new Error('paintings.json must contain a "paintings" array');
+    }
+    for (const art of data.paintings) {
+      const parsed = parseSize(art.size);
+      if (!parsed) {
+        console.warn(`"${art.title || art.file}" has missing/invalid size — defaulting to 12x9in.`);
+        art._size = parseSize('12x9in');
+      } else {
+        art._size = parsed;
+      }
+    }
+    return data.paintings;
+  } catch (err) {
+    console.error('Failed to load paintings.json:', err);
+    if (window.location.protocol === 'file:') {
+      showLoadError(
+        "Local file restrictions",
+        "Browsers block fetch() on file:// URLs. Run a local server (python3 -m http.server 8000) and open http://localhost:8000. Once deployed, this won't be an issue."
+      );
+    } else {
+      showLoadError(
+        "Couldn't load paintings.json",
+        err.message + ". Make sure paintings.json sits next to index.html and is valid JSON."
+      );
+    }
+    return [];
+  }
+}
+
+(async function boot() {
+  ARTWORKS = await loadPaintings();
   if (ARTWORKS.length === 0) {
-    document.getElementById('enterBtn').textContent = 'No paintings yet';
+    document.getElementById('enterBtn').textContent = 'No paintings loaded';
     return;
   }
-  const layout = planLayout(ARTWORKS.length);
+  const layout = planLayout(ARTWORKS);
   initScene();
   buildRoom(layout);
   placeAllPaintings(layout);
   buildGrid();
-  applyControlModeUI(); // sync menu highlight with stored preference
-
-  // Enable entry button after a brief moment so initial textures have time to start loading
   setTimeout(() => {
     const btn = document.getElementById('enterBtn');
     btn.disabled = false;
     btn.textContent = 'Enter the gallery';
-  }, 600);
+  }, 500);
 })();
 </script>
 </body>
