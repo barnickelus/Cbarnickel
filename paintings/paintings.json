@@ -1,6 +1,5 @@
 {
-  "_comment": "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). The first dimension is width, the second is height. You can mix units across paintings.",
-
+  "_comment": "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. You can mix units across paintings.",
   "paintings": [
     {
       "file": "01-coastal-headland.jpg",
@@ -49,6 +48,14 @@
       "medium": "Oil on canvas",
       "year": "",
       "description": "A semi-abstract investigation of overhead architecture — beams, light, and the geometry of a constructed space resolving into planes of color."
+    },
+    {
+      "file": "07-strands.jpg",
+      "title": "strands",
+      "size": "72x48in",
+      "medium": "Oil on linen",
+      "year": "2015",
+      "description": "Conceptual Geometric Landscape"
     }
   ]
 }
