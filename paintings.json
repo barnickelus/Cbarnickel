@@ -2,44 +2,44 @@
   "_comment": "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. You can mix units across paintings.",
   "paintings": [
     {
-      "file": "01-coastal-headland.jpg",
-      "title": "Coastal Headland",
-      "size": "12x9in",
-      "medium": "Oil on board",
-      "year": "plein air",
-      "description": "A windswept ridge falling away to a pale, cool sea. Painted on location, working quickly to catch the shifting afternoon light on the cliff face."
+      "file": "07-strands.jpg",
+      "title": "Strands",
+      "size": "72x48in",
+      "medium": "Oil on linen",
+      "year": "2015",
+      "description": "A conceptual geometric landscape. The largest piece in the current collection."
     },
     {
-      "file": "02-hillside-in-blue.jpg",
-      "title": "Hillside in Blue",
-      "size": "14x11in",
-      "medium": "Oil on board",
-      "year": "plein air",
-      "description": "Rolling hills resolved into bands of teal, ochre and shadow. The sea sits low on the horizon, cool against the warm broken color of the foreground."
+      "file": "18-salt-flats.jpg",
+      "title": "Salt Flats",
+      "size": "48x36in",
+      "medium": "Oil on canvas",
+      "year": "",
+      "description": "A conceptual landscape of geometric salt pans, a bright triangular road converging toward the horizon. The palette reduced to warm earth and bone."
     },
     {
-      "file": "03-valley-lights.jpg",
-      "title": "Valley Lights",
-      "size": "12x9in",
-      "medium": "Oil on board",
-      "year": "plein air",
-      "description": "A broad valley at dusk, dotted with the first lights of evening. The mountainside in the foreground holds onto the day's last warmth."
+      "file": "17-framework.jpg",
+      "title": "Framework",
+      "size": "30x48in",
+      "medium": "Oil on canvas",
+      "year": "",
+      "description": "An abstract architecture of beams and uprights — a study of the structure that holds space, the A-frame rising out of a nest of timber."
     },
     {
-      "file": "04-botchers-gap.jpg",
-      "title": "Botchers Gap",
-      "size": "8x10in",
-      "medium": "Oil on panel",
-      "year": "plein air",
-      "description": "Looking through a wooden fence at sunset light catching the far ridges. A small framed study from a high overlook."
+      "file": "15-coastal-strata.jpg",
+      "title": "Coastal Strata",
+      "size": "36x24in",
+      "medium": "Oil on canvas",
+      "year": "",
+      "description": "Layered ridges resolving into bands of violet, teal, and ochre. An elevated view where the land reads almost as wave-forms, each strata catching its own light."
     },
     {
-      "file": "05-desert-wash.jpg",
-      "title": "Desert Wash",
-      "size": "8x6in",
-      "medium": "Oil on board",
-      "year": "plein air",
-      "description": "High desert in late spring — pale earth, scattered sage, and the long pink shadows of an afternoon coming to a close."
+      "file": "10-bolsa-chica.jpg",
+      "title": "Bolsa Chica",
+      "size": "24x24in",
+      "medium": "Oil on canvas",
+      "year": "",
+      "description": "Looking down through a gap in the coastal rocks to the wetlands beyond, with the distant mountains dissolving into a pale gray sky. Braided channels of water and marsh grass spread out to the horizon."
     },
     {
       "file": "06-structure-study.jpg",
@@ -50,12 +50,100 @@
       "description": "A semi-abstract investigation of overhead architecture — beams, light, and the geometry of a constructed space resolving into planes of color."
     },
     {
-      "file": "07-strands.jpg",
-      "title": "strands",
-      "size": "72x48in",
-      "medium": "Oil on linen",
-      "year": "2015",
-      "description": "Conceptual Geometric Landscape"
+      "file": "02-hillside-in-blue.jpg",
+      "title": "Hillside in Blue",
+      "size": "14x11in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "Rolling hills resolved into bands of teal, ochre and shadow. The sea sits low on the horizon, cool against the warm broken color of the foreground."
+    },
+    {
+      "file": "01-coastal-headland.jpg",
+      "title": "Coastal Headland",
+      "size": "12x9in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A windswept ridge falling away to a pale, cool sea. Painted on location, working quickly to catch the shifting afternoon light on the cliff face."
+    },
+    {
+      "file": "03-valley-lights.jpg",
+      "title": "Valley Lights",
+      "size": "12x9in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A broad valley at dusk, dotted with the first lights of evening. The mountainside in the foreground holds onto the day's last warmth."
+    },
+    {
+      "file": "08-evening-grassland.jpg",
+      "title": "Evening Grassland",
+      "size": "12x9in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "Golden grass raked by late afternoon light, the far hills holding the last of the day's cool blues. Heavy impasto in the foreground grasses."
+    },
+    {
+      "file": "14-rolling-hills.jpg",
+      "title": "Rolling Hills",
+      "size": "12x9in",
+      "medium": "Oil on canvas",
+      "year": "plein air",
+      "description": "Rolling California hills in late spring, the dry grass catching warm light while the far ridges go cool. Signed lower right."
+    },
+    {
+      "file": "13-silver-morning.jpg",
+      "title": "Silver Morning",
+      "size": "9x12in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A soft overcast morning — the sky done in long horizontal strokes, the foreground hills a textured tangle of ochre and violet."
+    },
+    {
+      "file": "16-botchers-gap-dusk.jpg",
+      "title": "Botchers Gap, Dusk",
+      "size": "9x12in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A small plein air study from the same vantage as Botchers Gap, painted later in the day. Moody, almost monochrome — the hills falling into deep shadow with only a thin band of sky still lit."
+    },
+    {
+      "file": "04-botchers-gap.jpg",
+      "title": "Botchers Gap",
+      "size": "8x10in",
+      "medium": "Oil on panel",
+      "year": "plein air",
+      "description": "Looking through a wooden fence at sunset light catching the far ridges. A small framed study from a high overlook."
+    },
+    {
+      "file": "09-arch-beach-heights.jpg",
+      "title": "Arch Beach Heights",
+      "size": "10x12in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "A quiet Laguna morning from the heights — pale silhouettes of distant ranges above a patchwork of fields and light."
+    },
+    {
+      "file": "12-studio-window.jpg",
+      "title": "Studio Window",
+      "size": "8x10in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "Looking out through the cross-bars of a window at a distant ribbon of sea. The window itself becomes part of the composition — a quiet, abstracted framing."
+    },
+    {
+      "file": "05-desert-wash.jpg",
+      "title": "Desert Wash",
+      "size": "8x6in",
+      "medium": "Oil on board",
+      "year": "plein air",
+      "description": "High desert in late spring — pale earth, scattered sage, and the long pink shadows of an afternoon coming to a close."
+    },
+    {
+      "file": "11-form.jpg",
+      "title": "Form",
+      "size": "6x10in",
+      "medium": "Oil on board",
+      "year": "",
+      "description": "A small conceptual study — a tideline at dawn or dusk, the wet sand inlaid with glass marbles catching the last light."
     }
   ]
 }
