@@ -687,11 +687,21 @@ function formatSize(parsed) {
 
 /* ─────── Layout planning ─────── */
 function planLayout(artworks) {
-  const FRAME_PAD = 0.5;
-  const widths = artworks.map(a => (a._size ? a._size.wM : 0.5) + FRAME_PAD);
-  const totalW = widths.reduce((a, b) => a + b, 0);
-  const longWallTarget = Math.max(8, totalW * 0.4);
-  const shortWallTarget = Math.max(6, totalW * 0.18);
+  // Measure how much linear wall-space each painting really needs, using
+  // tight clustering for small paintings and more breathing room for large ones.
+  // This mirrors the gap logic in spaceWallPaintings so the greedy wall-fill
+  // can plan accurately.
+  const rawWidths = artworks.map(a => a._size ? a._size.wM : 0.5);
+  const isSmall = rawWidths.map(w => w < 0.45);
+
+  // Small paintings claim ~0.7m each on the wall (≈ painting width + 0.4m cluster gap);
+  // large paintings claim ~(width + 1.2m) so they stand alone visually.
+  const claimedWidths = rawWidths.map((w, i) => isSmall[i] ? Math.max(w, 0.3) + 0.4 : w + 1.2);
+  const totalClaimed = claimedWidths.reduce((a, b) => a + b, 0);
+
+  // Target each long wall to hold ~40% of the total, short walls to hold ~15%.
+  const longWallTarget = Math.max(6, totalClaimed * 0.42);
+  const shortWallTarget = Math.max(4, totalClaimed * 0.15);
 
   const walls = [[], [], [], []];
   const wallTargets = [longWallTarget, longWallTarget, shortWallTarget, shortWallTarget];
@@ -700,9 +710,9 @@ function planLayout(artworks) {
   artworks.forEach((art, i) => {
     let placed = false;
     for (let w = 0; w < 4; w++) {
-      if (wallUsed[w] + widths[i] <= wallTargets[w]) {
+      if (wallUsed[w] + claimedWidths[i] <= wallTargets[w]) {
         walls[w].push(i);
-        wallUsed[w] += widths[i];
+        wallUsed[w] += claimedWidths[i];
         placed = true;
         break;
       }
@@ -713,12 +723,15 @@ function planLayout(artworks) {
         if (wallUsed[w] < wallUsed[minW]) minW = w;
       }
       walls[minW].push(i);
-      wallUsed[minW] += widths[i];
+      wallUsed[minW] += claimedWidths[i];
     }
   });
 
-  const w = Math.max(18, Math.max(wallUsed[0], wallUsed[1]) + 5);
-  const d = Math.max(12, Math.max(wallUsed[2], wallUsed[3]) + 5);
+  // Size the room so each wall has ~1.5m margin on either side of its content.
+  // This keeps paintings visually balanced rather than floating in a too-large room.
+  const WALL_MARGIN = 3.0; // 1.5m each side
+  const w = Math.max(12, Math.max(wallUsed[0], wallUsed[1]) + WALL_MARGIN);
+  const d = Math.max(9, Math.max(wallUsed[2], wallUsed[3]) + WALL_MARGIN);
   const h = 7;
 
   return { walls, room: { w, h, d } };
@@ -726,18 +739,55 @@ function planLayout(artworks) {
 
 function spaceWallPaintings(indices, artworks, wallLength) {
   if (indices.length === 0) return [];
-  const FRAME_PAD = 0.5;
-  const widths = indices.map(i => (artworks[i]._size ? artworks[i]._size.wM : 0.5) + FRAME_PAD);
-  const totalUsed = widths.reduce((a, b) => a + b, 0);
-  const gap = (wallLength - totalUsed) / (indices.length + 1);
-  let cursor = -wallLength / 2 + gap;
+
+  // Use actual painting width (no padding baked in) so we can control
+  // gaps directly. Small paintings cluster tightly; large ones get breathing room.
+  const rawWidths = indices.map(i => artworks[i]._size ? artworks[i]._size.wM : 0.5);
+
+  // Classify each painting as "small" (< 0.45m ≈ 18" wide) or "large"
+  const isSmall = rawWidths.map(w => w < 0.45);
+
+  // Define the gap between painting i and i+1:
+  //   small ↔ small : tight cluster gap (~0.35m)
+  //   otherwise     : generous gap (~1.0m)
+  // Plus margins at the wall ends.
+  const TIGHT_GAP = 0.35;
+  const GENEROUS_GAP = 1.0;
+  const END_MARGIN = 0.8;
+
+  const interGaps = [];
+  for (let i = 0; i < indices.length - 1; i++) {
+    interGaps.push((isSmall[i] && isSmall[i+1]) ? TIGHT_GAP : GENEROUS_GAP);
+  }
+
+  const totalWidth = rawWidths.reduce((a, b) => a + b, 0);
+  const totalGaps = interGaps.reduce((a, b) => a + b, 0);
+  const needed = totalWidth + totalGaps + END_MARGIN * 2;
+
+  // If the wall has extra space, distribute it proportionally to the existing gaps
+  // (so tight clusters stay tight, generous gaps grow).
+  const extra = Math.max(0, wallLength - needed);
+  const scaledInterGaps = interGaps.map(g => g + (totalGaps > 0 ? extra * (g / totalGaps) : extra / (indices.length + 1)));
+  // Also grow end margins a bit when there's lots of extra space
+  const endMargin = END_MARGIN + (totalGaps === 0 ? extra / 2 : 0);
+
+  let cursor = -wallLength / 2 + endMargin;
   const result = [];
   indices.forEach((idx, i) => {
-    const halfW = widths[i] / 2;
+    const halfW = rawWidths[i] / 2;
     cursor += halfW;
     result.push({ artworkIndex: idx, coord: cursor });
-    cursor += halfW + gap;
+    cursor += halfW;
+    if (i < indices.length - 1) cursor += scaledInterGaps[i];
   });
+
+  // If all gaps are tight and the wall is wider than needed, center the whole group
+  const actualSpan = cursor - (-wallLength / 2 + endMargin) - rawWidths[rawWidths.length - 1] + rawWidths[rawWidths.length - 1];
+  if (extra > 0.01 && totalGaps === 0) {
+    // single painting case — center it
+    result.forEach(r => r.coord = 0);
+  }
+
   return result;
 }
 
@@ -922,6 +972,16 @@ function placePainting(art, index, wall, coord) {
   if (yCenter + pH/2 > ROOM.h - 0.5) yCenter = ROOM.h - 0.5 - pH/2;
   if (yCenter - pH/2 < 0.4) yCenter = 0.4 + pH/2;
 
+  // Store the first painting's position and wall normal so the camera can face it on entry
+  if (index === 0) {
+    window.__firstPaintingPose = {
+      x: baseX, y: yCenter, z: baseZ,
+      normalX: inwardX, normalZ: inwardN,
+      paintingWidth: pW, paintingHeight: pH,
+      wall: wall,
+    };
+  }
+
   const frameThickness = Math.max(0.06, Math.min(0.14, pH * 0.08));
   const frame = new THREE.Mesh(
     new THREE.PlaneGeometry(pW + frameThickness*2, pH + frameThickness*2),
@@ -994,17 +1054,47 @@ function initScene() {
   scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(0x0a0908, 0.025);
   camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 100);
+
+  // Default fallback position (center of room, near south wall, facing north)
   camera.position.set(0, 1.65, Math.min(4, ROOM.d / 4));
+  yaw = Math.PI;
+
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(0x0a0908, 1);
   container.appendChild(renderer.domElement);
   raycaster = new THREE.Raycaster();
-  yaw = Math.PI;
   window.addEventListener('resize', onResize);
   setupControls();
   animate();
+}
+
+// Call this AFTER paintings are placed so `__firstPaintingPose` exists.
+// Positions the camera at a natural viewing distance facing painting #1.
+function positionCameraForFirstPainting() {
+  if (!window.__firstPaintingPose) return;
+  const p = window.__firstPaintingPose;
+
+  // Viewing distance: scale with painting size, but clamp inside the room
+  const largestDim = Math.max(p.paintingWidth, p.paintingHeight);
+  const viewDistance = Math.max(2.8, Math.min(largestDim * 2.2, ROOM.d / 2 - 1.8, ROOM.w / 2 - 1.8));
+
+  const camX = p.x + p.normalX * viewDistance;
+  const camZ = p.z + p.normalZ * viewDistance;
+
+  const limX = ROOM.w/2 - PLAYER_BUFFER;
+  const limZ = ROOM.d/2 - PLAYER_BUFFER;
+  camera.position.set(
+    Math.max(-limX, Math.min(limX, camX)),
+    1.65,
+    Math.max(-limZ, Math.min(limZ, camZ))
+  );
+
+  // Face the painting
+  const dx = p.x - camera.position.x;
+  const dz = p.z - camera.position.z;
+  yaw = Math.atan2(dx, dz) + Math.PI;
 }
 
 function setupControls() {
@@ -1437,6 +1527,7 @@ async function loadPaintings() {
   initScene();
   buildRoom(layout);
   placeAllPaintings(layout);
+  positionCameraForFirstPainting();
   buildGrid();
   setTimeout(() => {
     const btn = document.getElementById('enterBtn');
