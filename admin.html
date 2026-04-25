@@ -477,6 +477,296 @@
     button.btn { min-width: 0; }
     .preview-box { flex-direction: column; text-align: center; }
   }
+
+  /* ── Image editor ── */
+  .editor-section { background: var(--panel); }
+  .editor-empty {
+    border: 1px dashed var(--ink-faint);
+    padding: 50px 30px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    border-radius: 4px;
+  }
+  .editor-empty:hover, .editor-empty.over {
+    border-color: var(--gold-dim);
+    background: rgba(201, 169, 110, 0.04);
+  }
+  .editor-empty input[type="file"] {
+    position: absolute; inset: 0;
+    opacity: 0; cursor: pointer;
+  }
+  .editor-empty .icon {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--gold);
+    font-size: 38px;
+    margin-bottom: 10px;
+  }
+  .editor-empty .label-text {
+    color: var(--ink);
+    font-size: 15px;
+    margin-bottom: 6px;
+  }
+  .editor-empty .sub-text {
+    color: var(--ink-faint);
+    font-size: 12px;
+    font-style: italic;
+    font-family: var(--serif);
+  }
+
+  .editor-stage {
+    display: none;
+    margin-top: 8px;
+  }
+  .editor-stage.show { display: block; }
+
+  .editor-mode-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid rgba(239,231,215,0.08);
+    margin-bottom: 18px;
+  }
+  .editor-mode-tab {
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    padding: 10px 18px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .editor-mode-tab.active {
+    color: var(--gold);
+    border-bottom-color: var(--gold);
+  }
+  .editor-mode-tab:hover { color: var(--ink); }
+
+  .crop-canvas-wrap {
+    position: relative;
+    width: 100%;
+    background: #000;
+    border: 1px solid rgba(239,231,215,0.05);
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    max-height: 75vh;
+  }
+  .crop-canvas-wrap .crop-content {
+    position: relative;
+    transform-origin: 0 0;
+    transition: none;
+  }
+  .crop-canvas-wrap canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .crop-canvas-wrap .crop-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .crop-canvas-wrap .crop-poly {
+    fill: rgba(201, 169, 110, 0.06);
+    stroke: rgba(201, 169, 110, 0.95);
+    stroke-width: 2;
+    stroke-dasharray: 6 4;
+    vector-effect: non-scaling-stroke;
+  }
+  .crop-canvas-wrap .crop-grid {
+    fill: none;
+    stroke: rgba(201, 169, 110, 0.3);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+  .crop-canvas-wrap .corner-handle {
+    position: absolute;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: rgba(201, 169, 110, 0.95);
+    border: 2px solid #1a1512;
+    transform: translate(-50%, -50%);
+    cursor: grab;
+    touch-action: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    z-index: 5;
+  }
+  .crop-canvas-wrap .edge-handle {
+    position: absolute;
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    background: rgba(201, 169, 110, 0.85);
+    border: 2px solid #1a1512;
+    transform: translate(-50%, -50%) rotate(45deg);
+    cursor: grab;
+    touch-action: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    z-index: 5;
+  }
+  .crop-canvas-wrap .edge-handle:active { cursor: grabbing; background: var(--gold); }
+  .crop-canvas-wrap .edge-handle::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border-radius: 2px;
+    background: #1a1512;
+  }
+  .crop-canvas-wrap.zoomed canvas,
+  .crop-canvas-wrap.zoomed .crop-overlay {
+    transform-origin: 0 0;
+  }
+
+  .crop-tools {
+    display: flex;
+    gap: 8px;
+    margin: 10px 0 14px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .crop-tools .tool-group {
+    display: flex;
+    gap: 0;
+    border: 1px solid rgba(239,231,215,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .crop-tools .tool-btn {
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    padding: 7px 12px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-right: 1px solid rgba(239,231,215,0.1);
+    min-width: 40px;
+  }
+  .crop-tools .tool-btn:last-child { border-right: none; }
+  .crop-tools .tool-btn:hover { color: var(--ink); background: rgba(239,231,215,0.04); }
+  .crop-tools .tool-btn.active { color: var(--gold); background: rgba(201,169,110,0.08); }
+  .crop-tools .tool-btn.icon-btn {
+    font-size: 16px;
+    padding: 4px 12px;
+    letter-spacing: 0;
+    font-family: var(--serif);
+  }
+  .crop-tools .tool-label {
+    color: var(--ink-faint);
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    margin-right: 4px;
+  }
+  .crop-canvas-wrap .corner-handle:active { cursor: grabbing; background: var(--gold); }
+  .crop-canvas-wrap .corner-handle::after {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: 50%;
+    background: #1a1512;
+  }
+
+  .preview-canvas-wrap {
+    margin-top: 18px;
+    background: #000;
+    padding: 10px;
+    text-align: center;
+    border: 1px solid rgba(239,231,215,0.05);
+    display: none;
+  }
+  .preview-canvas-wrap.show { display: block; }
+  .preview-canvas-wrap canvas {
+    max-width: 100%;
+    max-height: 480px;
+    height: auto;
+  }
+  .preview-canvas-wrap .preview-meta {
+    color: var(--ink-faint);
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 8px;
+  }
+
+  .editor-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 22px;
+    margin-top: 20px;
+  }
+  .slider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .slider-row label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--gold);
+    font-weight: 500;
+  }
+  .slider-row label .val {
+    color: var(--ink-dim);
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 400;
+  }
+  .slider-row input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 4px;
+    background: rgba(239,231,215,0.15);
+    border-radius: 2px;
+    outline: none;
+  }
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--gold);
+    cursor: pointer;
+    border: 2px solid #1a1512;
+  }
+  .slider-row input[type="range"]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--gold);
+    cursor: pointer;
+    border: 2px solid #1a1512;
+  }
+
+  .editor-status {
+    color: var(--ink-faint);
+    font-style: italic;
+    font-family: var(--serif);
+    font-size: 13px;
+    margin: 12px 0;
+  }
+  .editor-status.warn { color: var(--rust); }
+  .editor-status.ok { color: var(--green); }
+
+  @media (max-width: 600px) {
+    .editor-controls { grid-template-columns: 1fr; }
+    .crop-canvas-wrap .corner-handle { width: 36px; height: 36px; }
+  }
 </style>
 </head>
 <body>
@@ -489,6 +779,130 @@
   <div class="tagline">Add a painting to your gallery</div>
   <a href="index.html" class="back-link">← Back to gallery</a>
 </header>
+
+<section class="editor-section">
+  <h2>Prepare an image</h2>
+  <p class="desc">Drop a photo of a painting and crop it. The corners auto-detect; drag to adjust. Adjustments preview live. When you're happy, download the JPG (and use the suggested filename when adding the painting below).</p>
+
+  <!-- Empty / drop state -->
+  <div class="editor-empty" id="editor-empty">
+    <input type="file" id="ed-file" accept="image/jpeg,image/png" />
+    <div class="icon">+</div>
+    <div class="label-text">Tap to choose a photo, or drag one here</div>
+    <div class="sub-text">Processing happens in your browser — nothing is uploaded</div>
+  </div>
+
+  <!-- Editor stage -->
+  <div class="editor-stage" id="editor-stage">
+    <div class="editor-mode-tabs">
+      <button class="editor-mode-tab active" data-mode="crop">1. Crop</button>
+      <button class="editor-mode-tab" data-mode="adjust">2. Adjust</button>
+      <button class="editor-mode-tab" data-mode="export">3. Export</button>
+    </div>
+
+    <!-- Crop mode -->
+    <div id="ed-mode-crop">
+      <div class="editor-status" id="ed-crop-status">Detecting canvas edges…</div>
+
+      <div class="crop-tools">
+        <span class="tool-label">Aspect</span>
+        <div class="tool-group">
+          <button class="tool-btn active" data-aspect="free">Free</button>
+          <button class="tool-btn" data-aspect="1">1:1</button>
+          <button class="tool-btn" data-aspect="0.75">3:4</button>
+          <button class="tool-btn" data-aspect="1.333">4:3</button>
+          <button class="tool-btn" data-aspect="0.667">2:3</button>
+          <button class="tool-btn" data-aspect="1.5">3:2</button>
+        </div>
+        <span class="tool-label" style="margin-left:auto">Zoom</span>
+        <div class="tool-group">
+          <button class="tool-btn icon-btn" id="zoom-out">−</button>
+          <button class="tool-btn icon-btn" id="zoom-reset">⊡</button>
+          <button class="tool-btn icon-btn" id="zoom-in">+</button>
+        </div>
+      </div>
+
+      <div class="crop-canvas-wrap" id="crop-wrap">
+        <div class="crop-content" id="crop-content">
+          <canvas id="crop-canvas"></canvas>
+          <svg class="crop-overlay" id="crop-overlay" preserveAspectRatio="none">
+            <polygon class="crop-poly" id="crop-poly" points="0,0 0,0 0,0 0,0" />
+            <path class="crop-grid" id="crop-grid" d="" />
+          </svg>
+          <div class="corner-handle" data-corner="0"></div>
+          <div class="corner-handle" data-corner="1"></div>
+          <div class="corner-handle" data-corner="2"></div>
+          <div class="corner-handle" data-corner="3"></div>
+          <div class="edge-handle" data-edge="0"></div>
+          <div class="edge-handle" data-edge="1"></div>
+          <div class="edge-handle" data-edge="2"></div>
+          <div class="edge-handle" data-edge="3"></div>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn ghost" id="ed-redetect">Re-detect corners</button>
+        <button class="btn ghost" id="ed-snap-rect">Snap to rectangle</button>
+        <button class="btn primary" id="ed-to-adjust">Continue to adjust →</button>
+      </div>
+    </div>
+
+    <!-- Adjust mode -->
+    <div id="ed-mode-adjust" style="display:none">
+      <div class="preview-canvas-wrap show" id="preview-wrap">
+        <canvas id="preview-canvas"></canvas>
+        <div class="preview-meta" id="preview-meta">—</div>
+      </div>
+      <div class="editor-controls">
+        <div class="slider-row">
+          <label>White balance <span class="val" id="val-wb">25%</span></label>
+          <input type="range" id="sl-wb" min="0" max="100" value="25" />
+        </div>
+        <div class="slider-row">
+          <label>Saturation <span class="val" id="val-sat">+25%</span></label>
+          <input type="range" id="sl-sat" min="-50" max="100" value="25" />
+        </div>
+        <div class="slider-row">
+          <label>Black point <span class="val" id="val-black">1%</span></label>
+          <input type="range" id="sl-black" min="0" max="15" value="1" />
+        </div>
+        <div class="slider-row">
+          <label>White point <span class="val" id="val-white">99%</span></label>
+          <input type="range" id="sl-white" min="85" max="100" value="99" />
+        </div>
+        <div class="slider-row">
+          <label>Sharpness <span class="val" id="val-sharp">+25%</span></label>
+          <input type="range" id="sl-sharp" min="0" max="100" value="25" />
+        </div>
+        <div class="slider-row">
+          <label>Output size <span class="val" id="val-size">1400 px</span></label>
+          <input type="range" id="sl-size" min="800" max="2000" step="100" value="1400" />
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn ghost" id="ed-back-crop">← Back to crop</button>
+        <button class="btn ghost" id="ed-reset">Reset adjustments</button>
+        <button class="btn primary" id="ed-to-export">Export image →</button>
+      </div>
+    </div>
+
+    <!-- Export mode -->
+    <div id="ed-mode-export" style="display:none">
+      <div class="preview-canvas-wrap show">
+        <canvas id="export-canvas"></canvas>
+        <div class="preview-meta" id="export-meta">—</div>
+      </div>
+      <div class="field" style="margin-top: 18px">
+        <label>Suggested filename <span class="opt">— used in the form below if you click "Use this image"</span></label>
+        <input type="text" id="ed-filename" placeholder="e.g. 20-painting-title.jpg" autocomplete="off" />
+      </div>
+      <div class="btn-row">
+        <button class="btn ghost" id="ed-back-adjust">← Back to adjust</button>
+        <button class="btn secondary" id="ed-download">Download JPG</button>
+        <button class="btn primary" id="ed-use">Use this image ↓</button>
+      </div>
+    </div>
+  </div>
+</section>
 
 <section>
   <h2>Current paintings</h2>
@@ -897,7 +1311,1129 @@ function showToast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   IMAGE EDITOR
+   ═══════════════════════════════════════════════════════════════════ */
+
+const Editor = (function() {
+  let sourceImg = null;        // HTMLImageElement at original resolution
+  let sourceCanvas = null;     // canvas with downsampled image for crop UI
+  let sourceScale = 1;         // sourceImg → sourceCanvas scale
+  let corners = null;          // [{x, y} × 4] in sourceCanvas pixel coords (TL, TR, BR, BL)
+  let warpedCanvas = null;     // perspective-corrected output (in source resolution)
+  let mode = 'crop';
+  let dragging = -1;
+  let suggestedFilename = '';
+
+  const adj = {
+    wb: 25, sat: 25, black: 1, white: 99, sharp: 25, size: 1400
+  };
+
+  function init() {
+    setupDropZone();
+    setupTabs();
+    setupCornerHandles();
+    setupSliders();
+    setupActionButtons();
+  }
+
+  function setupDropZone() {
+    const empty = document.getElementById('editor-empty');
+    const input = document.getElementById('ed-file');
+
+    input.addEventListener('change', e => {
+      const f = e.target.files[0];
+      if (f) loadImage(f);
+    });
+
+    ['dragenter', 'dragover'].forEach(ev => {
+      empty.addEventListener(ev, e => {
+        e.preventDefault(); e.stopPropagation();
+        empty.classList.add('over');
+      });
+    });
+    ['dragleave', 'drop'].forEach(ev => {
+      empty.addEventListener(ev, e => {
+        e.preventDefault(); e.stopPropagation();
+        empty.classList.remove('over');
+      });
+    });
+    empty.addEventListener('drop', e => {
+      const f = e.dataTransfer.files[0];
+      if (f && f.type.startsWith('image/')) loadImage(f);
+    });
+  }
+
+  function loadImage(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        sourceImg = img;
+        suggestedFilename = suggestNextFilename(file.name);
+        prepareCropCanvas();
+        switchMode('crop');
+        document.getElementById('editor-empty').style.display = 'none';
+        document.getElementById('editor-stage').classList.add('show');
+        autoDetectCorners();
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function suggestNextFilename(originalName) {
+    const used = new Set((CURRENT_PAINTINGS || []).map(p => {
+      const m = (p.file || '').match(/^(\d+)/);
+      return m ? parseInt(m[1], 10) : 0;
+    }));
+    let n = 1;
+    while (used.has(n)) n++;
+    const num = String(n).padStart(2, '0');
+    // Strip extension and clean
+    const base = originalName.replace(/\.[^.]+$/, '')
+      .toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-')
+      .replace(/-+/g, '-').replace(/^-|-$/g, '') || 'painting';
+    return `${num}-${base}.jpg`;
+  }
+
+  function prepareCropCanvas() {
+    sourceCanvas = document.getElementById('crop-canvas');
+    const ctx = sourceCanvas.getContext('2d');
+    // Downsample if huge so the crop UI stays responsive
+    const maxDim = 1600;
+    const longSide = Math.max(sourceImg.width, sourceImg.height);
+    sourceScale = longSide > maxDim ? maxDim / longSide : 1;
+    sourceCanvas.width = Math.round(sourceImg.width * sourceScale);
+    sourceCanvas.height = Math.round(sourceImg.height * sourceScale);
+    ctx.drawImage(sourceImg, 0, 0, sourceCanvas.width, sourceCanvas.height);
+  }
+
+  /* ── Auto-detect canvas corners ──
+     Strategy: downsample further for speed, run a brightness gradient,
+     find where each side of the image transitions from background to canvas.
+     This is a simple "rectangular bounding box of the high-contrast region"
+     approach. Works well for paintings centered in the frame on a uniform
+     background. Fails gracefully (uses image bounds) when it can't find clean edges. */
+
+  function autoDetectCorners() {
+    document.getElementById('ed-crop-status').textContent = 'Detecting canvas edges…';
+    document.getElementById('ed-crop-status').className = 'editor-status';
+
+    setTimeout(() => {
+      try {
+        const cw = sourceCanvas.width, ch = sourceCanvas.height;
+        const ctx = sourceCanvas.getContext('2d');
+        const imgData = ctx.getImageData(0, 0, cw, ch);
+        const detected = detectQuad(imgData, cw, ch);
+        if (detected) {
+          corners = detected;
+          document.getElementById('ed-crop-status').textContent =
+            'Auto-detected. Drag each corner to match the canvas edges — drag corners independently if the painting is tilted, the output will still be rectangular.';
+          document.getElementById('ed-crop-status').className = 'editor-status ok';
+        } else {
+          // Fall back to whole image bounds with small inset
+          const inset = 0.04;
+          corners = [
+            { x: cw * inset,         y: ch * inset },
+            { x: cw * (1 - inset),   y: ch * inset },
+            { x: cw * (1 - inset),   y: ch * (1 - inset) },
+            { x: cw * inset,         y: ch * (1 - inset) },
+          ];
+          document.getElementById('ed-crop-status').textContent =
+            "Couldn't auto-detect — drag each corner to the canvas corners. Corners can move independently to match a tilted painting.";
+          document.getElementById('ed-crop-status').className = 'editor-status warn';
+        }
+        positionCornerHandles();
+      } catch (err) {
+        console.error(err);
+        document.getElementById('ed-crop-status').textContent = 'Detection failed — drag corners to crop.';
+        document.getElementById('ed-crop-status').className = 'editor-status warn';
+      }
+    }, 50);
+  }
+
+  /* Edge-line based canvas detector. Strategy:
+     1. Compute per-pixel gradient magnitude (Sobel).
+     2. For each of the four image sides, define a search strip that runs
+        from the image edge inward by ~40%.
+     3. Within each strip, walk perpendicular to the side's expected canvas edge.
+        Find candidate edge points (local maxima in gradient).
+     4. Fit a line through those points using a robust simple-RANSAC.
+     5. Intersect the four lines to get four corner points.
+
+     This correctly handles tilted canvases on plain backgrounds. Falls back
+     to the old variance-based bbox if line fitting fails. */
+  function detectQuad(imgData, w, h) {
+    try {
+      const grad = computeGradientMag(imgData, w, h);
+      // Search strips: for each side, an array of perpendicular scan lines
+      // returning the strongest edge point along each scan.
+      const topPts = scanForEdge(grad, w, h, 'top');
+      const botPts = scanForEdge(grad, w, h, 'bottom');
+      const leftPts = scanForEdge(grad, w, h, 'left');
+      const rightPts = scanForEdge(grad, w, h, 'right');
+
+      // Fit lines via simple RANSAC
+      const topLine = fitLineRANSAC(topPts);
+      const botLine = fitLineRANSAC(botPts);
+      const leftLine = fitLineRANSAC(leftPts);
+      const rightLine = fitLineRANSAC(rightPts);
+
+      if (!topLine || !botLine || !leftLine || !rightLine) {
+        // Fall back to old approach
+        return detectQuadVariance(imgData, w, h);
+      }
+
+      // Intersect to find corners
+      const tl = lineIntersect(topLine, leftLine);
+      const tr = lineIntersect(topLine, rightLine);
+      const br = lineIntersect(botLine, rightLine);
+      const bl = lineIntersect(botLine, leftLine);
+
+      if (!tl || !tr || !br || !bl) {
+        return detectQuadVariance(imgData, w, h);
+      }
+
+      // Sanity: the resulting quad should cover at least 25% of the image
+      // and corners should be inside (or close to) the image bounds
+      const points = [tl, tr, br, bl];
+      const margin = Math.max(w, h) * 0.05;
+      for (const p of points) {
+        if (p.x < -margin || p.x > w + margin || p.y < -margin || p.y > h + margin) {
+          return detectQuadVariance(imgData, w, h);
+        }
+      }
+      // Clamp inside image
+      points.forEach(p => {
+        p.x = Math.max(0, Math.min(w, p.x));
+        p.y = Math.max(0, Math.min(h, p.y));
+      });
+      // Quad area heuristic
+      const area = quadArea(points);
+      if (area < w * h * 0.20) {
+        return detectQuadVariance(imgData, w, h);
+      }
+      // Reject "near-image-bounds" detections — these usually mean we found
+      // the image edge instead of the canvas edge (textured background case)
+      const allNearEdge = points.every(p =>
+        (p.x < w * 0.04 || p.x > w * 0.96) &&
+        (p.y < h * 0.04 || p.y > h * 0.96)
+      );
+      if (allNearEdge) {
+        // Fall through to variance method which usually does better here
+        const fallback = detectQuadVariance(imgData, w, h);
+        if (fallback) return fallback;
+      }
+      return points;
+    } catch (e) {
+      console.warn('Line detection failed, falling back to variance:', e);
+      return detectQuadVariance(imgData, w, h);
+    }
+  }
+
+  // Sobel gradient magnitude on grayscale
+  function computeGradientMag(imgData, w, h) {
+    const d = imgData.data;
+    const gray = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+      gray[j] = (d[i] + d[i+1] + d[i+2]) / 3;
+    }
+    const out = new Float32Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const gx = -gray[i - w - 1] - 2 * gray[i - 1] - gray[i + w - 1]
+                  + gray[i - w + 1] + 2 * gray[i + 1] + gray[i + w + 1];
+        const gy = -gray[i - w - 1] - 2 * gray[i - w] - gray[i - w + 1]
+                  + gray[i + w - 1] + 2 * gray[i + w] + gray[i + w + 1];
+        out[i] = Math.sqrt(gx * gx + gy * gy);
+      }
+    }
+    return out;
+  }
+
+  // For each scan line, scan from the IMAGE CENTER outward toward the edge.
+  // The LAST strong gradient transition before reaching the image boundary is
+  // the canvas edge — after which it's background, which may have its own
+  // texture but doesn't have the canvas-to-background transition.
+  //
+  // This works well for canvases that fill most of the frame on textured
+  // backgrounds (brick, wood, etc.) where outside-in scanning would catch
+  // the texture instead of the canvas edge.
+  // side ∈ {'top', 'bottom', 'left', 'right'}
+  function scanForEdge(grad, w, h, side) {
+    const points = [];
+    // Skip the outermost 2% to avoid image-boundary artifacts
+    const skipOuter = Math.floor(Math.min(w, h) * 0.02);
+    // Threshold for a "real" edge — adapts to image gradient distribution
+    const threshold = gradPercentile(grad, 80);
+
+    if (side === 'top' || side === 'bottom') {
+      const stride = Math.max(1, Math.floor(w / 100));
+      const yMid = Math.floor(h / 2);
+      const yDir = side === 'top' ? -1 : 1;  // top scans up from center, bottom scans down
+      const yLimit = side === 'top' ? skipOuter : h - 1 - skipOuter;
+      for (let x = stride; x < w - stride; x += stride) {
+        // Walk from middle toward edge; remember the LAST gradient hit above threshold
+        let lastHitY = -1, lastHitG = 0;
+        for (let y = yMid; (yDir > 0 ? y <= yLimit : y >= yLimit); y += yDir) {
+          const g = grad[y * w + x];
+          if (g > threshold) {
+            lastHitY = y; lastHitG = g;
+          }
+        }
+        if (lastHitY >= 0) {
+          points.push({ x, y: lastHitY, strength: lastHitG });
+        }
+      }
+    } else {
+      const stride = Math.max(1, Math.floor(h / 100));
+      const xMid = Math.floor(w / 2);
+      const xDir = side === 'left' ? -1 : 1;
+      const xLimit = side === 'left' ? skipOuter : w - 1 - skipOuter;
+      for (let y = stride; y < h - stride; y += stride) {
+        let lastHitX = -1, lastHitG = 0;
+        for (let x = xMid; (xDir > 0 ? x <= xLimit : x >= xLimit); x += xDir) {
+          const g = grad[y * w + x];
+          if (g > threshold) {
+            lastHitX = x; lastHitG = g;
+          }
+        }
+        if (lastHitX >= 0) {
+          points.push({ x: lastHitX, y, strength: lastHitG });
+        }
+      }
+    }
+    return points;
+  }
+
+  function gradPercentile(grad, p) {
+    // Sample-based percentile to avoid sorting huge arrays
+    const samples = [];
+    const step = Math.max(1, Math.floor(grad.length / 10000));
+    for (let i = 0; i < grad.length; i += step) samples.push(grad[i]);
+    samples.sort((a, b) => a - b);
+    return samples[Math.floor(samples.length * p / 100)];
+  }
+
+  // Simple RANSAC line fit. Returns line as {a, b, c} for ax + by + c = 0.
+  function fitLineRANSAC(points) {
+    if (points.length < 8) return null;
+    let bestLine = null, bestInliers = 0;
+    const iters = 80;
+    const threshold = 6; // pixel distance threshold for inliers
+    for (let it = 0; it < iters; it++) {
+      const i = Math.floor(Math.random() * points.length);
+      let j = Math.floor(Math.random() * points.length);
+      if (i === j) j = (j + 1) % points.length;
+      const p1 = points[i], p2 = points[j];
+      // Line through p1, p2: direction (dx, dy), normal (-dy, dx)
+      const dx = p2.x - p1.x, dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 5) continue;
+      const a = -dy / len, b = dx / len;
+      const c = -(a * p1.x + b * p1.y);
+      // Count inliers
+      let inliers = 0;
+      for (const p of points) {
+        const dist = Math.abs(a * p.x + b * p.y + c);
+        if (dist < threshold) inliers++;
+      }
+      if (inliers > bestInliers) {
+        bestInliers = inliers;
+        bestLine = { a, b, c };
+      }
+    }
+    if (!bestLine || bestInliers < points.length * 0.4) return null;
+    // Refit line using least squares on inliers for better precision
+    const inliers = points.filter(p =>
+      Math.abs(bestLine.a * p.x + bestLine.b * p.y + bestLine.c) < threshold);
+    return fitLineLeastSquares(inliers) || bestLine;
+  }
+
+  // Total least squares line fit (handles vertical/horizontal lines)
+  function fitLineLeastSquares(points) {
+    if (points.length < 2) return null;
+    let mx = 0, my = 0;
+    for (const p of points) { mx += p.x; my += p.y; }
+    mx /= points.length; my /= points.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const p of points) {
+      const dx = p.x - mx, dy = p.y - my;
+      sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+    }
+    // Eigenvector of covariance matrix corresponding to larger eigenvalue
+    // is the line direction. Smaller eigenvector is the normal.
+    const tr = sxx + syy;
+    const det = sxx * syy - sxy * sxy;
+    const disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+    const lambda1 = tr / 2 + disc; // larger eigenvalue
+    // Eigenvector for lambda1: (sxy, lambda1 - sxx) is line direction
+    // Normal is perpendicular: (-(lambda1 - sxx), sxy)
+    let nx = -(lambda1 - sxx), ny = sxy;
+    const nlen = Math.hypot(nx, ny);
+    if (nlen < 1e-9) return null;
+    nx /= nlen; ny /= nlen;
+    return { a: nx, b: ny, c: -(nx * mx + ny * my) };
+  }
+
+  // Intersect two lines ax + by + c = 0
+  function lineIntersect(L1, L2) {
+    const det = L1.a * L2.b - L2.a * L1.b;
+    if (Math.abs(det) < 1e-9) return null;
+    return {
+      x: (L1.b * L2.c - L2.b * L1.c) / det,
+      y: (L2.a * L1.c - L1.a * L2.c) / det,
+    };
+  }
+
+  // Quadrilateral area via shoelace formula
+  function quadArea(pts) {
+    let s = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i], b = pts[(i + 1) % 4];
+      s += a.x * b.y - b.x * a.y;
+    }
+    return Math.abs(s) / 2;
+  }
+
+  // Old variance-based fallback
+  function detectQuadVariance(imgData, w, h) {
+    const data = imgData.data;
+    const colVar = new Float32Array(w);
+    const rowVar = new Float32Array(h);
+    const colSqSum = new Float32Array(w);
+    const rowSqSum = new Float32Array(h);
+    const colSum = new Float32Array(w);
+    const rowSum = new Float32Array(h);
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const g = (data[i] + data[i+1] + data[i+2]) / 3;
+        rowSum[y] += g; rowSqSum[y] += g * g;
+        colSum[x] += g; colSqSum[x] += g * g;
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      const m = colSum[x] / h;
+      colVar[x] = colSqSum[x] / h - m * m;
+    }
+    for (let y = 0; y < h; y++) {
+      const m = rowSum[y] / w;
+      rowVar[y] = rowSqSum[y] / w - m * m;
+    }
+    const colThresh = percentile(colVar, 60) * 0.7;
+    const rowThresh = percentile(rowVar, 60) * 0.7;
+    const xRange = largestSpan(colVar, colThresh);
+    const yRange = largestSpan(rowVar, rowThresh);
+    if (!xRange || !yRange) return null;
+    if ((xRange[1] - xRange[0]) < w * 0.3 || (yRange[1] - yRange[0]) < h * 0.3) return null;
+    const expandX = (xRange[1] - xRange[0]) * 0.04;
+    const expandY = (yRange[1] - yRange[0]) * 0.04;
+    const x0 = Math.max(0, xRange[0] - expandX);
+    const x1 = Math.min(w, xRange[1] + expandX);
+    const y0 = Math.max(0, yRange[0] - expandY);
+    const y1 = Math.min(h, yRange[1] + expandY);
+    return [
+      { x: x0, y: y0 }, { x: x1, y: y0 },
+      { x: x1, y: y1 }, { x: x0, y: y1 },
+    ];
+  }
+
+  function percentile(arr, p) {
+    const sorted = Array.from(arr).sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length * p / 100)];
+  }
+
+  function largestSpan(arr, thresh) {
+    let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i] >= thresh) {
+        if (curStart < 0) curStart = i;
+        curLen++;
+        if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+      } else {
+        curStart = -1; curLen = 0;
+      }
+    }
+    if (bestLen === 0) return null;
+    return [bestStart, bestStart + bestLen];
+  }
+
+  /* ── Corner handles UI ── */
+
+  function positionCornerHandles() {
+    const wrap = document.getElementById('crop-wrap');
+    const canvasRect = sourceCanvas.getBoundingClientRect();
+    // Account for any zoom by computing displayed-pixel scale from raw canvas pixels
+    const dispScale = canvasRect.width / sourceCanvas.width;
+
+    // Position the four corner handles
+    const handles = wrap.querySelectorAll('.corner-handle');
+    handles.forEach((h, i) => {
+      h.style.left = (corners[i].x * dispScale) + 'px';
+      h.style.top = (corners[i].y * dispScale) + 'px';
+    });
+
+    // Position the four edge midpoint handles (between each pair of corners)
+    const edges = wrap.querySelectorAll('.edge-handle');
+    edges.forEach((h, i) => {
+      const a = corners[i];
+      const b = corners[(i + 1) % 4];
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      h.style.left = (mx * dispScale) + 'px';
+      h.style.top = (my * dispScale) + 'px';
+    });
+
+    // Update the SVG polygon and the rule-of-thirds grid inside it
+    const svg = document.getElementById('crop-overlay');
+    const poly = document.getElementById('crop-poly');
+    const grid = document.getElementById('crop-grid');
+    if (svg && poly) {
+      svg.setAttribute('viewBox', `0 0 ${sourceCanvas.width} ${sourceCanvas.height}`);
+      const points = corners.map(c => `${c.x},${c.y}`).join(' ');
+      poly.setAttribute('points', points);
+
+      // Rule-of-thirds grid inside the quad: lines at 1/3 and 2/3 along each
+      // of the two axes of the quad. Compute by interpolating along edges.
+      if (grid) {
+        const interp = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+        let path = '';
+        // Horizontal grid lines: between top edge (TL→TR) and bottom edge (BL→BR)
+        for (let i = 1; i <= 2; i++) {
+          const t = i / 3;
+          const top = interp(corners[0], corners[1], t);
+          const bot = interp(corners[3], corners[2], t);
+          path += ` M${top.x},${top.y} L${bot.x},${bot.y}`;
+        }
+        // Vertical grid lines: between left edge (TL→BL) and right edge (TR→BR)
+        for (let i = 1; i <= 2; i++) {
+          const t = i / 3;
+          const left = interp(corners[0], corners[3], t);
+          const right = interp(corners[1], corners[2], t);
+          path += ` M${left.x},${left.y} L${right.x},${right.y}`;
+        }
+        grid.setAttribute('d', path.trim());
+      }
+    }
+  }
+
+  // dragging convention: -1 idle; 0..3 corner indices; 100..103 edge indices.
+  // Edge i connects corner i to corner (i+1)%4. Dragging an edge translates
+  // both endpoints perpendicular to the edge.
+  let dragStartCorners = null;
+  let dragStartPoint = null;
+  let dragEdgeNormal = null;
+
+  function setupCornerHandles() {
+    const wrap = document.getElementById('crop-wrap');
+    const cornerHandles = wrap.querySelectorAll('.corner-handle');
+    const edgeHandles = wrap.querySelectorAll('.edge-handle');
+
+    function snapshot() {
+      dragStartCorners = corners.map(c => ({ x: c.x, y: c.y }));
+    }
+
+    cornerHandles.forEach((handle, idx) => {
+      const startDrag = (clientX, clientY) => {
+        dragging = idx;
+        snapshot();
+        const canvasRect = sourceCanvas.getBoundingClientRect();
+        const dispScale = canvasRect.width / sourceCanvas.width;
+        dragStartPoint = {
+          x: (clientX - canvasRect.left) / dispScale,
+          y: (clientY - canvasRect.top) / dispScale,
+        };
+        handle.style.cursor = 'grabbing';
+      };
+      handle.addEventListener('mousedown', e => { e.preventDefault(); startDrag(e.clientX, e.clientY); });
+      handle.addEventListener('touchstart', e => {
+        e.preventDefault();
+        const t = e.touches[0];
+        startDrag(t.clientX, t.clientY);
+      }, { passive: false });
+    });
+
+    edgeHandles.forEach((handle, idx) => {
+      const startDrag = (clientX, clientY) => {
+        dragging = 100 + idx;
+        snapshot();
+        const canvasRect = sourceCanvas.getBoundingClientRect();
+        const dispScale = canvasRect.width / sourceCanvas.width;
+        dragStartPoint = {
+          x: (clientX - canvasRect.left) / dispScale,
+          y: (clientY - canvasRect.top) / dispScale,
+        };
+        // Compute the edge normal (perpendicular direction) at drag start
+        const a = corners[idx];
+        const b = corners[(idx + 1) % 4];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // Normal pointing outward from the quad center
+        const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
+        const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
+        const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+        let nx = -dy / len, ny = dx / len;
+        // Make sure normal points outward
+        if ((midX - cx) * nx + (midY - cy) * ny < 0) { nx = -nx; ny = -ny; }
+        dragEdgeNormal = { x: nx, y: ny };
+        handle.style.cursor = 'grabbing';
+      };
+      handle.addEventListener('mousedown', e => { e.preventDefault(); startDrag(e.clientX, e.clientY); });
+      handle.addEventListener('touchstart', e => {
+        e.preventDefault();
+        const t = e.touches[0];
+        startDrag(t.clientX, t.clientY);
+      }, { passive: false });
+    });
+
+    function moveTo(clientX, clientY) {
+      if (dragging < 0 || !corners) return;
+      const canvasRect = sourceCanvas.getBoundingClientRect();
+      const dispScale = canvasRect.width / sourceCanvas.width;
+      const x = (clientX - canvasRect.left) / dispScale;
+      const y = (clientY - canvasRect.top) / dispScale;
+
+      if (dragging < 100) {
+        // Corner drag — set that corner directly, with bounds clamp
+        const cx = Math.max(0, Math.min(sourceCanvas.width, x));
+        const cy = Math.max(0, Math.min(sourceCanvas.height, y));
+        corners[dragging] = { x: cx, y: cy };
+      } else {
+        // Edge drag — translate the two corners of this edge along the edge normal
+        const edgeIdx = dragging - 100;
+        const dx = x - dragStartPoint.x;
+        const dy = y - dragStartPoint.y;
+        const dot = dx * dragEdgeNormal.x + dy * dragEdgeNormal.y;
+        const i0 = edgeIdx, i1 = (edgeIdx + 1) % 4;
+        const offsetX = dragEdgeNormal.x * dot;
+        const offsetY = dragEdgeNormal.y * dot;
+        corners[i0] = {
+          x: Math.max(0, Math.min(sourceCanvas.width, dragStartCorners[i0].x + offsetX)),
+          y: Math.max(0, Math.min(sourceCanvas.height, dragStartCorners[i0].y + offsetY)),
+        };
+        corners[i1] = {
+          x: Math.max(0, Math.min(sourceCanvas.width, dragStartCorners[i1].x + offsetX)),
+          y: Math.max(0, Math.min(sourceCanvas.height, dragStartCorners[i1].y + offsetY)),
+        };
+      }
+      positionCornerHandles();
+    }
+
+    window.addEventListener('mousemove', e => {
+      if (dragging < 0) return;
+      moveTo(e.clientX, e.clientY);
+    });
+    window.addEventListener('mouseup', () => { dragging = -1; });
+    window.addEventListener('touchmove', e => {
+      if (dragging < 0) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      moveTo(t.clientX, t.clientY);
+    }, { passive: false });
+    window.addEventListener('touchend', () => { dragging = -1; });
+    window.addEventListener('resize', () => { if (corners) positionCornerHandles(); });
+  }
+
+  /* ── Perspective warp (plain-JS homography) ──
+     Solves the 3x3 transform mapping the four source corners to a target
+     rectangle, then reverse-maps each output pixel back to the source. */
+
+  function warpPerspective() {
+    if (!corners || !sourceImg) return null;
+    // Convert corner positions back to source-image coordinates
+    const srcCorners = corners.map(c => ({ x: c.x / sourceScale, y: c.y / sourceScale }));
+    // Output dimensions: average of opposite edge lengths
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const topW = dist(srcCorners[0], srcCorners[1]);
+    const botW = dist(srcCorners[3], srcCorners[2]);
+    const leftH = dist(srcCorners[0], srcCorners[3]);
+    const rightH = dist(srcCorners[1], srcCorners[2]);
+    let outW = Math.round((topW + botW) / 2);
+    let outH = Math.round((leftH + rightH) / 2);
+
+    // Cap to reasonable dimensions for performance — final size happens later
+    const maxWorkDim = 1800;
+    if (Math.max(outW, outH) > maxWorkDim) {
+      const s = maxWorkDim / Math.max(outW, outH);
+      outW = Math.round(outW * s);
+      outH = Math.round(outH * s);
+    }
+
+    // Compute homography source -> destination
+    const dstCorners = [
+      { x: 0, y: 0 },
+      { x: outW - 1, y: 0 },
+      { x: outW - 1, y: outH - 1 },
+      { x: 0, y: outH - 1 },
+    ];
+    // We need the inverse (dst -> src) for reverse mapping
+    const H = solveHomography(dstCorners, srcCorners);
+    if (!H) return null;
+
+    // Read source pixels
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = sourceImg.width;
+    srcCanvas.height = sourceImg.height;
+    const srcCtx = srcCanvas.getContext('2d');
+    srcCtx.drawImage(sourceImg, 0, 0);
+    const srcData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+
+    // Output canvas
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = outW;
+    outCanvas.height = outH;
+    const outCtx = outCanvas.getContext('2d');
+    const outData = outCtx.createImageData(outW, outH);
+
+    const sw = srcCanvas.width, sh = srcCanvas.height;
+    const sd = srcData.data, od = outData.data;
+
+    for (let y = 0; y < outH; y++) {
+      for (let x = 0; x < outW; x++) {
+        // Apply H to (x, y) → (sx, sy) in source
+        const w = H[6] * x + H[7] * y + H[8];
+        const sx = (H[0] * x + H[1] * y + H[2]) / w;
+        const sy = (H[3] * x + H[4] * y + H[5]) / w;
+        const oi = (y * outW + x) * 4;
+        if (sx < 0 || sx >= sw - 1 || sy < 0 || sy >= sh - 1) {
+          od[oi] = 0; od[oi+1] = 0; od[oi+2] = 0; od[oi+3] = 255;
+          continue;
+        }
+        // Bilinear sample
+        const x0 = Math.floor(sx), y0 = Math.floor(sy);
+        const fx = sx - x0, fy = sy - y0;
+        const i00 = (y0 * sw + x0) * 4;
+        const i10 = i00 + 4;
+        const i01 = i00 + sw * 4;
+        const i11 = i01 + 4;
+        for (let c = 0; c < 3; c++) {
+          const v00 = sd[i00 + c], v10 = sd[i10 + c], v01 = sd[i01 + c], v11 = sd[i11 + c];
+          const v0 = v00 + (v10 - v00) * fx;
+          const v1 = v01 + (v11 - v01) * fx;
+          od[oi + c] = v0 + (v1 - v0) * fy;
+        }
+        od[oi + 3] = 255;
+      }
+    }
+    outCtx.putImageData(outData, 0, 0);
+    return outCanvas;
+  }
+
+  // Solve 3x3 homography: 4 pt-pairs → 8 unknowns (h33 = 1)
+  function solveHomography(src, dst) {
+    // Build 8x8 linear system
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const sx = src[i].x, sy = src[i].y, dx = dst[i].x, dy = dst[i].y;
+      A.push([sx, sy, 1, 0, 0, 0, -dx*sx, -dx*sy]); b.push(dx);
+      A.push([0, 0, 0, sx, sy, 1, -dy*sx, -dy*sy]); b.push(dy);
+    }
+    const h = solveLinearSystem(A, b);
+    if (!h) return null;
+    return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+  }
+
+  // Gauss-Jordan elimination for an N×N system
+  function solveLinearSystem(A, b) {
+    const n = A.length;
+    const M = A.map((row, i) => [...row, b[i]]);
+    for (let i = 0; i < n; i++) {
+      // Pivot
+      let maxRow = i;
+      for (let k = i + 1; k < n; k++) {
+        if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+      }
+      [M[i], M[maxRow]] = [M[maxRow], M[i]];
+      if (Math.abs(M[i][i]) < 1e-10) return null;
+      // Eliminate
+      for (let k = 0; k < n; k++) {
+        if (k === i) continue;
+        const f = M[k][i] / M[i][i];
+        for (let j = i; j <= n; j++) M[k][j] -= f * M[i][j];
+      }
+    }
+    return M.map((row, i) => row[n] / row[i][i]);
+  }
+
+  /* ── Adjustments (white balance, levels, saturation, sharpness) ── */
+
+  function applyAdjustments(canvas) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    const N = w * h;
+
+    // 1. White balance (gray-world with adjustable strength)
+    if (adj.wb > 0) {
+      let sumR = 0, sumG = 0, sumB = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        sumR += d[i]; sumG += d[i+1]; sumB += d[i+2];
+      }
+      const avgR = sumR / N, avgG = sumG / N, avgB = sumB / N;
+      const avg = (avgR + avgG + avgB) / 3;
+      const strength = adj.wb / 100;
+      const gainR = 1 + (avg / Math.max(avgR, 1) - 1) * strength;
+      const gainG = 1 + (avg / Math.max(avgG, 1) - 1) * strength;
+      const gainB = 1 + (avg / Math.max(avgB, 1) - 1) * strength;
+      for (let i = 0; i < d.length; i += 4) {
+        d[i] = Math.min(255, d[i] * gainR);
+        d[i+1] = Math.min(255, d[i+1] * gainG);
+        d[i+2] = Math.min(255, d[i+2] * gainB);
+      }
+    }
+
+    // 2. Levels stretch (using brightness percentiles)
+    if (adj.black > 0 || adj.white < 100) {
+      const histR = new Uint32Array(256), histG = new Uint32Array(256), histB = new Uint32Array(256);
+      const histY = new Uint32Array(256);
+      for (let i = 0; i < d.length; i += 4) {
+        const Y = Math.round(0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]);
+        histY[Y]++;
+      }
+      let lo = 0, hi = 255;
+      const blackTarget = N * adj.black / 100;
+      const whiteTarget = N * adj.white / 100;
+      let cum = 0;
+      for (let v = 0; v < 256; v++) { cum += histY[v]; if (cum >= blackTarget) { lo = v; break; } }
+      cum = 0;
+      for (let v = 0; v < 256; v++) { cum += histY[v]; if (cum >= whiteTarget) { hi = v; break; } }
+      if (hi > lo) {
+        const range = hi - lo;
+        const lookup = new Uint8ClampedArray(256);
+        for (let v = 0; v < 256; v++) {
+          lookup[v] = Math.min(255, Math.max(0, Math.round((v - lo) * 255 / range)));
+        }
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = lookup[d[i]];
+          d[i+1] = lookup[d[i+1]];
+          d[i+2] = lookup[d[i+2]];
+        }
+      }
+    }
+
+    // 3. Saturation (multiplier in HSL-ish space)
+    if (adj.sat !== 0) {
+      const factor = 1 + adj.sat / 100;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i+1], b = d[i+2];
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        d[i] = Math.min(255, Math.max(0, gray + (r - gray) * factor));
+        d[i+1] = Math.min(255, Math.max(0, gray + (g - gray) * factor));
+        d[i+2] = Math.min(255, Math.max(0, gray + (b - gray) * factor));
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    // Sharpening is handled by the separate applySharpen() function called after this.
+  }
+
+  // Simpler & correct unsharp mask: enhance = src + amount * (src - blur)
+  function applySharpen(canvas, amount) {
+    if (amount <= 0) return;
+    const w = canvas.width, h = canvas.height;
+    const ctx = canvas.getContext('2d');
+    const orig = ctx.getImageData(0, 0, w, h);
+    const od = orig.data;
+    // Make blurred copy
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    const tctx = tmp.getContext('2d');
+    tctx.filter = 'blur(1.4px)';
+    tctx.drawImage(canvas, 0, 0);
+    const blurData = tctx.getImageData(0, 0, w, h).data;
+    const out = ctx.createImageData(w, h);
+    const oad = out.data;
+    const k = amount / 100 * 0.6;
+    for (let i = 0; i < od.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const diff = od[i + c] - blurData[i + c];
+        oad[i + c] = Math.min(255, Math.max(0, od[i + c] + diff * k));
+      }
+      oad[i + 3] = 255;
+    }
+    ctx.putImageData(out, 0, 0);
+  }
+
+  function applyAdjustmentsClean(canvas) {
+    applyAdjustments(canvas);
+    if (adj.sharp > 0) applySharpen(canvas, adj.sharp);
+  }
+
+  /* ── Mode switching & preview ── */
+
+  function switchMode(newMode) {
+    mode = newMode;
+    document.querySelectorAll('.editor-mode-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.mode === newMode);
+    });
+    document.getElementById('ed-mode-crop').style.display = newMode === 'crop' ? '' : 'none';
+    document.getElementById('ed-mode-adjust').style.display = newMode === 'adjust' ? '' : 'none';
+    document.getElementById('ed-mode-export').style.display = newMode === 'export' ? '' : 'none';
+
+    if (newMode === 'crop') {
+      // Re-position handles in case the canvas resized
+      setTimeout(() => { if (corners) positionCornerHandles(); }, 50);
+    } else if (newMode === 'adjust') {
+      regeneratePreview();
+    } else if (newMode === 'export') {
+      regenerateExport();
+    }
+  }
+
+  function regeneratePreview() {
+    const status = document.getElementById('preview-meta');
+    status.textContent = 'Processing…';
+    setTimeout(() => {
+      warpedCanvas = warpPerspective();
+      if (!warpedCanvas) {
+        status.textContent = 'Could not warp — check corners';
+        return;
+      }
+      // Make a downsampled preview for fast adjustment iteration
+      const previewCanvas = document.getElementById('preview-canvas');
+      const maxPreview = 800;
+      const ws = warpedCanvas.width, hs = warpedCanvas.height;
+      const ps = Math.min(1, maxPreview / Math.max(ws, hs));
+      previewCanvas.width = Math.round(ws * ps);
+      previewCanvas.height = Math.round(hs * ps);
+      const pctx = previewCanvas.getContext('2d');
+      pctx.drawImage(warpedCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
+      applyAdjustmentsClean(previewCanvas);
+      status.textContent = `Preview: ${previewCanvas.width} × ${previewCanvas.height}`;
+    }, 30);
+  }
+
+  function regenerateExport() {
+    const status = document.getElementById('export-meta');
+    status.textContent = 'Generating final image…';
+    setTimeout(() => {
+      if (!warpedCanvas) warpedCanvas = warpPerspective();
+      // Resize warped to target output size
+      const ws = warpedCanvas.width, hs = warpedCanvas.height;
+      const target = adj.size;
+      const scale = Math.min(1, target / Math.max(ws, hs));
+      const exportCanvas = document.getElementById('export-canvas');
+      exportCanvas.width = Math.round(ws * scale);
+      exportCanvas.height = Math.round(hs * scale);
+      const ectx = exportCanvas.getContext('2d');
+      ectx.imageSmoothingQuality = 'high';
+      ectx.drawImage(warpedCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+      applyAdjustmentsClean(exportCanvas);
+      status.textContent = `Final: ${exportCanvas.width} × ${exportCanvas.height} px`;
+
+      // Suggest filename
+      const fnInput = document.getElementById('ed-filename');
+      if (!fnInput.value) fnInput.value = suggestedFilename;
+    }, 30);
+  }
+
+  /* ── Sliders ── */
+
+  function setupSliders() {
+    const sliders = [
+      { id: 'sl-wb',    key: 'wb',    valId: 'val-wb',    fmt: v => v + '%' },
+      { id: 'sl-sat',   key: 'sat',   valId: 'val-sat',   fmt: v => (v >= 0 ? '+' : '') + v + '%' },
+      { id: 'sl-black', key: 'black', valId: 'val-black', fmt: v => v + '%' },
+      { id: 'sl-white', key: 'white', valId: 'val-white', fmt: v => v + '%' },
+      { id: 'sl-sharp', key: 'sharp', valId: 'val-sharp', fmt: v => '+' + v + '%' },
+      { id: 'sl-size',  key: 'size',  valId: 'val-size',  fmt: v => v + ' px' },
+    ];
+    let debounceTimer = null;
+    sliders.forEach(s => {
+      const el = document.getElementById(s.id);
+      const valEl = document.getElementById(s.valId);
+      el.value = adj[s.key];
+      valEl.textContent = s.fmt(adj[s.key]);
+      el.addEventListener('input', () => {
+        adj[s.key] = parseFloat(el.value);
+        valEl.textContent = s.fmt(adj[s.key]);
+        clearTimeout(debounceTimer);
+        if (mode === 'adjust') {
+          debounceTimer = setTimeout(regeneratePreview, 80);
+        }
+      });
+    });
+  }
+
+  /* ── Tabs & action buttons ── */
+
+  function setupTabs() {
+    document.querySelectorAll('.editor-mode-tab').forEach(t => {
+      t.addEventListener('click', () => {
+        if (sourceImg) switchMode(t.dataset.mode);
+      });
+    });
+  }
+
+  /* ── Snap-to-rectangle, aspect ratio enforcement, zoom & pan ── */
+
+  let zoomLevel = 1;
+  let panX = 0, panY = 0;
+  let aspectLock = null;  // null = free, otherwise width/height ratio
+
+  // Compute the "ideal" rectangle that approximates the current quad, in
+  // canvas coords. Used for snap-to-rectangle and aspect locking.
+  // The ideal rectangle is upright (axis-aligned to the image), centered on
+  // the quad's centroid, with width and height matching the quad's average
+  // edge lengths. If aspectLock is set, the rectangle is forced to that ratio.
+  function computeIdealRect(targetAspect) {
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const topW = dist(corners[0], corners[1]);
+    const botW = dist(corners[3], corners[2]);
+    const leftH = dist(corners[0], corners[3]);
+    const rightH = dist(corners[1], corners[2]);
+    let avgW = (topW + botW) / 2;
+    let avgH = (leftH + rightH) / 2;
+    if (targetAspect && targetAspect > 0) {
+      // Force to specified aspect (width / height)
+      // Pick the dimension that grows so we cover at least the original area
+      const currentArea = avgW * avgH;
+      avgH = Math.sqrt(currentArea / targetAspect);
+      avgW = avgH * targetAspect;
+    }
+    const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
+    const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
+    return [
+      { x: cx - avgW / 2, y: cy - avgH / 2 },
+      { x: cx + avgW / 2, y: cy - avgH / 2 },
+      { x: cx + avgW / 2, y: cy + avgH / 2 },
+      { x: cx - avgW / 2, y: cy + avgH / 2 },
+    ];
+  }
+
+  function snapToRectangle() {
+    if (!corners) return;
+    corners = computeIdealRect(aspectLock);
+    positionCornerHandles();
+  }
+
+  function setAspectLock(value) {
+    aspectLock = value === 'free' ? null : parseFloat(value);
+    document.querySelectorAll('.tool-btn[data-aspect]').forEach(b => {
+      b.classList.toggle('active', b.dataset.aspect === value);
+    });
+    if (aspectLock) snapToRectangle();
+  }
+
+  function applyZoom() {
+    const content = document.getElementById('crop-content');
+    if (!content) return;
+    content.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+    setTimeout(() => { if (corners) positionCornerHandles(); }, 0);
+  }
+
+  function setZoom(level) {
+    zoomLevel = Math.max(0.5, Math.min(4, level));
+    if (zoomLevel <= 1) { panX = 0; panY = 0; }
+    applyZoom();
+  }
+
+  // Pan-by-drag on background of crop wrap when zoomed in
+  function setupZoomPan() {
+    const wrap = document.getElementById('crop-wrap');
+    let panning = false;
+    let panStart = null;
+
+    const onDown = (clientX, clientY, target) => {
+      // Only pan if clicking on the canvas/overlay itself, not on a handle
+      if (target.classList.contains('corner-handle') || target.classList.contains('edge-handle')) return;
+      if (zoomLevel <= 1) return;
+      panning = true;
+      panStart = { x: clientX - panX, y: clientY - panY };
+    };
+    const onMove = (clientX, clientY) => {
+      if (!panning) return;
+      panX = clientX - panStart.x;
+      panY = clientY - panStart.y;
+      applyZoom();
+    };
+    const onUp = () => { panning = false; };
+
+    wrap.addEventListener('mousedown', e => onDown(e.clientX, e.clientY, e.target));
+    wrap.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+    wrap.addEventListener('mouseup', onUp);
+    wrap.addEventListener('mouseleave', onUp);
+    wrap.addEventListener('touchstart', e => {
+      const t = e.touches[0];
+      onDown(t.clientX, t.clientY, e.target);
+    }, { passive: true });
+    wrap.addEventListener('touchmove', e => {
+      if (!panning) return;
+      const t = e.touches[0];
+      onMove(t.clientX, t.clientY);
+    }, { passive: true });
+    wrap.addEventListener('touchend', onUp);
+  }
+
+  function setupActionButtons() {
+    document.getElementById('ed-redetect').addEventListener('click', autoDetectCorners);
+    document.getElementById('ed-snap-rect').addEventListener('click', snapToRectangle);
+    document.querySelectorAll('.tool-btn[data-aspect]').forEach(btn => {
+      btn.addEventListener('click', () => setAspectLock(btn.dataset.aspect));
+    });
+    document.getElementById('zoom-in').addEventListener('click', () => setZoom(zoomLevel * 1.4));
+    document.getElementById('zoom-out').addEventListener('click', () => setZoom(zoomLevel / 1.4));
+    document.getElementById('zoom-reset').addEventListener('click', () => setZoom(1));
+    setupZoomPan();
+    document.getElementById('ed-to-adjust').addEventListener('click', () => switchMode('adjust'));
+    document.getElementById('ed-back-crop').addEventListener('click', () => switchMode('crop'));
+    document.getElementById('ed-to-export').addEventListener('click', () => switchMode('export'));
+    document.getElementById('ed-back-adjust').addEventListener('click', () => switchMode('adjust'));
+    document.getElementById('ed-reset').addEventListener('click', () => {
+      adj.wb = 25; adj.sat = 25; adj.black = 1; adj.white = 99; adj.sharp = 25; adj.size = 1400;
+      ['sl-wb','sl-sat','sl-black','sl-white','sl-sharp','sl-size'].forEach(id => {
+        const sl = document.getElementById(id);
+        const key = id.replace('sl-', '');
+        sl.value = adj[key];
+        sl.dispatchEvent(new Event('input'));
+      });
+    });
+    document.getElementById('ed-download').addEventListener('click', () => {
+      const exportCanvas = document.getElementById('export-canvas');
+      const fname = document.getElementById('ed-filename').value.trim() || suggestedFilename;
+      exportCanvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showToast('Image downloaded — now upload it to /paintings on GitHub');
+      }, 'image/jpeg', 0.9);
+    });
+    document.getElementById('ed-use').addEventListener('click', () => {
+      const fname = document.getElementById('ed-filename').value.trim() || suggestedFilename;
+      const formField = document.getElementById('f-file');
+      formField.value = fname;
+      // Also try to populate the form's image preview with our processed canvas
+      const exportCanvas = document.getElementById('export-canvas');
+      exportCanvas.toBlob(blob => {
+        const file = new File([blob], fname, { type: 'image/jpeg' });
+        // Fire the existing handleImageFile flow if accessible
+        if (typeof handleImageFile === 'function') {
+          handleImageFile(file);
+        }
+        // Scroll to form
+        document.getElementById('f-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setTimeout(() => document.getElementById('f-title').focus(), 400);
+        showToast('Filename set in form below — now fill in title & size');
+      }, 'image/jpeg', 0.9);
+    });
+  }
+
+  return { init };
+})();
+
+Editor.init();
 loadExisting();
+
 </script>
 
 </body>
