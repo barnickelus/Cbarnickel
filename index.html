@@ -525,6 +525,193 @@
     .slide-prev { left: 8px; }
     .slide-next { right: 8px; }
   }
+
+  /* ── Settings panel ── */
+  .settings-btn {
+    pointer-events: auto;
+    background: rgba(10,9,8,0.55);
+    border: 1px solid var(--ink-faint);
+    color: var(--ink-dim);
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 12px;
+    transition: all 0.2s ease;
+    font-size: 18px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .settings-btn:hover { color: var(--ink); border-color: var(--gold); }
+  .settings-btn.active { color: var(--gold); border-color: var(--gold); }
+  .settings-panel {
+    position: fixed; top: 80px; right: 32px;
+    width: 280px;
+    background: rgba(15,12,10,0.92);
+    border: 1px solid var(--ink-faint);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    padding: 22px 22px 18px;
+    z-index: 49;
+    pointer-events: auto;
+    transform: translateY(-12px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0s linear 0.2s;
+  }
+  .settings-panel.show {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0s linear 0s;
+  }
+  .settings-panel h3 {
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+  .settings-panel .row {
+    margin-bottom: 16px;
+  }
+  .settings-panel .row:last-child { margin-bottom: 0; }
+  .settings-panel label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .settings-panel label .val {
+    color: var(--ink-dim);
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: 11px;
+  }
+  .settings-panel input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: rgba(239,231,215,0.18);
+    border-radius: 2px;
+    outline: none;
+  }
+  .settings-panel input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--gold);
+    cursor: pointer;
+    border: 2px solid #1a1512;
+  }
+  .settings-panel input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--gold);
+    cursor: pointer;
+    border: 2px solid #1a1512;
+  }
+  /* Toggle switch */
+  .toggle-switch {
+    position: relative;
+    width: 36px; height: 20px;
+    background: rgba(239,231,215,0.15);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle-switch::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--ink-dim);
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle-switch.on {
+    background: rgba(201,169,110,0.4);
+  }
+  .toggle-switch.on::after {
+    transform: translateX(16px);
+    background: var(--gold);
+  }
+  .settings-panel .row.divider {
+    border-top: 1px solid rgba(239,231,215,0.08);
+    padding-top: 14px;
+    margin-top: 14px;
+  }
+  .clear-btn {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--ink-faint);
+    color: var(--ink-dim);
+    padding: 10px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .clear-btn:hover {
+    color: var(--ink);
+    border-color: var(--gold);
+  }
+  .clear-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ── Soup mode reticle (replaces normal crosshair when active) ── */
+  body.soup-mode .crosshair {
+    width: 18px; height: 18px;
+  }
+  body.soup-mode .crosshair::before,
+  body.soup-mode .crosshair::after {
+    background: rgba(220, 50, 50, 0.7);
+  }
+  body.soup-mode .crosshair {
+    box-shadow: 0 0 0 2px rgba(220, 50, 50, 0.25);
+    border-radius: 50%;
+  }
+
+  /* "Throw!" hint that briefly shows when entering soup mode */
+  .soup-hint {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--gold);
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 26px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+    z-index: 45;
+  }
+  .soup-hint.show { opacity: 1; }
+  .soup-hint .small {
+    display: block;
+    font-family: var(--sans);
+    font-style: normal;
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin-top: 8px;
+  }
 </style>
 </head>
 <body>
@@ -541,11 +728,38 @@
 
 <div class="top-bar">
   <div class="brand">C<span class="dot">.</span>Barnickel <span class="gallery-suffix" style="opacity:0.7">Artwork</span></div>
-  <div class="view-toggle">
-    <button id="btn-3d" class="active">Gallery</button>
-    <button id="btn-slideshow">Slideshow</button>
-    <button id="btn-grid">Index</button>
+  <div style="display:flex; align-items:center;">
+    <div class="view-toggle">
+      <button id="btn-3d" class="active">Gallery</button>
+      <button id="btn-slideshow">Slideshow</button>
+      <button id="btn-grid">Index</button>
+    </div>
+    <button class="settings-btn" id="btn-settings" title="Settings" aria-label="Settings">⚙</button>
   </div>
+</div>
+
+<div class="settings-panel" id="settings-panel">
+  <h3>Gallery settings</h3>
+  <div class="row">
+    <label>Lighting <span class="val" id="val-lighting">100%</span></label>
+    <input type="range" id="sl-lighting" min="0" max="300" value="100" />
+  </div>
+  <div class="row" style="display:flex; justify-content:space-between; align-items:center;">
+    <label style="margin-bottom:0; flex:1;">White cube mode</label>
+    <div class="toggle-switch" id="tg-white"></div>
+  </div>
+  <div class="row divider" style="display:flex; justify-content:space-between; align-items:center;">
+    <label style="margin-bottom:0; flex:1;">Soup mode 🥫</label>
+    <div class="toggle-switch" id="tg-soup"></div>
+  </div>
+  <div class="row" id="soup-controls" style="display:none;">
+    <button class="clear-btn" id="btn-clear-soup" disabled>Clear splats</button>
+  </div>
+</div>
+
+<div class="soup-hint" id="soup-hint">
+  Click to throw
+  <span class="small">Tap a painting to splat</span>
 </div>
 
 <div class="crosshair" id="crosshair"></div>
@@ -659,6 +873,37 @@ if (hasTouch) document.body.classList.add('is-touch');
 let entered = false;
 let hasLookedYet = false;
 let floorMesh = null;
+
+// Track all dynamic light & material references so we can update them at runtime
+const lightingRefs = {
+  spots: [],         // SpotLight[] for paintings
+  bulbs: [],         // Mesh[] for ceiling bulbs (visual only)
+  ambient: null,
+  hemi: null,
+  centerGlow: null,
+};
+const themeRefs = {
+  walls: [],         // wall meshes
+  ceiling: null,
+  floor: null,
+  fog: null,         // we keep a separate ref because scene.fog is the active one
+  nameLabels: [],    // gold "C.Barnickel Artwork" name labels
+};
+
+// Lighting & theme settings (persisted to globals so we can re-apply on rebuild)
+let lightingMultiplier = 1.0;       // 0..3
+let isWhiteCube = false;
+let soupMode = false;
+
+// Soup mode state
+const soupState = {
+  enabled: false,
+  arm: null,           // arm+can mesh attached to camera
+  projectiles: [],     // active flying cans
+  splats: [],          // {mesh, drips: []} entries on walls/paintings
+  maxSplats: 50,
+  hint: null,
+};
 
 window.__joyVec = { x: 0, y: 0 };
 
@@ -792,38 +1037,72 @@ function spaceWallPaintings(indices, artworks, wallLength) {
 }
 
 /* ─────── Procedural textures ─────── */
-function makeFloorTexture() {
+function makeFloorTexture(theme = 'wood') {
   const c = document.createElement('canvas');
   c.width = 1024; c.height = 1024;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#1a1310';
-  ctx.fillRect(0, 0, 1024, 1024);
-  for (let y = 0; y < 1024; y += 64) {
-    const tone = 18 + Math.floor(Math.random() * 14);
-    ctx.fillStyle = `rgb(${tone+4}, ${tone}, ${tone-3})`;
-    ctx.fillRect(0, y, 1024, 63);
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i < 5; i++) {
-      ctx.beginPath();
-      const yOff = y + 8 + i * 12 + Math.random() * 6;
-      ctx.moveTo(0, yOff);
-      for (let x = 0; x < 1024; x += 40) {
-        ctx.lineTo(x, yOff + (Math.random() - 0.5) * 3);
+  if (theme === 'pale') {
+    // Pale, bleached wood for white-cube mode
+    ctx.fillStyle = '#e8e1d4';
+    ctx.fillRect(0, 0, 1024, 1024);
+    for (let y = 0; y < 1024; y += 64) {
+      const tone = 220 + Math.floor(Math.random() * 16);
+      ctx.fillStyle = `rgb(${tone}, ${tone-4}, ${tone-12})`;
+      ctx.fillRect(0, y, 1024, 63);
+      ctx.strokeStyle = 'rgba(120,100,80,0.16)';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        const yOff = y + 10 + i * 14 + Math.random() * 5;
+        ctx.moveTo(0, yOff);
+        for (let x = 0; x < 1024; x += 40) {
+          ctx.lineTo(x, yOff + (Math.random() - 0.5) * 2.5);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
+      ctx.fillStyle = 'rgba(140,120,100,0.4)';
+      ctx.fillRect(0, y + 63, 1024, 1);
+      let xPos = Math.random() * 200;
+      while (xPos < 1024) {
+        ctx.fillRect(xPos, y, 1, 64);
+        xPos += 200 + Math.random() * 200;
+      }
     }
-    ctx.fillStyle = '#050302';
-    ctx.fillRect(0, y + 63, 1024, 1);
-    let xPos = Math.random() * 200;
-    while (xPos < 1024) {
-      ctx.fillRect(xPos, y, 1, 64);
-      xPos += 200 + Math.random() * 200;
+    for (let i = 0; i < 800; i++) {
+      ctx.fillStyle = `rgba(120,100,80,${Math.random() * 0.06})`;
+      ctx.fillRect(Math.random() * 1024, Math.random() * 1024, 1, 1);
     }
-  }
-  for (let i = 0; i < 2000; i++) {
-    ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.1})`;
-    ctx.fillRect(Math.random() * 1024, Math.random() * 1024, 1, 1);
+  } else {
+    // Dark wood (original)
+    ctx.fillStyle = '#1a1310';
+    ctx.fillRect(0, 0, 1024, 1024);
+    for (let y = 0; y < 1024; y += 64) {
+      const tone = 18 + Math.floor(Math.random() * 14);
+      ctx.fillStyle = `rgb(${tone+4}, ${tone}, ${tone-3})`;
+      ctx.fillRect(0, y, 1024, 63);
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i < 5; i++) {
+        ctx.beginPath();
+        const yOff = y + 8 + i * 12 + Math.random() * 6;
+        ctx.moveTo(0, yOff);
+        for (let x = 0; x < 1024; x += 40) {
+          ctx.lineTo(x, yOff + (Math.random() - 0.5) * 3);
+        }
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#050302';
+      ctx.fillRect(0, y + 63, 1024, 1);
+      let xPos = Math.random() * 200;
+      while (xPos < 1024) {
+        ctx.fillRect(xPos, y, 1, 64);
+        xPos += 200 + Math.random() * 200;
+      }
+    }
+    for (let i = 0; i < 2000; i++) {
+      ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.1})`;
+      ctx.fillRect(Math.random() * 1024, Math.random() * 1024, 1, 1);
+    }
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -870,37 +1149,89 @@ function makeNameTexture() {
   return new THREE.CanvasTexture(c);
 }
 
+/* ─────── Themes ─────── */
+const THEMES = {
+  dark: {
+    ceiling: 0x100c0a,
+    wall: 0x1c1715,
+    floorTexture: 'wood',     // makeFloorTexture (dark wood)
+    fogColor: 0x0a0908,
+    fogDensity: 0.025,
+    ambientColor: 0xfff5e6,
+    ambientIntensity: 0.18,
+    hemiSky: 0xfff0d8,
+    hemiGround: 0x100806,
+    hemiIntensity: 0.15,
+    centerGlowColor: 0xffe8c4,
+    centerGlowIntensity: 0.35,
+    spotColor: 0xfff2dc,
+    spotIntensity: 1.6,
+    bulbColor: 0xfff0d0,
+    rendererClear: 0x0a0908,
+  },
+  white: {
+    ceiling: 0xf0ece4,
+    wall: 0xf2eee6,
+    floorTexture: 'pale',     // pale floor texture
+    fogColor: 0xeae6dc,
+    fogDensity: 0.012,
+    ambientColor: 0xfffaf2,
+    ambientIntensity: 0.85,
+    hemiSky: 0xffffff,
+    hemiGround: 0xc8c2b6,
+    hemiIntensity: 0.55,
+    centerGlowColor: 0xffffff,
+    centerGlowIntensity: 0.40,
+    spotColor: 0xffffff,
+    spotIntensity: 1.0,
+    bulbColor: 0xffffff,
+    rendererClear: 0xeae6dc,
+  },
+};
+function currentTheme() { return isWhiteCube ? THEMES.white : THEMES.dark; }
+
 function buildRoom(layout) {
   const room = layout.room;
   ROOM = room;
+  const T = currentTheme();
+
+  // Reset refs since we're rebuilding
+  lightingRefs.spots = [];
+  lightingRefs.bulbs = [];
+  themeRefs.walls = [];
+  themeRefs.nameLabels = [];
 
   floorMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
-    new THREE.MeshStandardMaterial({ map: makeFloorTexture(), roughness: 0.85 })
+    new THREE.MeshStandardMaterial({ map: makeFloorTexture(T.floorTexture), roughness: 0.85 })
   );
   floorMesh.rotation.x = -Math.PI / 2;
   scene.add(floorMesh);
+  themeRefs.floor = floorMesh;
 
   const ceiling = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
-    new THREE.MeshStandardMaterial({ color: 0x100c0a, roughness: 1.0 })
+    new THREE.MeshStandardMaterial({ color: T.ceiling, roughness: 1.0 })
   );
   ceiling.rotation.x = Math.PI / 2;
   ceiling.position.y = room.h;
   scene.add(ceiling);
+  themeRefs.ceiling = ceiling;
 
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x1c1715, roughness: 0.95 });
+  const wallMat = new THREE.MeshStandardMaterial({ color: T.wall, roughness: 0.95 });
   const wallSpecs = [
     { geo: [room.w, room.h], pos: [0, room.h/2, -room.d/2], rot: 0 },
     { geo: [room.w, room.h], pos: [0, room.h/2,  room.d/2], rot: Math.PI },
     { geo: [room.d, room.h], pos: [ room.w/2, room.h/2, 0], rot: -Math.PI/2 },
     { geo: [room.d, room.h], pos: [-room.w/2, room.h/2, 0], rot:  Math.PI/2 },
   ];
-  wallSpecs.forEach(w => {
+  wallSpecs.forEach((w, i) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(...w.geo), wallMat);
     m.position.set(...w.pos);
     m.rotation.y = w.rot;
+    m.userData = { isWall: true, wallIndex: i };
     scene.add(m);
+    themeRefs.walls.push(m);
   });
 
   const nameTex = makeNameTexture();
@@ -911,22 +1242,26 @@ function buildRoom(layout) {
     eastName.position.set(room.w/2 - 0.05, 3.5, 0);
     eastName.rotation.y = -Math.PI / 2;
     scene.add(eastName);
+    themeRefs.nameLabels.push(eastName);
   }
   if (layout.walls[3].length === 0) {
     const westName = new THREE.Mesh(nameGeo, nameMat);
     westName.position.set(-room.w/2 + 0.05, 3.5, 0);
     westName.rotation.y = Math.PI / 2;
     scene.add(westName);
+    themeRefs.nameLabels.push(westName);
   }
 
-  scene.add(new THREE.AmbientLight(0xfff5e6, 0.18));
-  scene.add(new THREE.HemisphereLight(0xfff0d8, 0x100806, 0.15));
-  const centerGlow = new THREE.PointLight(0xffe8c4, 0.35, room.w * 0.7, 2);
-  centerGlow.position.set(0, room.h - 0.4, 0);
-  scene.add(centerGlow);
+  lightingRefs.ambient = new THREE.AmbientLight(T.ambientColor, T.ambientIntensity);
+  scene.add(lightingRefs.ambient);
+  lightingRefs.hemi = new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiIntensity);
+  scene.add(lightingRefs.hemi);
+  lightingRefs.centerGlow = new THREE.PointLight(T.centerGlowColor, T.centerGlowIntensity, room.w * 0.7, 2);
+  lightingRefs.centerGlow.position.set(0, room.h - 0.4, 0);
+  scene.add(lightingRefs.centerGlow);
 
   const bulbGeo = new THREE.SphereGeometry(0.06, 8, 8);
-  const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff0d0 });
+  const bulbMat = new THREE.MeshBasicMaterial({ color: T.bulbColor });
   const bulbsPerSide = Math.max(2, Math.ceil(room.w / 6));
   for (let z of [-room.d/2 + 3, room.d/2 - 3]) {
     for (let i = 0; i < bulbsPerSide; i++) {
@@ -934,8 +1269,24 @@ function buildRoom(layout) {
       const bulb = new THREE.Mesh(bulbGeo, bulbMat);
       bulb.position.set(x, room.h - 0.15, z);
       scene.add(bulb);
+      lightingRefs.bulbs.push(bulb);
     }
   }
+
+  // Apply current lighting multiplier and store baseline intensities for live updates
+  applyLightingMultiplier();
+}
+
+// Apply the lighting multiplier to all dynamic lights using their theme-baseline values
+function applyLightingMultiplier() {
+  const T = currentTheme();
+  const m = lightingMultiplier;
+  if (lightingRefs.ambient)    lightingRefs.ambient.intensity    = T.ambientIntensity * m;
+  if (lightingRefs.hemi)       lightingRefs.hemi.intensity       = T.hemiIntensity * m;
+  if (lightingRefs.centerGlow) lightingRefs.centerGlow.intensity = T.centerGlowIntensity * m;
+  lightingRefs.spots.forEach(s => { s.intensity = T.spotIntensity * m; });
+  // Brighten bulb meshes too — though they're MeshBasic so they don't actually emit
+  // light, but visually they should look more lit. We tint toward white as multiplier rises.
 }
 
 function placeAllPaintings(layout) {
@@ -1034,12 +1385,14 @@ function placePainting(art, index, wall, coord) {
 
   const lightZ = baseZ + inwardN * Math.min(2.5, ROOM.d / 4);
   const lightX = baseX + inwardX * Math.min(2.5, ROOM.w / 4);
-  const spot = new THREE.SpotLight(0xfff2dc, 1.6, 8, Math.PI / 6, 0.45, 1.2);
+  const T = currentTheme();
+  const spot = new THREE.SpotLight(T.spotColor, T.spotIntensity * lightingMultiplier, 8, Math.PI / 6, 0.45, 1.2);
   spot.position.set(lightX, ROOM.h - 0.3, lightZ);
   spot.target = new THREE.Object3D();
   spot.target.position.set(baseX + inwardX * 0.025, yCenter, baseZ + inwardN * 0.025);
   scene.add(spot);
   scene.add(spot.target);
+  lightingRefs.spots.push(spot);
 }
 
 function showLoadError(title, body) {
@@ -1052,7 +1405,8 @@ function showLoadError(title, body) {
 function initScene() {
   const container = document.getElementById('canvas-container');
   scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x0a0908, 0.025);
+  const T = currentTheme();
+  scene.fog = new THREE.FogExp2(T.fogColor, T.fogDensity);
   camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 100);
 
   // Default fallback position (center of room, near south wall, facing north)
@@ -1062,12 +1416,53 @@ function initScene() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x0a0908, 1);
+  renderer.setClearColor(T.rendererClear, 1);
   container.appendChild(renderer.domElement);
   raycaster = new THREE.Raycaster();
   window.addEventListener('resize', onResize);
   setupControls();
   animate();
+}
+
+// Live-swap to/from white-cube mode without rebuilding the room from scratch
+function applyTheme() {
+  const T = currentTheme();
+  // Floor texture
+  if (themeRefs.floor) {
+    themeRefs.floor.material.map = makeFloorTexture(T.floorTexture);
+    themeRefs.floor.material.needsUpdate = true;
+  }
+  // Ceiling
+  if (themeRefs.ceiling) {
+    themeRefs.ceiling.material.color.setHex(T.ceiling);
+  }
+  // Walls (all share one material so we mutate via the first wall's material)
+  if (themeRefs.walls.length > 0) {
+    themeRefs.walls[0].material.color.setHex(T.wall);
+    themeRefs.walls[0].material.needsUpdate = true;
+  }
+  // Name labels: in white mode the gold-on-white still reads OK; lower opacity
+  themeRefs.nameLabels.forEach(l => {
+    l.material.opacity = isWhiteCube ? 0.45 : 0.7;
+  });
+  // Fog
+  if (scene && scene.fog) {
+    scene.fog.color.setHex(T.fogColor);
+    scene.fog.density = T.fogDensity;
+  }
+  // Renderer background
+  if (renderer) renderer.setClearColor(T.rendererClear, 1);
+  // Lights baseline colors (intensities also re-applied below)
+  if (lightingRefs.ambient) lightingRefs.ambient.color.setHex(T.ambientColor);
+  if (lightingRefs.hemi) {
+    lightingRefs.hemi.color.setHex(T.hemiSky);
+    lightingRefs.hemi.groundColor.setHex(T.hemiGround);
+  }
+  if (lightingRefs.centerGlow) lightingRefs.centerGlow.color.setHex(T.centerGlowColor);
+  lightingRefs.spots.forEach(s => s.color.setHex(T.spotColor));
+  lightingRefs.bulbs.forEach(b => b.material.color.setHex(T.bulbColor));
+  // Re-apply lighting multiplier (recomputes intensities from new theme baselines)
+  applyLightingMultiplier();
 }
 
 // Call this AFTER paintings are placed so `__firstPaintingPose` exists.
@@ -1249,6 +1644,11 @@ function setupJoystick(container, stick) {
 }
 
 function handleTap(clientX, clientY) {
+  // In soup mode, click/tap throws a can in the look direction
+  if (soupMode) {
+    throwSoupCan();
+    return;
+  }
   mouse.x = (clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(clientY / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
@@ -1301,7 +1701,7 @@ function animate() {
   const modalOpen = document.getElementById('modal').classList.contains('open');
   const otherViewOpen = document.getElementById('grid-view').classList.contains('open')
                       || document.getElementById('slideshow-view').classList.contains('open');
-  if (!hasTouch && !modalOpen && !otherViewOpen) {
+  if (!hasTouch && !modalOpen && !otherViewOpen && !soupMode) {
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const hits = raycaster.intersectObjects(paintingMeshes, false);
     const cross = document.getElementById('crosshair');
@@ -1316,7 +1716,439 @@ function animate() {
     }
   }
 
+  if (soupMode) updateSoup(dt);
+
   renderer.render(scene, camera);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SOUP MODE — Warhol-style soup can throwing minigame
+   ═══════════════════════════════════════════════════════════════════ */
+
+// Build a generic Campbell's-style soup can: red top half + cream label band
+// + red bottom band. No actual logo (trademark). Returns a Group with arm + can.
+function buildSoupArm() {
+  const group = new THREE.Group();
+
+  // Soup can — short cylinder with three colored sections via vertex colors
+  // Easier approach: stack three cylinders for the bands.
+  const canGroup = new THREE.Group();
+  const RAD = 0.04, H = 0.10;
+  // Top red dome (the shoulder)
+  const topMat = new THREE.MeshStandardMaterial({ color: 0xc4302b, roughness: 0.4, metalness: 0.5 });
+  const labelMat = new THREE.MeshStandardMaterial({ color: 0xf4ead3, roughness: 0.5 });
+  const bottomMat = topMat;
+
+  // Single tall cylinder with 3 material groups (top cap, sides, bottom cap)
+  // For simplicity, use 3 stacked cylinders
+  const topGeom = new THREE.CylinderGeometry(RAD, RAD, H * 0.18, 24);
+  const top = new THREE.Mesh(topGeom, topMat);
+  top.position.y = H * 0.41;
+  canGroup.add(top);
+
+  const labelGeom = new THREE.CylinderGeometry(RAD, RAD, H * 0.6, 24);
+  const label = new THREE.Mesh(labelGeom, labelMat);
+  canGroup.add(label);
+
+  // Add a darker red script-like band to evoke the Campbell's stripe (no actual text)
+  const stripeGeom = new THREE.CylinderGeometry(RAD * 1.001, RAD * 1.001, H * 0.07, 24);
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xa12017, roughness: 0.5 });
+  const stripe = new THREE.Mesh(stripeGeom, stripeMat);
+  stripe.position.y = H * 0.05;
+  canGroup.add(stripe);
+
+  const botGeom = new THREE.CylinderGeometry(RAD, RAD, H * 0.18, 24);
+  const bot = new THREE.Mesh(botGeom, bottomMat);
+  bot.position.y = -H * 0.41;
+  canGroup.add(bot);
+
+  // A darker rim at top and bottom to give it tin-can definition
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0x7a1810, roughness: 0.8, metalness: 0.6 });
+  const rimGeom = new THREE.TorusGeometry(RAD * 1.01, 0.004, 6, 24);
+  const topRim = new THREE.Mesh(rimGeom, rimMat);
+  topRim.rotation.x = Math.PI / 2;
+  topRim.position.y = H * 0.5;
+  canGroup.add(topRim);
+  const botRim = new THREE.Mesh(rimGeom, rimMat);
+  botRim.rotation.x = Math.PI / 2;
+  botRim.position.y = -H * 0.5;
+  canGroup.add(botRim);
+
+  // Tilt the can so the label faces the camera (it's held in the right hand)
+  canGroup.rotation.z = -0.3;
+  canGroup.rotation.x = -0.15;
+  canGroup.position.set(0.04, -0.02, 0);
+  group.add(canGroup);
+
+  // Arm/hand — a simple sleeve cylinder leading off-screen
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.9 });
+  const armGeom = new THREE.CylinderGeometry(0.05, 0.045, 0.5, 12);
+  const arm = new THREE.Mesh(armGeom, armMat);
+  arm.rotation.z = Math.PI / 2.4;  // diagonal sleeve
+  arm.position.set(0.20, -0.18, 0.05);
+  group.add(arm);
+
+  // A tiny "hand" — flesh-toned sphere where the wrist meets the can
+  const handMat = new THREE.MeshStandardMaterial({ color: 0xd4a890, roughness: 0.7 });
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), handMat);
+  hand.position.set(0.085, -0.08, 0.02);
+  hand.scale.set(1.0, 0.85, 1.1);
+  group.add(hand);
+
+  // Position the whole arm off to the right and below center (FPS hand position)
+  group.position.set(0.30, -0.28, -0.55);
+  return group;
+}
+
+// Make a single splat texture (procedurally drawn tomato-soup blob)
+function makeSplatTexture(seed) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  // Transparent background
+  ctx.clearRect(0, 0, 256, 256);
+  // Simple seeded RNG
+  let s = seed * 9973;
+  const rand = () => { s = (s * 1664525 + 1013904223) >>> 0; return (s & 0xfffffff) / 0xfffffff; };
+
+  // Main blob — irregular blob shape via radial random points
+  ctx.fillStyle = 'rgba(190, 50, 30, 0.92)';
+  ctx.beginPath();
+  const cx = 128, cy = 128;
+  const points = 18;
+  for (let i = 0; i < points; i++) {
+    const a = (i / points) * Math.PI * 2;
+    const r = 50 + rand() * 50;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Darker red center
+  ctx.fillStyle = 'rgba(140, 24, 14, 0.7)';
+  ctx.beginPath();
+  for (let i = 0; i < points; i++) {
+    const a = (i / points) * Math.PI * 2;
+    const r = 22 + rand() * 22;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Cream/orange specks (chunky soup bits)
+  for (let i = 0; i < 20; i++) {
+    const a = rand() * Math.PI * 2;
+    const r = rand() * 60;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    ctx.fillStyle = rand() > 0.5 ? 'rgba(230, 180, 90, 0.85)' : 'rgba(245, 220, 170, 0.7)';
+    ctx.beginPath();
+    ctx.arc(x, y, 2 + rand() * 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Outlying droplets
+  for (let i = 0; i < 12; i++) {
+    const a = rand() * Math.PI * 2;
+    const r = 70 + rand() * 50;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    ctx.fillStyle = 'rgba(170, 40, 24, 0.85)';
+    ctx.beginPath();
+    ctx.arc(x, y, 3 + rand() * 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Make a drip-streak texture (vertical orange/red streak with droplet at bottom)
+function makeDripTexture() {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 32, 256);
+  // Tapered streak
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0,    'rgba(190, 50, 30, 0.0)');
+  grad.addColorStop(0.15, 'rgba(190, 50, 30, 0.85)');
+  grad.addColorStop(0.85, 'rgba(160, 36, 20, 0.85)');
+  grad.addColorStop(1,    'rgba(140, 24, 14, 0.6)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  // Slight wobble
+  ctx.moveTo(13, 0);
+  ctx.bezierCurveTo(11, 80, 17, 140, 14, 220);
+  ctx.lineTo(20, 220);
+  ctx.bezierCurveTo(17, 140, 23, 80, 19, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Droplet at the bottom
+  ctx.fillStyle = 'rgba(170, 40, 24, 0.95)';
+  ctx.beginPath();
+  ctx.arc(16.5, 240, 8, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Throw a soup can in the camera's forward direction
+function throwSoupCan() {
+  if (!soupMode) return;
+  // Make a small "bob" animation of the held can
+  if (soupState.arm) {
+    const c = soupState.arm.children[0];
+    if (c) {
+      c.position.y = -0.02 - 0.04;
+      setTimeout(() => { if (c) c.position.y = -0.02; }, 130);
+    }
+  }
+  // Spawn a flying soup can
+  const can = buildSoupArm().children[0].clone(true);
+  // The arm-can is rotated for hand-hold; reset for projectile
+  can.rotation.set(0, 0, 0);
+  can.scale.set(2.2, 2.2, 2.2); // bigger so it reads in the air
+  // Start position: roughly where the held can is, in world coords
+  const startLocal = new THREE.Vector3(0.30, -0.20, -0.45);
+  startLocal.applyMatrix4(camera.matrixWorld);
+  can.position.copy(startLocal);
+  scene.add(can);
+
+  // Velocity: forward + slight up
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0);
+  const vel = forward.clone().multiplyScalar(13.0).add(up.clone().multiplyScalar(1.4));
+
+  soupState.projectiles.push({
+    mesh: can,
+    vel: vel,
+    angVel: { x: 8 + Math.random() * 6, y: 10 + Math.random() * 4, z: 4 + Math.random() * 4 },
+    age: 0,
+    prevPos: can.position.clone(),
+  });
+}
+
+function enterSoupMode() {
+  if (soupState.enabled) return;
+  soupState.enabled = true;
+  soupMode = true;
+  // Build the held arm+can and attach to camera so it follows
+  soupState.arm = buildSoupArm();
+  camera.add(soupState.arm);
+  if (!camera.parent) scene.add(camera); // camera must be in scene graph for children to render
+  document.body.classList.add('soup-mode');
+  // Show hint briefly
+  const hint = document.getElementById('soup-hint');
+  if (hint) {
+    hint.classList.add('show');
+    setTimeout(() => hint.classList.remove('show'), 2200);
+  }
+  document.getElementById('soup-controls').style.display = '';
+  updateClearSoupButton();
+}
+
+function exitSoupMode() {
+  if (!soupState.enabled) return;
+  soupState.enabled = false;
+  soupMode = false;
+  if (soupState.arm) {
+    camera.remove(soupState.arm);
+    disposeMesh(soupState.arm);
+    soupState.arm = null;
+  }
+  document.body.classList.remove('soup-mode');
+  document.getElementById('soup-controls').style.display = 'none';
+}
+
+function clearSoupSplats() {
+  soupState.splats.forEach(s => {
+    scene.remove(s.mesh);
+    disposeMesh(s.mesh);
+    s.drips.forEach(d => { scene.remove(d.mesh); disposeMesh(d.mesh); });
+  });
+  soupState.splats = [];
+  // Also clear any in-flight projectiles
+  soupState.projectiles.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
+  soupState.projectiles = [];
+  updateClearSoupButton();
+}
+
+function updateClearSoupButton() {
+  const btn = document.getElementById('btn-clear-soup');
+  if (btn) btn.disabled = soupState.splats.length === 0;
+}
+
+// Recursively dispose geometries/materials/textures on a mesh tree
+function disposeMesh(obj) {
+  obj.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(m => {
+        if (m.map) m.map.dispose();
+        m.dispose();
+      });
+    }
+  });
+}
+
+// Per-frame update: physics for projectiles, drip animation for splats
+const SOUP_GRAVITY = 4.5;   // Reduced from realistic gravity for better game feel
+function updateSoup(dt) {
+  // Update projectiles
+  for (let i = soupState.projectiles.length - 1; i >= 0; i--) {
+    const p = soupState.projectiles[i];
+    p.age += dt;
+    p.prevPos.copy(p.mesh.position);
+    // Integrate velocity (gravity)
+    p.vel.y -= SOUP_GRAVITY * dt;
+    p.mesh.position.x += p.vel.x * dt;
+    p.mesh.position.y += p.vel.y * dt;
+    p.mesh.position.z += p.vel.z * dt;
+    // Spin
+    p.mesh.rotation.x += p.angVel.x * dt;
+    p.mesh.rotation.y += p.angVel.y * dt;
+    p.mesh.rotation.z += p.angVel.z * dt;
+
+    // Collision: ray from prevPos to current position; check against paintings + walls
+    const segDir = p.mesh.position.clone().sub(p.prevPos);
+    const segLen = segDir.length();
+    if (segLen < 0.0001) continue;
+    segDir.normalize();
+    const ray = new THREE.Raycaster(p.prevPos.clone(), segDir, 0, segLen);
+    const targets = [...paintingMeshes, ...themeRefs.walls];
+    const hits = ray.intersectObjects(targets, false);
+    if (hits.length > 0) {
+      spawnSplat(hits[0]);
+      scene.remove(p.mesh);
+      disposeMesh(p.mesh);
+      soupState.projectiles.splice(i, 1);
+      continue;
+    }
+    // Off-the-floor / age check
+    if (p.mesh.position.y < -2 || p.age > 6) {
+      scene.remove(p.mesh);
+      disposeMesh(p.mesh);
+      soupState.projectiles.splice(i, 1);
+    }
+  }
+
+  // Update drip animations
+  const now = performance.now() / 1000;
+  for (const splat of soupState.splats) {
+    for (const d of splat.drips) {
+      const t = Math.min(1, (now - d.startTime) / d.duration);
+      // Ease out — fast at start, slowing down
+      const eased = 1 - Math.pow(1 - t, 3);
+      const length = d.targetLength * eased;
+      d.mesh.scale.y = length / 0.3;  // 0.3 is the geometry's base height
+      d.mesh.position.copy(d.startPos).addScaledVector(d.downDir, length / 2);
+    }
+  }
+}
+
+function spawnSplat(hit) {
+  const point = hit.point;
+  const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+  // Splat plane — sized to a generous splash
+  const splatSize = 0.50 + Math.random() * 0.20;
+  const tex = makeSplatTexture(Date.now() + soupState.splats.length);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const geom = new THREE.PlaneGeometry(splatSize, splatSize);
+  const mesh = new THREE.Mesh(geom, mat);
+  // Position slightly off the surface along the normal to avoid z-fighting
+  mesh.position.copy(point).addScaledVector(normal, 0.005);
+  // Orient: face -normal (toward viewer / outward from surface)
+  const lookTarget = point.clone().add(normal);
+  mesh.lookAt(lookTarget);
+  // Random in-plane rotation for variety
+  mesh.rotateZ(Math.random() * Math.PI * 2);
+  scene.add(mesh);
+
+  // Drips — spawn 2-4 thin streaks below the splat
+  const drips = [];
+  const dripCount = 2 + Math.floor(Math.random() * 3);
+  // The "down" direction along the surface plane, projected
+  const worldDown = new THREE.Vector3(0, -1, 0);
+  // Projected down on surface = down minus its component along normal
+  const downOnSurface = worldDown.clone().sub(normal.clone().multiplyScalar(worldDown.dot(normal))).normalize();
+  // Right vector along the surface (perpendicular to both normal and downOnSurface)
+  const rightOnSurface = new THREE.Vector3().crossVectors(normal, downOnSurface).normalize();
+
+  for (let i = 0; i < dripCount; i++) {
+    const dripWidth = 0.025 + Math.random() * 0.020;
+    const dripGeom = new THREE.PlaneGeometry(dripWidth, 0.3);
+    const dripMat = new THREE.MeshBasicMaterial({
+      map: makeDripTexture(),
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    const dripMesh = new THREE.Mesh(dripGeom, dripMat);
+
+    // Random offset along right within the splat radius
+    const sideOffset = (Math.random() - 0.5) * splatSize * 0.65;
+    const startPos = point.clone()
+      .addScaledVector(normal, 0.005)
+      .addScaledVector(rightOnSurface, sideOffset)
+      .addScaledVector(downOnSurface, splatSize * 0.30);
+
+    // Orient drip: its local Y aligns with downOnSurface, and the plane faces normal
+    const m = new THREE.Matrix4().makeBasis(
+      rightOnSurface,
+      downOnSurface.clone().negate(),  // so geometry's +Y goes upward in world... wait
+      normal
+    );
+    // Actually: plane geom by default lies in XY with +Y up. We want +Y to go in -downOnSurface direction
+    // (so as scale.y grows, the visible streak extends downward as desired since position will move).
+    // Easier: just use matrix to align the plane normal with surface normal and y-axis with downOnSurface.
+    dripMesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+      rightOnSurface,
+      downOnSurface.clone().negate(),
+      normal
+    ));
+
+    dripMesh.position.copy(startPos);
+    dripMesh.scale.y = 0.001;  // start collapsed
+    scene.add(dripMesh);
+
+    drips.push({
+      mesh: dripMesh,
+      startPos: startPos.clone(),
+      downDir: downOnSurface.clone(),
+      targetLength: 0.25 + Math.random() * 0.55,
+      duration: 1.2 + Math.random() * 1.6,
+      startTime: performance.now() / 1000,
+    });
+  }
+
+  const splat = { mesh, drips };
+  soupState.splats.push(splat);
+
+  // Cap at maxSplats — remove oldest
+  while (soupState.splats.length > soupState.maxSplats) {
+    const old = soupState.splats.shift();
+    scene.remove(old.mesh);
+    disposeMesh(old.mesh);
+    old.drips.forEach(d => { scene.remove(d.mesh); disposeMesh(d.mesh); });
+  }
+  updateClearSoupButton();
 }
 
 /* ─────── Modal ─────── */
@@ -1461,6 +2293,52 @@ function setView(mode) {
 document.getElementById('btn-3d').addEventListener('click', () => setView('3d'));
 document.getElementById('btn-slideshow').addEventListener('click', () => setView('slideshow'));
 document.getElementById('btn-grid').addEventListener('click', () => setView('grid'));
+
+/* ─────── Settings panel ─────── */
+function setupSettingsPanel() {
+  const btnSettings = document.getElementById('btn-settings');
+  const panel = document.getElementById('settings-panel');
+  const slLighting = document.getElementById('sl-lighting');
+  const valLighting = document.getElementById('val-lighting');
+  const tgWhite = document.getElementById('tg-white');
+  const tgSoup = document.getElementById('tg-soup');
+  const btnClearSoup = document.getElementById('btn-clear-soup');
+
+  btnSettings.addEventListener('click', () => {
+    panel.classList.toggle('show');
+    btnSettings.classList.toggle('active');
+  });
+
+  // Close panel when clicking outside it (but not when clicking the gear)
+  document.addEventListener('mousedown', (e) => {
+    if (!panel.classList.contains('show')) return;
+    if (panel.contains(e.target) || btnSettings.contains(e.target)) return;
+    panel.classList.remove('show');
+    btnSettings.classList.remove('active');
+  });
+
+  slLighting.addEventListener('input', () => {
+    lightingMultiplier = parseInt(slLighting.value, 10) / 100;
+    valLighting.textContent = slLighting.value + '%';
+    applyLightingMultiplier();
+  });
+
+  tgWhite.addEventListener('click', () => {
+    isWhiteCube = !isWhiteCube;
+    tgWhite.classList.toggle('on', isWhiteCube);
+    applyTheme();
+  });
+
+  tgSoup.addEventListener('click', () => {
+    const turningOn = !soupState.enabled;
+    tgSoup.classList.toggle('on', turningOn);
+    if (turningOn) enterSoupMode();
+    else exitSoupMode();
+  });
+
+  btnClearSoup.addEventListener('click', clearSoupSplats);
+}
+setupSettingsPanel();
 
 /* ─────── Entry ─────── */
 function enterGallery() {
