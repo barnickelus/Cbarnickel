@@ -712,6 +712,44 @@
     color: var(--ink-dim);
     margin-top: 8px;
   }
+
+  /* Weapon toolbar — vertical icon stack under the settings gear */
+  .weapon-toolbar {
+    position: fixed;
+    top: 78px;
+    right: 32px;
+    z-index: 48;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: auto;
+  }
+  .weapon-toolbar.show { display: flex; }
+  .weapon-btn {
+    background: rgba(10,9,8,0.55);
+    border: 1px solid var(--ink-faint);
+    color: var(--ink);
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    font-size: 18px;
+    line-height: 1;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .weapon-btn:hover {
+    border-color: var(--gold);
+    transform: scale(1.05);
+  }
+  .weapon-btn.active {
+    border-color: var(--gold);
+    background: rgba(201, 169, 110, 0.18);
+    box-shadow: 0 0 0 1px var(--gold) inset;
+  }
 </style>
 </head>
 <body>
@@ -749,12 +787,19 @@
     <div class="toggle-switch" id="tg-white"></div>
   </div>
   <div class="row divider" style="display:flex; justify-content:space-between; align-items:center;">
-    <label style="margin-bottom:0; flex:1;">Soup mode 🥫</label>
+    <label style="margin-bottom:0; flex:1;">Destruction mode</label>
     <div class="toggle-switch" id="tg-soup"></div>
   </div>
   <div class="row" id="soup-controls" style="display:none;">
-    <button class="clear-btn" id="btn-clear-soup" disabled>Clear splats</button>
+    <button class="clear-btn" id="btn-clear-soup" disabled>Clear damage</button>
   </div>
+</div>
+
+<!-- Weapon toolbar — vertical stack under the settings gear, only visible when destruction mode is on -->
+<div class="weapon-toolbar" id="weapon-toolbar">
+  <button class="weapon-btn active" data-weapon="soup" title="Soup can">🥫</button>
+  <button class="weapon-btn" data-weapon="gun" title="Golden gun">🔫</button>
+  <button class="weapon-btn" data-weapon="lighter" title="Lighter">🔥</button>
 </div>
 
 <div class="soup-hint" id="soup-hint">
@@ -893,17 +938,28 @@ const themeRefs = {
 // Lighting & theme settings (persisted to globals so we can re-apply on rebuild)
 let lightingMultiplier = 1.0;       // 0..3
 let isWhiteCube = false;
-let soupMode = false;
 
-// Soup mode state
-const soupState = {
-  enabled: false,
-  arm: null,           // arm+can mesh attached to camera
-  projectiles: [],     // active flying cans
-  splats: [],          // {mesh, drips: []} entries on walls/paintings
-  maxSplats: 50,
-  hint: null,
+// Weapon system — destruction toolkit. Master toggle is soupMode (kept name
+// for backward-compat with settings panel). When ON, weapon icons appear and
+// activeWeapon picks which weapon is held. Click/tap fires the active weapon.
+let soupMode = false;
+let activeWeapon = 'soup';   // 'soup' | 'gun' | 'lighter'
+
+// Shared destruction state — splats, bullet holes, fires (ignition points)
+const destruction = {
+  arm: null,                // currently-held weapon mesh, attached to camera
+  projectiles: [],          // soup cans in flight
+  splats: [],               // {mesh, drips: []} — soup splats on surfaces
+  holes: [],                // {mesh} — bullet holes on surfaces
+  fires: [],                // {mesh, root, painting?, age, intensity, ...} — burning ignitions
+  flashMesh: null,          // muzzle flash mesh (re-used)
+  flashTimer: 0,            // seconds remaining to show muzzle flash
+  recoilUntil: 0,           // performance.now() time when recoil ends
+  maxDecals: 80,            // total cap across splats+holes+fires
 };
+
+// For backward-compat with old soupState references in code below
+const soupState = destruction;
 
 window.__joyVec = { x: 0, y: 0 };
 
@@ -1644,9 +1700,9 @@ function setupJoystick(container, stick) {
 }
 
 function handleTap(clientX, clientY) {
-  // In soup mode, click/tap throws a can in the look direction
+  // In soup/destruction mode, click/tap fires the active weapon
   if (soupMode) {
-    throwSoupCan();
+    fireActiveWeapon();
     return;
   }
   mouse.x = (clientX / window.innerWidth) * 2 - 1;
@@ -1716,7 +1772,7 @@ function animate() {
     }
   }
 
-  if (soupMode) updateSoup(dt);
+  if (soupMode) updateDestruction(dt);
 
   renderer.render(scene, camera);
 }
@@ -1903,8 +1959,8 @@ function makeDripTexture() {
 function throwSoupCan() {
   if (!soupMode) return;
   // Make a small "bob" animation of the held can
-  if (soupState.arm) {
-    const c = soupState.arm.children[0];
+  if (destruction.arm) {
+    const c = destruction.arm.children[0];
     if (c) {
       c.position.y = -0.02 - 0.04;
       setTimeout(() => { if (c) c.position.y = -0.02; }, 130);
@@ -1912,21 +1968,18 @@ function throwSoupCan() {
   }
   // Spawn a flying soup can
   const can = buildSoupArm().children[0].clone(true);
-  // The arm-can is rotated for hand-hold; reset for projectile
   can.rotation.set(0, 0, 0);
-  can.scale.set(2.2, 2.2, 2.2); // bigger so it reads in the air
-  // Start position: roughly where the held can is, in world coords
+  can.scale.set(2.2, 2.2, 2.2);
   const startLocal = new THREE.Vector3(0.30, -0.20, -0.45);
   startLocal.applyMatrix4(camera.matrixWorld);
   can.position.copy(startLocal);
   scene.add(can);
 
-  // Velocity: forward + slight up
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   const up = new THREE.Vector3(0, 1, 0);
   const vel = forward.clone().multiplyScalar(13.0).add(up.clone().multiplyScalar(1.4));
 
-  soupState.projectiles.push({
+  destruction.projectiles.push({
     mesh: can,
     vel: vel,
     angVel: { x: 8 + Math.random() * 6, y: 10 + Math.random() * 4, z: 4 + Math.random() * 4 },
@@ -1936,17 +1989,19 @@ function throwSoupCan() {
 }
 
 function enterSoupMode() {
-  if (soupState.enabled) return;
-  soupState.enabled = true;
+  if (soupMode) return;
   soupMode = true;
-  // Build the held arm+can and attach to camera so it follows
-  soupState.arm = buildSoupArm();
-  camera.add(soupState.arm);
+  // Equip whatever weapon is active
+  equipWeapon(activeWeapon);
   if (!camera.parent) scene.add(camera); // camera must be in scene graph for children to render
   document.body.classList.add('soup-mode');
+  // Show the weapons toolbar and the Clear button area
+  const toolbar = document.getElementById('weapon-toolbar');
+  if (toolbar) toolbar.classList.add('show');
   // Show hint briefly
   const hint = document.getElementById('soup-hint');
   if (hint) {
+    updateSoupHintForWeapon();
     hint.classList.add('show');
     setTimeout(() => hint.classList.remove('show'), 2200);
   }
@@ -1955,34 +2010,94 @@ function enterSoupMode() {
 }
 
 function exitSoupMode() {
-  if (!soupState.enabled) return;
-  soupState.enabled = false;
+  if (!soupMode) return;
   soupMode = false;
-  if (soupState.arm) {
-    camera.remove(soupState.arm);
-    disposeMesh(soupState.arm);
-    soupState.arm = null;
-  }
+  unequipCurrentWeapon();
   document.body.classList.remove('soup-mode');
+  const toolbar = document.getElementById('weapon-toolbar');
+  if (toolbar) toolbar.classList.remove('show');
   document.getElementById('soup-controls').style.display = 'none';
 }
 
+// Equip a specific weapon (swap held mesh)
+function equipWeapon(weaponName) {
+  unequipCurrentWeapon();
+  activeWeapon = weaponName;
+  let arm;
+  if (weaponName === 'gun')          arm = buildGunArm();
+  else if (weaponName === 'lighter') arm = buildLighterArm();
+  else                                arm = buildSoupArm();
+  destruction.arm = arm;
+  camera.add(arm);
+  // Update toolbar active state
+  document.querySelectorAll('.weapon-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.weapon === weaponName);
+  });
+  updateSoupHintForWeapon();
+}
+
+function unequipCurrentWeapon() {
+  if (destruction.arm) {
+    camera.remove(destruction.arm);
+    disposeMesh(destruction.arm);
+    destruction.arm = null;
+  }
+}
+
+function updateSoupHintForWeapon() {
+  const hint = document.getElementById('soup-hint');
+  if (!hint) return;
+  const small = hint.querySelector('.small');
+  if (activeWeapon === 'soup') {
+    hint.firstChild.textContent = 'Click to throw';
+    if (small) small.textContent = 'Tap a painting to splat';
+  } else if (activeWeapon === 'gun') {
+    hint.firstChild.textContent = 'Click to fire';
+    if (small) small.textContent = 'The Golden Gun — one-shot kill';
+  } else if (activeWeapon === 'lighter') {
+    hint.firstChild.textContent = 'Click to ignite';
+    if (small) small.textContent = 'Get close — lighter has short range';
+  }
+}
+
+// Dispatch fire based on active weapon
+function fireActiveWeapon() {
+  if (activeWeapon === 'gun')          fireGun();
+  else if (activeWeapon === 'lighter') fireLighter();
+  else                                  throwSoupCan();
+}
+
 function clearSoupSplats() {
-  soupState.splats.forEach(s => {
+  destruction.splats.forEach(s => {
     scene.remove(s.mesh);
     disposeMesh(s.mesh);
     s.drips.forEach(d => { scene.remove(d.mesh); disposeMesh(d.mesh); });
   });
-  soupState.splats = [];
+  destruction.splats = [];
+  destruction.holes.forEach(h => { scene.remove(h.mesh); disposeMesh(h.mesh); });
+  destruction.holes = [];
+  // Restore any fire-darkened paintings
+  destruction.fires.forEach(f => {
+    if (f.painting && f.originalColor) {
+      f.painting.material.color.copy(f.originalColor);
+      f.painting.material.needsUpdate = true;
+    }
+    scene.remove(f.root);
+    disposeMesh(f.root);
+  });
+  destruction.fires = [];
   // Also clear any in-flight projectiles
-  soupState.projectiles.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
-  soupState.projectiles = [];
+  destruction.projectiles.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
+  destruction.projectiles = [];
   updateClearSoupButton();
 }
 
 function updateClearSoupButton() {
   const btn = document.getElementById('btn-clear-soup');
-  if (btn) btn.disabled = soupState.splats.length === 0;
+  if (!btn) return;
+  const total = destruction.splats.length + destruction.holes.length + destruction.fires.length;
+  btn.disabled = total === 0;
+  btn.textContent = total === 0 ? 'Clear damage' : `Clear damage (${total})`;
 }
 
 // Recursively dispose geometries/materials/textures on a mesh tree
@@ -1999,25 +2114,30 @@ function disposeMesh(obj) {
   });
 }
 
-// Per-frame update: physics for projectiles, drip animation for splats
-const SOUP_GRAVITY = 4.5;   // Reduced from realistic gravity for better game feel
-function updateSoup(dt) {
-  // Update projectiles
-  for (let i = soupState.projectiles.length - 1; i >= 0; i--) {
-    const p = soupState.projectiles[i];
+// Master per-frame update — called from animate() when soupMode is on
+function updateDestruction(dt) {
+  updateProjectiles(dt);
+  updateDrips();
+  updateMuzzleFlash(dt);
+  updateRecoil();
+  updateFires(dt);
+}
+
+// Per-frame: physics for soup-can projectiles
+const SOUP_GRAVITY = 4.5;
+function updateProjectiles(dt) {
+  for (let i = destruction.projectiles.length - 1; i >= 0; i--) {
+    const p = destruction.projectiles[i];
     p.age += dt;
     p.prevPos.copy(p.mesh.position);
-    // Integrate velocity (gravity)
     p.vel.y -= SOUP_GRAVITY * dt;
     p.mesh.position.x += p.vel.x * dt;
     p.mesh.position.y += p.vel.y * dt;
     p.mesh.position.z += p.vel.z * dt;
-    // Spin
     p.mesh.rotation.x += p.angVel.x * dt;
     p.mesh.rotation.y += p.angVel.y * dt;
     p.mesh.rotation.z += p.angVel.z * dt;
 
-    // Collision: ray from prevPos to current position; check against paintings + walls
     const segDir = p.mesh.position.clone().sub(p.prevPos);
     const segLen = segDir.length();
     if (segLen < 0.0001) continue;
@@ -2029,26 +2149,26 @@ function updateSoup(dt) {
       spawnSplat(hits[0]);
       scene.remove(p.mesh);
       disposeMesh(p.mesh);
-      soupState.projectiles.splice(i, 1);
+      destruction.projectiles.splice(i, 1);
       continue;
     }
-    // Off-the-floor / age check
     if (p.mesh.position.y < -2 || p.age > 6) {
       scene.remove(p.mesh);
       disposeMesh(p.mesh);
-      soupState.projectiles.splice(i, 1);
+      destruction.projectiles.splice(i, 1);
     }
   }
+}
 
-  // Update drip animations
+// Per-frame: animate drip streaks growing downward from each splat
+function updateDrips() {
   const now = performance.now() / 1000;
-  for (const splat of soupState.splats) {
+  for (const splat of destruction.splats) {
     for (const d of splat.drips) {
       const t = Math.min(1, (now - d.startTime) / d.duration);
-      // Ease out — fast at start, slowing down
       const eased = 1 - Math.pow(1 - t, 3);
       const length = d.targetLength * eased;
-      d.mesh.scale.y = length / 0.3;  // 0.3 is the geometry's base height
+      d.mesh.scale.y = length / 0.3;
       d.mesh.position.copy(d.startPos).addScaledVector(d.downDir, length / 2);
     }
   }
@@ -2057,9 +2177,8 @@ function updateSoup(dt) {
 function spawnSplat(hit) {
   const point = hit.point;
   const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
-  // Splat plane — sized to a generous splash
   const splatSize = 0.50 + Math.random() * 0.20;
-  const tex = makeSplatTexture(Date.now() + soupState.splats.length);
+  const tex = makeSplatTexture(Date.now() + destruction.splats.length);
   const mat = new THREE.MeshBasicMaterial({
     map: tex,
     transparent: true,
@@ -2139,16 +2258,564 @@ function spawnSplat(hit) {
   }
 
   const splat = { mesh, drips };
-  soupState.splats.push(splat);
+  destruction.splats.push(splat);
 
-  // Cap at maxSplats — remove oldest
-  while (soupState.splats.length > soupState.maxSplats) {
-    const old = soupState.splats.shift();
+  // Cap total decals — remove oldest splat
+  while (destruction.splats.length + destruction.holes.length + destruction.fires.length > destruction.maxDecals) {
+    if (destruction.splats.length === 0) break;
+    const old = destruction.splats.shift();
     scene.remove(old.mesh);
     disposeMesh(old.mesh);
     old.drips.forEach(d => { scene.remove(d.mesh); disposeMesh(d.mesh); });
   }
   updateClearSoupButton();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   GOLDEN GUN — N64 GoldenEye-style pistol
+   ═══════════════════════════════════════════════════════════════════ */
+
+function buildGunArm() {
+  const group = new THREE.Group();
+
+  // Gold metallic material — high metalness, low roughness for shine
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: 0xd4af37, roughness: 0.25, metalness: 0.95
+  });
+  const darkGoldMat = new THREE.MeshStandardMaterial({
+    color: 0x9c7e1f, roughness: 0.4, metalness: 0.85
+  });
+  const blackMat = new THREE.MeshStandardMaterial({
+    color: 0x121212, roughness: 0.6, metalness: 0.3
+  });
+
+  // Build the gun pieces — a chunky low-poly PP7-style silhouette
+  const gunGroup = new THREE.Group();
+
+  // Slide / top of gun (long box)
+  const slide = new THREE.Mesh(
+    new THREE.BoxGeometry(0.045, 0.05, 0.20),
+    goldMat
+  );
+  slide.position.set(0, 0, -0.02);
+  gunGroup.add(slide);
+
+  // Barrel — round cylinder protruding from the front
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.018, 0.10, 12),
+    goldMat
+  );
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0, -0.16);
+  gunGroup.add(barrel);
+
+  // Barrel tip (slightly darker for muzzle definition)
+  const tip = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.020, 0.020, 0.012, 12),
+    darkGoldMat
+  );
+  tip.rotation.x = Math.PI / 2;
+  tip.position.set(0, 0, -0.215);
+  gunGroup.add(tip);
+
+  // Grip — angled box hanging below the slide
+  const grip = new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, 0.11, 0.06),
+    goldMat
+  );
+  grip.rotation.x = -0.18;  // slight grip angle
+  grip.position.set(0, -0.075, 0.03);
+  gunGroup.add(grip);
+
+  // Trigger guard — small loop (ring-ish)
+  const guard = new THREE.Mesh(
+    new THREE.TorusGeometry(0.018, 0.005, 6, 16, Math.PI),
+    darkGoldMat
+  );
+  guard.rotation.z = Math.PI;
+  guard.position.set(0, -0.030, -0.005);
+  gunGroup.add(guard);
+
+  // Trigger — tiny dark piece
+  const trigger = new THREE.Mesh(
+    new THREE.BoxGeometry(0.005, 0.018, 0.005),
+    blackMat
+  );
+  trigger.position.set(0, -0.030, -0.008);
+  gunGroup.add(trigger);
+
+  // Hammer (back of slide)
+  const hammer = new THREE.Mesh(
+    new THREE.BoxGeometry(0.020, 0.022, 0.012),
+    darkGoldMat
+  );
+  hammer.position.set(0, 0.026, 0.075);
+  gunGroup.add(hammer);
+
+  // Tilt the gun like a held pistol — pointed slightly inward
+  gunGroup.rotation.y = -0.08;
+  gunGroup.position.set(-0.015, 0, 0);
+  group.add(gunGroup);
+
+  // Hand wrapped around the grip
+  const handMat = new THREE.MeshStandardMaterial({ color: 0xd4a890, roughness: 0.7 });
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), handMat);
+  hand.position.set(0.005, -0.075, 0.04);
+  hand.scale.set(1.0, 0.9, 1.1);
+  group.add(hand);
+
+  // Sleeve / arm leading off-screen below
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.9 });
+  const arm = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.045, 0.4, 12),
+    armMat
+  );
+  arm.rotation.z = Math.PI / 2.6;
+  arm.rotation.x = -0.4;
+  arm.position.set(0.16, -0.20, 0.10);
+  group.add(arm);
+
+  // Hidden muzzle flash plane (shown briefly on each shot via updateMuzzleFlash)
+  const flashTex = makeMuzzleFlashTexture();
+  const flashMat = new THREE.MeshBasicMaterial({
+    map: flashTex,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const flash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.18), flashMat);
+  flash.position.set(0, 0, -0.28);  // just past the barrel tip
+  flash.visible = false;
+  gunGroup.add(flash);
+  destruction.flashMesh = flash;
+
+  // Position the whole arm in the lower-right FPS slot
+  group.position.set(0.30, -0.30, -0.50);
+  return group;
+}
+
+// Procedural muzzle flash texture — bright orange star-burst
+function makeMuzzleFlashTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 256, 256);
+  // Radial gradient — bright white center fading to orange
+  const grad = ctx.createRadialGradient(128, 128, 4, 128, 128, 110);
+  grad.addColorStop(0,    'rgba(255, 255, 240, 1.0)');
+  grad.addColorStop(0.15, 'rgba(255, 230, 140, 0.95)');
+  grad.addColorStop(0.45, 'rgba(255, 150, 40, 0.7)');
+  grad.addColorStop(0.85, 'rgba(180, 50, 10, 0.2)');
+  grad.addColorStop(1,    'rgba(80, 20, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(128, 128, 110, 0, Math.PI * 2);
+  ctx.fill();
+  // Asymmetric "spike" rays for the burst look
+  ctx.fillStyle = 'rgba(255, 230, 160, 0.9)';
+  for (let i = 0; i < 5; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const length = 80 + Math.random() * 40;
+    const width = 8 + Math.random() * 8;
+    ctx.save();
+    ctx.translate(128, 128);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -width);
+    ctx.lineTo(length, 0);
+    ctx.lineTo(0, width);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Bullet-hole texture — small dark hole with cracked rim
+function makeBulletHoleTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 128, 128);
+  // Cracked rim — dark gray ring with little ticks
+  const rimGrad = ctx.createRadialGradient(64, 64, 18, 64, 64, 38);
+  rimGrad.addColorStop(0, 'rgba(40, 25, 18, 0.0)');
+  rimGrad.addColorStop(0.4, 'rgba(40, 25, 18, 0.6)');
+  rimGrad.addColorStop(1, 'rgba(20, 12, 8, 0.0)');
+  ctx.fillStyle = rimGrad;
+  ctx.beginPath();
+  ctx.arc(64, 64, 38, 0, Math.PI * 2);
+  ctx.fill();
+  // Crack lines
+  ctx.strokeStyle = 'rgba(20, 12, 8, 0.55)';
+  ctx.lineWidth = 1.3;
+  for (let i = 0; i < 6; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r1 = 14 + Math.random() * 4;
+    const r2 = 26 + Math.random() * 12;
+    ctx.beginPath();
+    ctx.moveTo(64 + Math.cos(a) * r1, 64 + Math.sin(a) * r1);
+    ctx.lineTo(64 + Math.cos(a) * r2, 64 + Math.sin(a) * r2);
+    ctx.stroke();
+  }
+  // Solid black hole
+  ctx.fillStyle = 'rgba(8, 5, 4, 0.95)';
+  ctx.beginPath();
+  ctx.arc(64, 64, 14, 0, Math.PI * 2);
+  ctx.fill();
+  // Inner darker spot
+  ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+  ctx.beginPath();
+  ctx.arc(64, 64, 8, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function fireGun() {
+  if (!soupMode || activeWeapon !== 'gun') return;
+  // Show muzzle flash for ~80ms
+  if (destruction.flashMesh) {
+    destruction.flashMesh.visible = true;
+    destruction.flashMesh.scale.set(0.8 + Math.random() * 0.5, 0.8 + Math.random() * 0.5, 1);
+    destruction.flashMesh.rotation.z = Math.random() * Math.PI * 2;
+    destruction.flashTimer = 0.08;
+  }
+  // Recoil — kick the gun back & up
+  destruction.recoilUntil = performance.now() + 100;
+
+  // Raycast from camera center
+  const ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const targets = [...paintingMeshes, ...themeRefs.walls];
+  const hits = ray.intersectObjects(targets, false);
+  if (hits.length > 0) spawnBulletHole(hits[0]);
+}
+
+function spawnBulletHole(hit) {
+  const point = hit.point;
+  const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+  const size = 0.12;
+  const tex = makeBulletHoleTexture();
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
+  mesh.position.copy(point).addScaledVector(normal, 0.005);
+  mesh.lookAt(point.clone().add(normal));
+  mesh.rotateZ(Math.random() * Math.PI * 2);
+  scene.add(mesh);
+  destruction.holes.push({ mesh });
+  // Cap total decals
+  while (destruction.splats.length + destruction.holes.length + destruction.fires.length > destruction.maxDecals) {
+    if (destruction.holes.length === 0) break;
+    const old = destruction.holes.shift();
+    scene.remove(old.mesh);
+    disposeMesh(old.mesh);
+  }
+  updateClearSoupButton();
+}
+
+function updateMuzzleFlash(dt) {
+  if (destruction.flashTimer > 0) {
+    destruction.flashTimer -= dt;
+    if (destruction.flashTimer <= 0 && destruction.flashMesh) {
+      destruction.flashMesh.visible = false;
+    }
+  }
+}
+
+function updateRecoil() {
+  if (!destruction.arm || activeWeapon !== 'gun') return;
+  const remaining = destruction.recoilUntil - performance.now();
+  if (remaining > 0) {
+    // Brief recoil: kick back and up. recoilUntil span is 100ms.
+    const t = remaining / 100;  // 1 → 0
+    const kick = t * 0.04;
+    destruction.arm.position.set(0.30, -0.30 + kick, -0.50 + kick);
+    destruction.arm.rotation.x = -kick * 0.9;
+  } else {
+    destruction.arm.position.set(0.30, -0.30, -0.50);
+    destruction.arm.rotation.x = 0;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LIGHTER — Zippo-style with flickering flame, slow burn paintings
+   ═══════════════════════════════════════════════════════════════════ */
+
+function buildLighterArm() {
+  const group = new THREE.Group();
+
+  // Lighter body — chrome box with a darker hinge band
+  const chromeMat = new THREE.MeshStandardMaterial({
+    color: 0xc0c0c5, roughness: 0.25, metalness: 0.92
+  });
+  const darkChromeMat = new THREE.MeshStandardMaterial({
+    color: 0x303032, roughness: 0.6, metalness: 0.6
+  });
+
+  const lighterGroup = new THREE.Group();
+
+  // Main body — rectangular box (like a Zippo case)
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.040, 0.055, 0.022),
+    chromeMat
+  );
+  lighterGroup.add(body);
+
+  // Hinge band (thin dark stripe near top)
+  const hinge = new THREE.Mesh(
+    new THREE.BoxGeometry(0.041, 0.005, 0.023),
+    darkChromeMat
+  );
+  hinge.position.y = 0.018;
+  lighterGroup.add(hinge);
+
+  // Open top section (lid behind, slightly tilted)
+  const lid = new THREE.Mesh(
+    new THREE.BoxGeometry(0.040, 0.020, 0.022),
+    chromeMat
+  );
+  lid.position.y = 0.030;
+  lid.position.z = -0.005;
+  lid.rotation.x = -0.5;
+  lighterGroup.add(lid);
+
+  // Wick base (small black square at top center)
+  const wickBase = new THREE.Mesh(
+    new THREE.BoxGeometry(0.014, 0.005, 0.014),
+    darkChromeMat
+  );
+  wickBase.position.y = 0.030;
+  lighterGroup.add(wickBase);
+
+  // The persistent flame — animated plane with flame texture, billboarded
+  const flameTex = makeFlameTexture();
+  const flameMat = new THREE.MeshBasicMaterial({
+    map: flameTex,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const flame = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.075), flameMat);
+  flame.position.y = 0.072;  // sits above the wick
+  lighterGroup.add(flame);
+  // Tag it so updateFlame can find it without traversal cost
+  lighterGroup.userData.flameMesh = flame;
+
+  // Gentle glow point light at the flame for ambience
+  const flameLight = new THREE.PointLight(0xffaa55, 0.5, 0.5, 2);
+  flameLight.position.y = 0.072;
+  lighterGroup.add(flameLight);
+  lighterGroup.userData.flameLight = flameLight;
+
+  // Tilt and position the lighter
+  lighterGroup.rotation.z = -0.4;
+  lighterGroup.rotation.x = -0.3;
+  lighterGroup.position.set(0.02, -0.01, 0);
+  group.add(lighterGroup);
+  group.userData.lighter = lighterGroup;  // shortcut
+
+  // Hand
+  const handMat = new THREE.MeshStandardMaterial({ color: 0xd4a890, roughness: 0.7 });
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), handMat);
+  hand.position.set(0.05, -0.05, 0.02);
+  hand.scale.set(1.0, 0.85, 1.1);
+  group.add(hand);
+
+  // Sleeve
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.9 });
+  const arm = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.045, 0.4, 12),
+    armMat
+  );
+  arm.rotation.z = Math.PI / 2.6;
+  arm.rotation.x = -0.4;
+  arm.position.set(0.18, -0.18, 0.08);
+  group.add(arm);
+
+  group.position.set(0.28, -0.25, -0.50);
+  return group;
+}
+
+// Flame texture — orange/yellow teardrop with translucent edges
+function makeFlameTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 96;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 64, 96);
+
+  // Outer red-orange envelope
+  const outer = ctx.createRadialGradient(32, 70, 6, 32, 50, 38);
+  outer.addColorStop(0,    'rgba(255, 200, 100, 0.0)');
+  outer.addColorStop(0.3,  'rgba(255, 130, 40, 0.7)');
+  outer.addColorStop(0.7,  'rgba(220, 60, 20, 0.4)');
+  outer.addColorStop(1,    'rgba(120, 30, 10, 0.0)');
+  ctx.fillStyle = outer;
+  ctx.beginPath();
+  // Teardrop shape
+  ctx.moveTo(32, 96);
+  ctx.bezierCurveTo(0, 60, 8, 30, 32, 4);
+  ctx.bezierCurveTo(56, 30, 64, 60, 32, 96);
+  ctx.fill();
+
+  // Inner bright yellow core
+  const inner = ctx.createRadialGradient(32, 75, 2, 32, 60, 22);
+  inner.addColorStop(0,    'rgba(255, 255, 220, 1)');
+  inner.addColorStop(0.3,  'rgba(255, 220, 100, 0.85)');
+  inner.addColorStop(0.7,  'rgba(255, 160, 40, 0.4)');
+  inner.addColorStop(1,    'rgba(255, 100, 20, 0)');
+  ctx.fillStyle = inner;
+  ctx.beginPath();
+  ctx.ellipse(32, 65, 14, 26, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tiny blue base
+  ctx.fillStyle = 'rgba(120, 180, 255, 0.6)';
+  ctx.beginPath();
+  ctx.ellipse(32, 86, 4, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const LIGHTER_RANGE = 3.5;  // How close you need to be to ignite
+function fireLighter() {
+  if (!soupMode || activeWeapon !== 'lighter') return;
+  // Raycast from camera; if it hits a painting within range, ignite it
+  const ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+  ray.far = LIGHTER_RANGE;
+  const hits = ray.intersectObjects(paintingMeshes, false);
+  if (hits.length === 0) return;
+  spawnFire(hits[0]);
+  // Flicker the held lighter flame brighter for a moment
+  if (destruction.arm && destruction.arm.userData.lighter) {
+    const flame = destruction.arm.userData.lighter.userData.flameMesh;
+    if (flame) flame.scale.set(1.3, 1.3, 1);
+    setTimeout(() => { if (flame) flame.scale.set(1, 1, 1); }, 200);
+  }
+}
+
+function spawnFire(hit) {
+  const point = hit.point;
+  const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+  const painting = hit.object;
+
+  const fireRoot = new THREE.Group();
+
+  // Main flame plane — animated by updateFires (scale flickers, base offset)
+  const flameTex = makeFlameTexture();
+  const flameMat = new THREE.MeshBasicMaterial({
+    map: flameTex,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const flame = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.45), flameMat);
+  flame.position.set(0, 0.18, 0.005);  // sits in front of the surface, rising up
+  fireRoot.add(flame);
+
+  // Secondary smaller flame for layered look
+  const flame2 = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.28), flameMat.clone());
+  flame2.position.set(0.05, 0.12, 0.012);
+  fireRoot.add(flame2);
+
+  // Glow point light (cheap, attenuates fast)
+  const glow = new THREE.PointLight(0xff7a30, 0.8, 1.6, 2);
+  glow.position.set(0, 0.10, 0.05);
+  fireRoot.add(glow);
+
+  // Position fire root at the impact point oriented to the surface
+  fireRoot.position.copy(point).addScaledVector(normal, 0.005);
+  fireRoot.lookAt(point.clone().add(normal));
+  scene.add(fireRoot);
+
+  // Capture the painting's original color so we can restore on Clear
+  const originalColor = painting.material.color ? painting.material.color.clone() : null;
+
+  destruction.fires.push({
+    root: fireRoot,
+    flame, flame2, glow,
+    painting,
+    originalColor,
+    age: 0,
+    intensity: 0.2,           // starts small, grows over time
+    startTime: performance.now() / 1000,
+  });
+
+  // Cap total decals
+  while (destruction.splats.length + destruction.holes.length + destruction.fires.length > destruction.maxDecals) {
+    if (destruction.fires.length === 0) break;
+    const old = destruction.fires.shift();
+    if (old.painting && old.originalColor) {
+      old.painting.material.color.copy(old.originalColor);
+    }
+    scene.remove(old.root);
+    disposeMesh(old.root);
+  }
+  updateClearSoupButton();
+}
+
+// Per-frame: flicker flames + slowly char paintings
+const BURN_DURATION = 14;  // seconds for a painting to fully char from a single fire
+function updateFires(dt) {
+  const now = performance.now() / 1000;
+
+  // Update the lighter's persistent held flame (if currently holding lighter)
+  if (activeWeapon === 'lighter' && destruction.arm && destruction.arm.userData.lighter) {
+    const lighter = destruction.arm.userData.lighter;
+    const flame = lighter.userData.flameMesh;
+    if (flame) {
+      // Subtle flicker
+      const f = 0.92 + Math.sin(now * 18) * 0.06 + Math.random() * 0.06;
+      flame.scale.set(f, f, 1);
+    }
+  }
+
+  // Update each fire on a painting
+  for (const fire of destruction.fires) {
+    fire.age += dt;
+    // Intensity grows from 0.2 → 1.0 over 4 seconds
+    fire.intensity = Math.min(1, 0.2 + fire.age / 4);
+
+    const flickerA = 0.85 + Math.sin(now * 22 + fire.startTime) * 0.10 + Math.random() * 0.08;
+    const flickerB = 0.80 + Math.cos(now * 18 + fire.startTime * 2) * 0.12 + Math.random() * 0.08;
+    fire.flame.scale.set(fire.intensity * flickerA, fire.intensity * (0.9 + Math.random()*0.2), 1);
+    fire.flame2.scale.set(fire.intensity * flickerB * 0.7, fire.intensity * 0.8, 1);
+    if (fire.glow) fire.glow.intensity = fire.intensity * (0.7 + Math.random() * 0.5);
+
+    // Slow burn: gradually darken the painting toward black
+    if (fire.painting && fire.originalColor) {
+      // Burn fraction: 0..1 over BURN_DURATION
+      const burnFrac = Math.min(1, fire.age / BURN_DURATION);
+      // Lerp from original to black, with a brief reddish-orange glow phase in the middle
+      const c = fire.painting.material.color;
+      const o = fire.originalColor;
+      // Glow factor peaks around burnFrac=0.4
+      const glowF = Math.max(0, 1 - Math.abs(burnFrac - 0.4) * 2.2);
+      // Interpolated color = lerp(original, black, burnFrac) + glowF * red tint
+      c.r = o.r * (1 - burnFrac) + glowF * 0.4;
+      c.g = o.g * (1 - burnFrac) + glowF * 0.10;
+      c.b = o.b * (1 - burnFrac);
+      // After burnFrac=1, it stays black; flames continue but smaller
+      if (burnFrac >= 1) {
+        fire.flame.scale.multiplyScalar(0.6);
+        fire.flame2.scale.multiplyScalar(0.6);
+      }
+    }
+  }
 }
 
 /* ─────── Modal ─────── */
@@ -2330,13 +2997,22 @@ function setupSettingsPanel() {
   });
 
   tgSoup.addEventListener('click', () => {
-    const turningOn = !soupState.enabled;
+    const turningOn = !soupMode;
     tgSoup.classList.toggle('on', turningOn);
     if (turningOn) enterSoupMode();
     else exitSoupMode();
   });
 
   btnClearSoup.addEventListener('click', clearSoupSplats);
+
+  // Weapon toolbar — hot-swap weapons while in destruction mode
+  document.querySelectorAll('.weapon-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const w = btn.dataset.weapon;
+      if (!soupMode) return;  // shouldn't be possible since toolbar is hidden, but guard anyway
+      equipWeapon(w);
+    });
+  });
 }
 setupSettingsPanel();
 
