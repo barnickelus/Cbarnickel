@@ -714,9 +714,40 @@
   }
 
   /* Weapon toolbar — vertical icon stack under the settings gear */
+  /* Tomato quick-toggle — sits directly below the gear icon */
+  .destruction-quick-btn {
+    position: fixed;
+    top: 78px;          /* directly under the gear */
+    right: 32px;
+    z-index: 49;
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: rgba(10,9,8,0.55);
+    border: 1px solid var(--ink-faint);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    pointer-events: auto;
+  }
+  .destruction-quick-btn:hover {
+    border-color: var(--gold);
+    transform: scale(1.05);
+  }
+  .destruction-quick-btn.active {
+    border-color: var(--gold);
+    background: rgba(201, 169, 110, 0.18);
+    box-shadow: 0 0 0 1px var(--gold) inset;
+  }
+
   .weapon-toolbar {
     position: fixed;
-    top: 78px;
+    top: 124px;          /* below the gear AND the tomato (78 + 38 + 8 gap) */
     right: 32px;
     z-index: 48;
     display: none;
@@ -795,7 +826,10 @@
   </div>
 </div>
 
-<!-- Weapon toolbar — vertical stack under the settings gear, only visible when destruction mode is on -->
+<!-- Quick destruction-mode toggle, positioned directly below the gear icon -->
+<button class="destruction-quick-btn" id="btn-destruction-quick" title="Toggle destruction mode" aria-label="Toggle destruction mode">🍅</button>
+
+<!-- Weapon toolbar — vertical stack under the destruction toggle, only visible when destruction mode is on -->
 <div class="weapon-toolbar" id="weapon-toolbar">
   <button class="weapon-btn active" data-weapon="soup" title="Soup can">🥫</button>
   <button class="weapon-btn" data-weapon="gun" title="Golden gun">🔫</button>
@@ -1627,6 +1661,10 @@ function setupControls() {
     if (k === 'a' || e.key === 'ArrowLeft') keys.a = true;
     if (k === 's' || e.key === 'ArrowDown') keys.s = true;
     if (k === 'd' || e.key === 'ArrowRight') keys.d = true;
+    // Movement keys close the settings panel so it doesn't linger over the gallery
+    if ((keys.w || keys.a || keys.s || keys.d) && window.__closeSettingsPanel) {
+      window.__closeSettingsPanel();
+    }
     if (e.key === 'Escape' && document.getElementById('modal').classList.contains('open')) closeModal();
     if (document.getElementById('modal').classList.contains('open')) {
       if (e.key === 'ArrowLeft') { e.preventDefault(); navModal(-1); }
@@ -1655,6 +1693,7 @@ function setupJoystick(container, stick) {
     e.preventDefault();
     if (activeId !== null) return;
     container.classList.remove('idle');
+    if (window.__closeSettingsPanel) window.__closeSettingsPanel();
     const t = e.changedTouches[0];
     activeId = t.identifier;
     const r = container.getBoundingClientRect();
@@ -1684,6 +1723,7 @@ function setupJoystick(container, stick) {
     e.preventDefault();
     container.classList.remove('idle');
     mouseDown = true;
+    if (window.__closeSettingsPanel) window.__closeSettingsPanel();
     const r = container.getBoundingClientRect();
     cx = r.left + r.width/2;
     cy = r.top + r.height/2;
@@ -2082,26 +2122,29 @@ function clearSoupSplats() {
     if (h.singeMesh) { scene.remove(h.singeMesh); disposeMesh(h.singeMesh); }
   });
   destruction.holes = [];
-  // Restore any fire-darkened paintings
+
+  // Restore any fire-affected paintings. Deduplicate by painting (one painting
+  // can have multiple fires; we only need to restore once per painting).
+  const restoredPaintings = new Set();
   destruction.fires.forEach(f => {
-    if (f.painting) {
-      // Restore original texture if we swapped to a charred version
-      if (f.originalMap) {
-        f.painting.material.map = f.originalMap;
-        f.painting.material.needsUpdate = true;
-        // Dispose the charred texture we generated
-        if (f.charredMap && f.charredMap !== f.originalMap) f.charredMap.dispose();
-      }
-      // Restore color tint
-      if (f.originalColor) {
-        f.painting.material.color.copy(f.originalColor);
-        f.painting.material.needsUpdate = true;
-      }
-    }
     scene.remove(f.root);
     disposeMesh(f.root);
+    if (!f.painting || restoredPaintings.has(f.painting)) return;
+    restoredPaintings.add(f.painting);
+    restorePaintingToOriginal(f.painting);
   });
   destruction.fires = [];
+
+  // Defensive sweep: also restore any painting that has a stored true-original
+  // (meaning it was modified at some point) but wasn't restored above.
+  // This catches edge cases like fires being evicted by cap before clear.
+  paintingMeshes.forEach(p => {
+    if (restoredPaintings.has(p)) return;
+    if (p.userData.trueOriginalColor || p.userData.trueOriginalMap || p.userData.charredMap) {
+      restorePaintingToOriginal(p);
+    }
+  });
+
   // In-flight projectiles
   destruction.projectiles.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
   destruction.projectiles = [];
@@ -2109,6 +2152,28 @@ function clearSoupSplats() {
   destruction.smokePuffs.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
   destruction.smokePuffs = [];
   updateClearSoupButton();
+}
+
+// Restore a painting's material to its true original state. Reads from
+// userData.trueOriginalColor and trueOriginalMap which are set on first fire.
+function restorePaintingToOriginal(painting) {
+  if (!painting || !painting.material) return;
+  if (painting.userData.trueOriginalMap) {
+    painting.material.map = painting.userData.trueOriginalMap;
+  }
+  if (painting.userData.trueOriginalColor) {
+    painting.material.color.copy(painting.userData.trueOriginalColor);
+  } else if (painting.material.color) {
+    // Fallback: if for some reason we don't have a stored original,
+    // at least force the tint back to white (full original texture brightness)
+    painting.material.color.setRGB(1, 1, 1);
+  }
+  painting.material.needsUpdate = true;
+  // Dispose the cached charred map if we have one — it'll be regenerated next time
+  if (painting.userData.charredMap) {
+    painting.userData.charredMap.dispose();
+    delete painting.userData.charredMap;
+  }
 }
 
 function updateClearSoupButton() {
@@ -3068,12 +3133,20 @@ function spawnFire(hit) {
   fireRoot.lookAt(point.clone().add(normal));
   scene.add(fireRoot);
 
-  // Capture the painting's original color & texture so we can restore on Clear
-  // and also generate a "charred" version so we can swap to it once burned out
-  const originalColor = painting.material.color ? painting.material.color.clone() : null;
-  const originalMap = painting.material.map || null;
+  // Capture the painting's TRUE original color & texture once per painting
+  // (subsequent fires on the same painting must read these stored originals,
+  // not the current material state — which may already be darkened or swapped
+  // to the charred map. Without this, clearing would restore to a stale snapshot.)
+  if (!painting.userData.trueOriginalColor && painting.material.color) {
+    painting.userData.trueOriginalColor = painting.material.color.clone();
+  }
+  if (!painting.userData.trueOriginalMap && painting.material.map) {
+    painting.userData.trueOriginalMap = painting.material.map;
+  }
+  const originalColor = painting.userData.trueOriginalColor;
+  const originalMap = painting.userData.trueOriginalMap;
 
-  // Only generate charred version once per painting (a painting may have multiple fires)
+  // Only generate charred version once per painting
   let charredMap = painting.userData.charredMap;
   if (!charredMap && originalMap) {
     charredMap = makeCharredTexture(originalMap);
@@ -3095,19 +3168,16 @@ function spawnFire(hit) {
     swappedToCharred: false,
   });
 
-  // Cap total decals
+  // Cap total decals — evict oldest fire if needed
   while (destruction.splats.length + destruction.holes.length + destruction.fires.length > destruction.maxDecals) {
     if (destruction.fires.length === 0) break;
     const old = destruction.fires.shift();
-    if (old.painting && old.originalColor) {
-      old.painting.material.color.copy(old.originalColor);
-    }
-    if (old.painting && old.originalMap && old.painting.material.map !== old.originalMap) {
-      old.painting.material.map = old.originalMap;
-      old.painting.material.needsUpdate = true;
-    }
     scene.remove(old.root);
     disposeMesh(old.root);
+    // Restore the painting only if no other active fire targets it
+    if (old.painting && !destruction.fires.some(f => f.painting === old.painting)) {
+      restorePaintingToOriginal(old.painting);
+    }
   }
   updateClearSoupButton();
 }
@@ -3369,12 +3439,31 @@ function setupSettingsPanel() {
     btnSettings.classList.toggle('active');
   });
 
-  // Close panel when clicking outside it (but not when clicking the gear)
-  document.addEventListener('mousedown', (e) => {
-    if (!panel.classList.contains('show')) return;
-    if (panel.contains(e.target) || btnSettings.contains(e.target)) return;
-    panel.classList.remove('show');
-    btnSettings.classList.remove('active');
+  // Helper that any "user interacted with the gallery" callback can invoke
+  function closeSettingsPanel() {
+    if (panel.classList.contains('show')) {
+      panel.classList.remove('show');
+      btnSettings.classList.remove('active');
+    }
+  }
+  // Expose so other parts of the script can call it (e.g. on movement input)
+  window.__closeSettingsPanel = closeSettingsPanel;
+
+  // Close panel when clicking/tapping outside it (but not when clicking the gear or tomato)
+  function shouldKeepPanelOpen(target) {
+    if (panel.contains(target)) return true;
+    if (btnSettings.contains(target)) return true;
+    const tomato = document.getElementById('btn-destruction-quick');
+    if (tomato && tomato.contains(target)) return true;
+    return false;
+  }
+  ['mousedown', 'touchstart'].forEach(evt => {
+    document.addEventListener(evt, (e) => {
+      if (!panel.classList.contains('show')) return;
+      const target = e.target || (e.touches && e.touches[0] && e.touches[0].target);
+      if (target && shouldKeepPanelOpen(target)) return;
+      closeSettingsPanel();
+    }, { passive: true });
   });
 
   slLighting.addEventListener('input', () => {
@@ -3389,11 +3478,21 @@ function setupSettingsPanel() {
     applyTheme();
   });
 
-  tgSoup.addEventListener('click', () => {
-    const turningOn = !soupMode;
-    tgSoup.classList.toggle('on', turningOn);
-    if (turningOn) enterSoupMode();
-    else exitSoupMode();
+  // Single source of truth for toggling destruction mode — keeps both
+  // the settings-panel toggle switch and the tomato quick-button in sync
+  function setDestructionMode(on) {
+    if (on === soupMode) return;
+    if (on) enterSoupMode(); else exitSoupMode();
+    tgSoup.classList.toggle('on', on);
+    const tomato = document.getElementById('btn-destruction-quick');
+    if (tomato) tomato.classList.toggle('active', on);
+  }
+
+  tgSoup.addEventListener('click', () => setDestructionMode(!soupMode));
+
+  // Tomato shortcut — same toggle, no panel needed
+  document.getElementById('btn-destruction-quick').addEventListener('click', () => {
+    setDestructionMode(!soupMode);
   });
 
   btnClearSoup.addEventListener('click', clearSoupSplats);
