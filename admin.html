@@ -1724,7 +1724,7 @@ const Editor = (function() {
         for (let j = i; j <= n; j++) M[k][j] -= f * M[i][j];
       }
     }
-    return M.map((row, i) => row[n] / row[i][i]);
+    return M.map((row, i) => row[n] / row[i]);
   }
 
   /* ── Adjustments (white balance, levels, saturation, sharpness) ── */
@@ -1857,12 +1857,16 @@ const Editor = (function() {
     const status = document.getElementById('preview-meta');
     status.textContent = 'Processing…';
     setTimeout(() => {
-      warpedCanvas = warpPerspective();
+      // Only re-run the slow perspective warp if corners changed since the last warp.
+      // For slider adjustments, we just re-apply the cheap pixel ops on the cached warp.
+      if (!warpedCanvas || cornersChangedSinceWarp()) {
+        warpedCanvas = warpPerspective();
+        cacheCornersForWarp();
+      }
       if (!warpedCanvas) {
         status.textContent = 'Could not warp — check corners';
         return;
       }
-      // Make a downsampled preview for fast adjustment iteration
       const previewCanvas = document.getElementById('preview-canvas');
       const maxPreview = 800;
       const ws = warpedCanvas.width, hs = warpedCanvas.height;
@@ -1876,11 +1880,28 @@ const Editor = (function() {
     }, 30);
   }
 
+  // Track whether corners have changed so we know when to re-run the (slow) warp
+  let lastWarpCorners = null;
+  function cornersChangedSinceWarp() {
+    if (!lastWarpCorners || !corners) return true;
+    for (let i = 0; i < 4; i++) {
+      if (Math.abs(lastWarpCorners[i].x - corners[i].x) > 0.5 ||
+          Math.abs(lastWarpCorners[i].y - corners[i].y) > 0.5) return true;
+    }
+    return false;
+  }
+  function cacheCornersForWarp() {
+    lastWarpCorners = corners ? corners.map(c => ({ x: c.x, y: c.y })) : null;
+  }
+
   function regenerateExport() {
     const status = document.getElementById('export-meta');
     status.textContent = 'Generating final image…';
     setTimeout(() => {
-      if (!warpedCanvas) warpedCanvas = warpPerspective();
+      if (!warpedCanvas || cornersChangedSinceWarp()) {
+        warpedCanvas = warpPerspective();
+        cacheCornersForWarp();
+      }
       // Resize warped to target output size
       const ws = warpedCanvas.width, hs = warpedCanvas.height;
       const target = adj.size;
