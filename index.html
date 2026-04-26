@@ -34,7 +34,7 @@
     position: fixed; top: 0; left: 0; right: 0;
     padding: 22px 32px;
     display: flex; justify-content: space-between; align-items: center;
-    z-index: 50; pointer-events: none;
+    z-index: 110; pointer-events: none;
     background: linear-gradient(to bottom, rgba(10,9,8,0.6), transparent);
   }
   .brand {
@@ -779,8 +779,8 @@
 <div class="settings-panel" id="settings-panel">
   <h3>Gallery settings</h3>
   <div class="row">
-    <label>Lighting <span class="val" id="val-lighting">100%</span></label>
-    <input type="range" id="sl-lighting" min="0" max="300" value="100" />
+    <label>Lighting <span class="val" id="val-lighting">172%</span></label>
+    <input type="range" id="sl-lighting" min="0" max="300" value="172" />
   </div>
   <div class="row" style="display:flex; justify-content:space-between; align-items:center;">
     <label style="margin-bottom:0; flex:1;">White cube mode</label>
@@ -908,7 +908,7 @@ const keys = { w:false, a:false, s:false, d:false };
 let yaw = Math.PI, pitch = 0;
 let dragging = false, dragStartX = 0, dragStartY = 0;
 let dragYawStart = 0, dragPitchStart = 0, dragMoved = 0;
-const PLAYER_BUFFER = 1.4;
+const PLAYER_BUFFER = 0.5;   // Distance kept from walls. Smaller = walk closer to paintings to see detail.
 const MOVE_SPEED = 4.0;
 let lastTime = performance.now();
 
@@ -936,7 +936,7 @@ const themeRefs = {
 };
 
 // Lighting & theme settings (persisted to globals so we can re-apply on rebuild)
-let lightingMultiplier = 1.0;       // 0..3
+let lightingMultiplier = 1.72;       // 0..3
 let isWhiteCube = false;
 
 // Weapon system — destruction toolkit. Master toggle is soupMode (kept name
@@ -950,8 +950,9 @@ const destruction = {
   arm: null,                // currently-held weapon mesh, attached to camera
   projectiles: [],          // soup cans in flight
   splats: [],               // {mesh, drips: []} — soup splats on surfaces
-  holes: [],                // {mesh} — bullet holes on surfaces
+  holes: [],                // {mesh, singeMesh?, singeStartTime?} — bullet holes + singe marks
   fires: [],                // {mesh, root, painting?, age, intensity, ...} — burning ignitions
+  smokePuffs: [],           // {mesh, age, duration} — animated muzzle smoke
   flashMesh: null,          // muzzle flash mesh (re-used)
   flashTimer: 0,            // seconds remaining to show muzzle flash
   recoilUntil: 0,           // performance.now() time when recoil ends
@@ -1966,6 +1967,7 @@ function throwSoupCan() {
       setTimeout(() => { if (c) c.position.y = -0.02; }, 130);
     }
   }
+  playSoupThrowSound();
   // Spawn a flying soup can
   const can = buildSoupArm().children[0].clone(true);
   can.rotation.set(0, 0, 0);
@@ -2074,21 +2076,38 @@ function clearSoupSplats() {
     s.drips.forEach(d => { scene.remove(d.mesh); disposeMesh(d.mesh); });
   });
   destruction.splats = [];
-  destruction.holes.forEach(h => { scene.remove(h.mesh); disposeMesh(h.mesh); });
+  destruction.holes.forEach(h => {
+    scene.remove(h.mesh);
+    disposeMesh(h.mesh);
+    if (h.singeMesh) { scene.remove(h.singeMesh); disposeMesh(h.singeMesh); }
+  });
   destruction.holes = [];
   // Restore any fire-darkened paintings
   destruction.fires.forEach(f => {
-    if (f.painting && f.originalColor) {
-      f.painting.material.color.copy(f.originalColor);
-      f.painting.material.needsUpdate = true;
+    if (f.painting) {
+      // Restore original texture if we swapped to a charred version
+      if (f.originalMap) {
+        f.painting.material.map = f.originalMap;
+        f.painting.material.needsUpdate = true;
+        // Dispose the charred texture we generated
+        if (f.charredMap && f.charredMap !== f.originalMap) f.charredMap.dispose();
+      }
+      // Restore color tint
+      if (f.originalColor) {
+        f.painting.material.color.copy(f.originalColor);
+        f.painting.material.needsUpdate = true;
+      }
     }
     scene.remove(f.root);
     disposeMesh(f.root);
   });
   destruction.fires = [];
-  // Also clear any in-flight projectiles
+  // In-flight projectiles
   destruction.projectiles.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
   destruction.projectiles = [];
+  // Smoke puffs
+  destruction.smokePuffs.forEach(p => { scene.remove(p.mesh); disposeMesh(p.mesh); });
+  destruction.smokePuffs = [];
   updateClearSoupButton();
 }
 
@@ -2121,6 +2140,8 @@ function updateDestruction(dt) {
   updateMuzzleFlash(dt);
   updateRecoil();
   updateFires(dt);
+  updateSmokePuffs(dt);
+  updateSinges(dt);
 }
 
 // Per-frame: physics for soup-can projectiles
@@ -2177,6 +2198,7 @@ function updateDrips() {
 function spawnSplat(hit) {
   const point = hit.point;
   const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+  playSoupSplatSound();
   const splatSize = 0.50 + Math.random() * 0.20;
   const tex = makeSplatTexture(Date.now() + destruction.splats.length);
   const mat = new THREE.MeshBasicMaterial({
@@ -2269,6 +2291,149 @@ function spawnSplat(hit) {
     old.drips.forEach(d => { scene.remove(d.mesh); disposeMesh(d.mesh); });
   }
   updateClearSoupButton();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SOUND — synthesized via Web Audio API (no external assets)
+   ═══════════════════════════════════════════════════════════════════ */
+
+let _audioCtx = null;
+function getAudio() {
+  if (!_audioCtx) {
+    try {
+      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) { return null; }
+  }
+  // Browsers may suspend the context until user gesture; resume if needed
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
+// Gunshot: short noise burst with a low-pass filter sweep, plus a click
+function playGunshotSound() {
+  const ctx = getAudio(); if (!ctx) return;
+  const t = ctx.currentTime;
+  // Noise burst (the "bang")
+  const bufferSize = Math.floor(ctx.sampleRate * 0.18);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    // Decay envelope
+    const env = Math.exp(-i / (ctx.sampleRate * 0.04));
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = 'lowpass';
+  noiseFilter.frequency.setValueAtTime(2000, t);
+  noiseFilter.frequency.exponentialRampToValueAtTime(400, t + 0.18);
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.setValueAtTime(0.45, t);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.20);
+  noise.connect(noiseFilter).connect(noiseGain).connect(ctx.destination);
+  noise.start(t);
+  noise.stop(t + 0.22);
+  // Quick low oscillator "thump"
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(120, t);
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+  const oscGain = ctx.createGain();
+  oscGain.gain.setValueAtTime(0.3, t);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+  osc.connect(oscGain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.12);
+}
+
+// Lighter ignition: short whoosh — filtered noise rising in pitch
+function playFireSound() {
+  const ctx = getAudio(); if (!ctx) return;
+  const t = ctx.currentTime;
+  const bufferSize = Math.floor(ctx.sampleRate * 0.5);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const env = Math.exp(-i / (ctx.sampleRate * 0.18));
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.Q.value = 1.5;
+  filter.frequency.setValueAtTime(400, t);
+  filter.frequency.exponentialRampToValueAtTime(1800, t + 0.4);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.3, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+  noise.connect(filter).connect(gain).connect(ctx.destination);
+  noise.start(t);
+  noise.stop(t + 0.5);
+}
+
+// Soup throw: short "whoosh" with a wet impact — call with delay for the impact
+function playSoupThrowSound() {
+  const ctx = getAudio(); if (!ctx) return;
+  const t = ctx.currentTime;
+  // Whoosh
+  const bufferSize = Math.floor(ctx.sampleRate * 0.25);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const env = Math.exp(-i / (ctx.sampleRate * 0.12));
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.Q.value = 2;
+  filter.frequency.setValueAtTime(2000, t);
+  filter.frequency.exponentialRampToValueAtTime(500, t + 0.25);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.2, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+  noise.connect(filter).connect(gain).connect(ctx.destination);
+  noise.start(t);
+  noise.stop(t + 0.3);
+}
+
+// Wet splat sound — call when a soup can hits a surface
+function playSoupSplatSound() {
+  const ctx = getAudio(); if (!ctx) return;
+  const t = ctx.currentTime;
+  // Low thump + short noise burst
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(80, t);
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+  const oscGain = ctx.createGain();
+  oscGain.gain.setValueAtTime(0.4, t);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  osc.connect(oscGain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.20);
+
+  const bufferSize = Math.floor(ctx.sampleRate * 0.15);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const env = Math.exp(-i / (ctx.sampleRate * 0.05));
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 800;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(0.25, t);
+  ng.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  noise.connect(filter).connect(ng).connect(ctx.destination);
+  noise.start(t);
+  noise.stop(t + 0.20);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -2486,6 +2651,10 @@ function fireGun() {
   }
   // Recoil — kick the gun back & up
   destruction.recoilUntil = performance.now() + 100;
+  // Spawn a small smoke puff at the muzzle (in world coords)
+  spawnMuzzleSmoke();
+  // Sound
+  playGunshotSound();
 
   // Raycast from camera center
   const ray = new THREE.Raycaster();
@@ -2495,9 +2664,113 @@ function fireGun() {
   if (hits.length > 0) spawnBulletHole(hits[0]);
 }
 
+// Small expanding smoke puff at the gun barrel — fades out over ~600ms
+function spawnMuzzleSmoke() {
+  const tex = makeSmokeTexture();
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 0.65,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.08), mat);
+  // Position in world coords just past the barrel tip
+  const muzzleLocal = new THREE.Vector3(0.30, -0.30, -0.78);
+  muzzleLocal.applyMatrix4(camera.matrixWorld);
+  mesh.position.copy(muzzleLocal);
+  // Slow upward drift via velocity
+  scene.add(mesh);
+  destruction.smokePuffs.push({
+    mesh,
+    age: 0,
+    duration: 0.7,
+    drift: new THREE.Vector3(
+      (Math.random() - 0.5) * 0.3,
+      0.25 + Math.random() * 0.2,
+      (Math.random() - 0.5) * 0.2,
+    ),
+  });
+}
+
+// Procedural smoke puff texture — soft gray blob
+function makeSmokeTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 128, 128);
+  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 60);
+  grad.addColorStop(0,    'rgba(220, 220, 220, 0.85)');
+  grad.addColorStop(0.4,  'rgba(180, 180, 180, 0.55)');
+  grad.addColorStop(0.8,  'rgba(120, 120, 120, 0.18)');
+  grad.addColorStop(1,    'rgba(80, 80, 80, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(64, 64, 60, 0, Math.PI * 2);
+  ctx.fill();
+  // Subtle puffs
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 20 + Math.random() * 30;
+    const x = 64 + Math.cos(a) * r;
+    const y = 64 + Math.sin(a) * r;
+    const grad2 = ctx.createRadialGradient(x, y, 2, x, y, 18);
+    grad2.addColorStop(0, 'rgba(200, 200, 200, 0.5)');
+    grad2.addColorStop(1, 'rgba(160, 160, 160, 0)');
+    ctx.fillStyle = grad2;
+    ctx.beginPath();
+    ctx.arc(x, y, 18, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function updateSmokePuffs(dt) {
+  for (let i = destruction.smokePuffs.length - 1; i >= 0; i--) {
+    const p = destruction.smokePuffs[i];
+    p.age += dt;
+    const t = p.age / p.duration;
+    if (t >= 1) {
+      scene.remove(p.mesh);
+      disposeMesh(p.mesh);
+      destruction.smokePuffs.splice(i, 1);
+      continue;
+    }
+    // Drift outward and upward
+    p.mesh.position.addScaledVector(p.drift, dt);
+    // Expand
+    const s = 1 + t * 2.5;
+    p.mesh.scale.set(s, s, 1);
+    // Fade out
+    p.mesh.material.opacity = 0.65 * (1 - t);
+    // Always face the camera (simple billboard)
+    p.mesh.quaternion.copy(camera.quaternion);
+  }
+}
+
 function spawnBulletHole(hit) {
   const point = hit.point;
   const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+
+  // Singe — a slightly larger glowing ring that fades from bright orange embers to dark scorch
+  const singeTex = makeSingeTexture();
+  const singeMat = new THREE.MeshBasicMaterial({
+    map: singeTex,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1.5,
+    polygonOffsetUnits: -1.5,
+  });
+  const singeSize = 0.28;
+  const singeMesh = new THREE.Mesh(new THREE.PlaneGeometry(singeSize, singeSize), singeMat);
+  singeMesh.position.copy(point).addScaledVector(normal, 0.003);
+  singeMesh.lookAt(point.clone().add(normal));
+  singeMesh.rotateZ(Math.random() * Math.PI * 2);
+  scene.add(singeMesh);
+
+  // Bullet hole — small dark circle on top of the singe
   const size = 0.12;
   const tex = makeBulletHoleTexture();
   const mat = new THREE.MeshBasicMaterial({
@@ -2505,23 +2778,80 @@ function spawnBulletHole(hit) {
     transparent: true,
     depthWrite: false,
     polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
   mesh.position.copy(point).addScaledVector(normal, 0.005);
   mesh.lookAt(point.clone().add(normal));
   mesh.rotateZ(Math.random() * Math.PI * 2);
   scene.add(mesh);
-  destruction.holes.push({ mesh });
+
+  destruction.holes.push({
+    mesh,
+    singeMesh,
+    singeStartTime: performance.now() / 1000,
+  });
+
   // Cap total decals
   while (destruction.splats.length + destruction.holes.length + destruction.fires.length > destruction.maxDecals) {
     if (destruction.holes.length === 0) break;
     const old = destruction.holes.shift();
     scene.remove(old.mesh);
     disposeMesh(old.mesh);
+    if (old.singeMesh) {
+      scene.remove(old.singeMesh);
+      disposeMesh(old.singeMesh);
+    }
   }
   updateClearSoupButton();
+}
+
+// Singe texture — bright orange embers in center fading to dark scorch ring
+function makeSingeTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 256, 256);
+  // Outer dark scorch ring
+  const ring = ctx.createRadialGradient(128, 128, 30, 128, 128, 110);
+  ring.addColorStop(0,    'rgba(60, 30, 18, 0.0)');
+  ring.addColorStop(0.4,  'rgba(40, 20, 12, 0.55)');
+  ring.addColorStop(0.85, 'rgba(20, 10, 6, 0.25)');
+  ring.addColorStop(1,    'rgba(10, 5, 2, 0.0)');
+  ctx.fillStyle = ring;
+  ctx.beginPath();
+  ctx.arc(128, 128, 110, 0, Math.PI * 2);
+  ctx.fill();
+  // Inner glowing embers (these will fade out via material opacity)
+  const ember = ctx.createRadialGradient(128, 128, 5, 128, 128, 45);
+  ember.addColorStop(0,   'rgba(255, 220, 80, 0.9)');
+  ember.addColorStop(0.4, 'rgba(255, 130, 30, 0.7)');
+  ember.addColorStop(1,   'rgba(180, 50, 10, 0)');
+  ctx.fillStyle = ember;
+  ctx.beginPath();
+  ctx.arc(128, 128, 45, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Per-frame: singe marks fade from bright (with embers) to dim (just scorch)
+function updateSinges(dt) {
+  const now = performance.now() / 1000;
+  for (const hole of destruction.holes) {
+    if (!hole.singeMesh || hole.singeFaded) continue;
+    const t = Math.min(1, (now - hole.singeStartTime) / 1.0);  // 1 second fade
+    if (t >= 1) {
+      // Singe is now permanent darker scorch — set opacity to a low fixed value
+      hole.singeMesh.material.opacity = 0.55;
+      hole.singeFaded = true;
+    } else {
+      // Brighter at start (embers visible), fading to dim scorch
+      hole.singeMesh.material.opacity = 1.0 - t * 0.45;  // 1.0 → 0.55
+    }
+  }
 }
 
 function updateMuzzleFlash(dt) {
@@ -2715,7 +3045,6 @@ function spawnFire(hit) {
 
   const fireRoot = new THREE.Group();
 
-  // Main flame plane — animated by updateFires (scale flickers, base offset)
   const flameTex = makeFlameTexture();
   const flameMat = new THREE.MeshBasicMaterial({
     map: flameTex,
@@ -2724,35 +3053,46 @@ function spawnFire(hit) {
     depthWrite: false,
   });
   const flame = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.45), flameMat);
-  flame.position.set(0, 0.18, 0.005);  // sits in front of the surface, rising up
+  flame.position.set(0, 0.18, 0.005);
   fireRoot.add(flame);
 
-  // Secondary smaller flame for layered look
   const flame2 = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.28), flameMat.clone());
   flame2.position.set(0.05, 0.12, 0.012);
   fireRoot.add(flame2);
 
-  // Glow point light (cheap, attenuates fast)
   const glow = new THREE.PointLight(0xff7a30, 0.8, 1.6, 2);
   glow.position.set(0, 0.10, 0.05);
   fireRoot.add(glow);
 
-  // Position fire root at the impact point oriented to the surface
   fireRoot.position.copy(point).addScaledVector(normal, 0.005);
   fireRoot.lookAt(point.clone().add(normal));
   scene.add(fireRoot);
 
-  // Capture the painting's original color so we can restore on Clear
+  // Capture the painting's original color & texture so we can restore on Clear
+  // and also generate a "charred" version so we can swap to it once burned out
   const originalColor = painting.material.color ? painting.material.color.clone() : null;
+  const originalMap = painting.material.map || null;
+
+  // Only generate charred version once per painting (a painting may have multiple fires)
+  let charredMap = painting.userData.charredMap;
+  if (!charredMap && originalMap) {
+    charredMap = makeCharredTexture(originalMap);
+    painting.userData.charredMap = charredMap;
+  }
+  // Play soft fire sound
+  playFireSound();
 
   destruction.fires.push({
     root: fireRoot,
     flame, flame2, glow,
     painting,
     originalColor,
+    originalMap,
+    charredMap,
     age: 0,
-    intensity: 0.2,           // starts small, grows over time
+    intensity: 0.2,
     startTime: performance.now() / 1000,
+    swappedToCharred: false,
   });
 
   // Cap total decals
@@ -2762,14 +3102,55 @@ function spawnFire(hit) {
     if (old.painting && old.originalColor) {
       old.painting.material.color.copy(old.originalColor);
     }
+    if (old.painting && old.originalMap && old.painting.material.map !== old.originalMap) {
+      old.painting.material.map = old.originalMap;
+      old.painting.material.needsUpdate = true;
+    }
     scene.remove(old.root);
     disposeMesh(old.root);
   }
   updateClearSoupButton();
 }
 
+// Create a "charred" version of the painting texture: extract luminance,
+// invert/clamp it to a near-black palette, and add a slight reddish warmth
+// so the painting is still subtly visible as a "ghost" of itself.
+function makeCharredTexture(sourceTex) {
+  const img = sourceTex.image;
+  if (!img || !img.width) return null;
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const ctx = c.getContext('2d');
+  // Draw original
+  ctx.drawImage(img, 0, 0);
+  // Read pixels, transform each to a charred version
+  const imgData = ctx.getImageData(0, 0, c.width, c.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // Luminance of original
+    const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    // Map luminance 0..255 to a tiny range (e.g. 8..32) for "almost-black on black"
+    // Brighter areas of the original become slightly less black
+    const v = 8 + (lum / 255) * 28;
+    // Slight reddish-warm tint so it doesn't look pure gray
+    d[i]     = Math.min(255, v * 1.20);  // R
+    d[i+1]   = v * 0.92;                  // G
+    d[i+2]   = v * 0.82;                  // B
+    // Alpha unchanged
+  }
+  ctx.putImageData(imgData, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  // Match wrapping/filtering of the source
+  tex.wrapS = sourceTex.wrapS;
+  tex.wrapT = sourceTex.wrapT;
+  return tex;
+}
+
 // Per-frame: flicker flames + slowly char paintings
-const BURN_DURATION = 14;  // seconds for a painting to fully char from a single fire
+// 4x slower than before — gives time for the burn to feel like a real progressive char
+const BURN_DURATION = 56;
 function updateFires(dt) {
   const now = performance.now() / 1000;
 
@@ -2778,17 +3159,14 @@ function updateFires(dt) {
     const lighter = destruction.arm.userData.lighter;
     const flame = lighter.userData.flameMesh;
     if (flame) {
-      // Subtle flicker
       const f = 0.92 + Math.sin(now * 18) * 0.06 + Math.random() * 0.06;
       flame.scale.set(f, f, 1);
     }
   }
 
-  // Update each fire on a painting
   for (const fire of destruction.fires) {
     fire.age += dt;
-    // Intensity grows from 0.2 → 1.0 over 4 seconds
-    fire.intensity = Math.min(1, 0.2 + fire.age / 4);
+    fire.intensity = Math.min(1, 0.2 + fire.age / 6);  // grows over 6 seconds (was 4)
 
     const flickerA = 0.85 + Math.sin(now * 22 + fire.startTime) * 0.10 + Math.random() * 0.08;
     const flickerB = 0.80 + Math.cos(now * 18 + fire.startTime * 2) * 0.12 + Math.random() * 0.08;
@@ -2796,23 +3174,38 @@ function updateFires(dt) {
     fire.flame2.scale.set(fire.intensity * flickerB * 0.7, fire.intensity * 0.8, 1);
     if (fire.glow) fire.glow.intensity = fire.intensity * (0.7 + Math.random() * 0.5);
 
-    // Slow burn: gradually darken the painting toward black
+    // Slow burn: gradually darken painting toward charred state
     if (fire.painting && fire.originalColor) {
-      // Burn fraction: 0..1 over BURN_DURATION
       const burnFrac = Math.min(1, fire.age / BURN_DURATION);
-      // Lerp from original to black, with a brief reddish-orange glow phase in the middle
+
+      // Color tint shifts: original -> warm glow at 40% -> dark at 100%
+      // We tint regardless of texture swap, since the tint multiplies the texture.
       const c = fire.painting.material.color;
       const o = fire.originalColor;
       // Glow factor peaks around burnFrac=0.4
       const glowF = Math.max(0, 1 - Math.abs(burnFrac - 0.4) * 2.2);
-      // Interpolated color = lerp(original, black, burnFrac) + glowF * red tint
-      c.r = o.r * (1 - burnFrac) + glowF * 0.4;
-      c.g = o.g * (1 - burnFrac) + glowF * 0.10;
-      c.b = o.b * (1 - burnFrac);
-      // After burnFrac=1, it stays black; flames continue but smaller
+
+      if (!fire.swappedToCharred) {
+        // Phase 1: still showing original texture, just tinted darker + glowing
+        // Lerp from original color toward dark
+        c.r = o.r * (1 - burnFrac * 0.85) + glowF * 0.4;
+        c.g = o.g * (1 - burnFrac * 0.85) + glowF * 0.10;
+        c.b = o.b * (1 - burnFrac * 0.85);
+        // Once we're 95% through, swap to the charred texture and reset color tint
+        if (burnFrac >= 0.95 && fire.charredMap) {
+          fire.painting.material.map = fire.charredMap;
+          fire.painting.material.color.setRGB(1, 1, 1);  // charred map already has the right look
+          fire.painting.material.needsUpdate = true;
+          fire.swappedToCharred = true;
+        }
+      }
+
+      // After burnout: flames keep flickering but at 50% size and decreasing
       if (burnFrac >= 1) {
-        fire.flame.scale.multiplyScalar(0.6);
-        fire.flame2.scale.multiplyScalar(0.6);
+        const decay = Math.max(0.2, 1 - (fire.age - BURN_DURATION) / 8);  // flames shrink over 8 more seconds
+        fire.flame.scale.multiplyScalar(decay * 0.5);
+        fire.flame2.scale.multiplyScalar(decay * 0.5);
+        if (fire.glow) fire.glow.intensity *= decay * 0.5;
       }
     }
   }
