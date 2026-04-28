@@ -1,5 +1,22 @@
 {
-  "_comment": "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. You can mix units across paintings.",
+  "_comment": "Each painting needs: file, title, size, medium, year, description, series. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. The series field assigns the painting to a room — must match one of the keys in the 'series' block below. If you add a new series, just add a key here and the gallery will auto-build a room for it. To move a painting between rooms, just change its series field.",
+  "series": {
+    "plein-air": {
+      "name": "Plein Air",
+      "subtitle": "Painted on location",
+      "_comment": "Naturalistic studies done outdoors — coastal, hills, valleys, deserts, gardens"
+    },
+    "constructed-landscape": {
+      "name": "Constructed Landscape",
+      "subtitle": "Geometric & conceptual works",
+      "_comment": "Stratified, abstracted, or architecturally-composed landscapes — layered ridges, structural studies, semi-abstract conceptual pieces"
+    },
+    "figurative": {
+      "name": "Figurative",
+      "subtitle": "Portraits & figures",
+      "_comment": "Paintings of people"
+    }
+  },
   "paintings": [
     {
       "file": "07-strands.jpg",
@@ -7,6 +24,7 @@
       "size": "72x48in",
       "medium": "Oil on linen",
       "year": "2015",
+      "series": "constructed-landscape",
       "description": "A conceptual geometric landscape. The largest piece in the current collection."
     },
     {
@@ -15,6 +33,7 @@
       "size": "48x36in",
       "medium": "Oil on canvas",
       "year": "",
+      "series": "constructed-landscape",
       "description": "A conceptual landscape of geometric salt pans, a bright triangular road converging toward the horizon. The palette reduced to warm earth and bone."
     },
     {
@@ -23,7 +42,17 @@
       "size": "30x48in",
       "medium": "Oil on canvas",
       "year": "",
+      "series": "constructed-landscape",
       "description": "An abstract architecture of beams and uprights — a study of the structure that holds space, the A-frame rising out of a nest of timber."
+    },
+    {
+      "file": "19-aviator.jpg",
+      "title": "Aviator",
+      "size": "24x24in",
+      "medium": "Oil on canvas",
+      "year": "",
+      "series": "figurative",
+      "description": "A young woman in a leather aviator's helmet, the goggles replaced by molten gold — half portrait, half talisman. Painted in warm earth tones against a dusky, indeterminate sky."
     },
     {
       "file": "15-coastal-strata.jpg",
@@ -31,6 +60,7 @@
       "size": "36x24in",
       "medium": "Oil on canvas",
       "year": "",
+      "series": "constructed-landscape",
       "description": "Layered ridges resolving into bands of violet, teal, and ochre. An elevated view where the land reads almost as wave-forms, each strata catching its own light."
     },
     {
@@ -39,6 +69,7 @@
       "size": "24x24in",
       "medium": "Oil on canvas",
       "year": "",
+      "series": "plein-air",
       "description": "Looking down through a gap in the coastal rocks to the wetlands beyond, with the distant mountains dissolving into a pale gray sky. Braided channels of water and marsh grass spread out to the horizon."
     },
     {
@@ -47,6 +78,7 @@
       "size": "16x8in",
       "medium": "Oil on canvas",
       "year": "",
+      "series": "constructed-landscape",
       "description": "A semi-abstract investigation of overhead architecture — beams, light, and the geometry of a constructed space resolving into planes of color."
     },
     {
@@ -55,6 +87,7 @@
       "size": "14x11in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "Rolling hills resolved into bands of teal, ochre and shadow. The sea sits low on the horizon, cool against the warm broken color of the foreground."
     },
     {
@@ -63,6 +96,7 @@
       "size": "12x9in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "A windswept ridge falling away to a pale, cool sea. Painted on location, working quickly to catch the shifting afternoon light on the cliff face."
     },
     {
@@ -71,6 +105,7 @@
       "size": "12x9in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "A broad valley at dusk, dotted with the first lights of evening. The mountainside in the foreground holds onto the day's last warmth."
     },
     {
@@ -79,6 +114,7 @@
       "size": "12x9in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "Golden grass raked by late afternoon light, the far hills holding the last of the day's cool blues. Heavy impasto in the foreground grasses."
     },
     {
@@ -87,6 +123,7 @@
       "size": "12x9in",
       "medium": "Oil on canvas",
       "year": "plein air",
+      "series": "plein-air",
       "description": "Rolling California hills in late spring, the dry grass catching warm light while the far ridges go cool. Signed lower right."
     },
     {
@@ -95,6 +132,7 @@
       "size": "9x12in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "A soft overcast morning — the sky done in long horizontal strokes, the foreground hills a textured tangle of ochre and violet."
     },
     {
@@ -103,6 +141,7 @@
       "size": "9x12in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "A small plein air study from the same vantage as Botchers Gap, painted later in the day. Moody, almost monochrome — the hills falling into deep shadow with only a thin band of sky still lit."
     },
     {
@@ -111,6 +150,7 @@
       "size": "8x10in",
       "medium": "Oil on panel",
       "year": "plein air",
+      "series": "plein-air",
       "description": "Looking through a wooden fence at sunset light catching the far ridges. A small framed study from a high overlook."
     },
     {
@@ -119,6 +159,7 @@
       "size": "10x12in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "A quiet Laguna morning from the heights — pale silhouettes of distant ranges above a patchwork of fields and light."
     },
     {
@@ -127,6 +168,7 @@
       "size": "8x10in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "Looking out through the cross-bars of a window at a distant ribbon of sea. The window itself becomes part of the composition — a quiet, abstracted framing."
     },
     {
@@ -135,6 +177,7 @@
       "size": "8x6in",
       "medium": "Oil on board",
       "year": "plein air",
+      "series": "plein-air",
       "description": "High desert in late spring — pale earth, scattered sage, and the long pink shadows of an afternoon coming to a close."
     },
     {
@@ -143,15 +186,8 @@
       "size": "6x10in",
       "medium": "Oil on board",
       "year": "",
+      "series": "constructed-landscape",
       "description": "A small conceptual study — a tideline at dawn or dusk, the wet sand inlaid with glass marbles catching the last light."
-    },
-    {
-      "file": "19-aviator.jpg",
-      "title": "Aviator",
-      "size": "24x24in",
-      "medium": "Oil on Canvas",
-      "year": "2025",
-      "description": ""
     }
   ]
 }
