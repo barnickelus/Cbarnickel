@@ -1289,16 +1289,19 @@ const FOV_MIN = 50, FOV_MAX = 90;
 // ── Cinematic intro ──
 // On first entry, camera floats above the lobby for ~3s taking in all rooms,
 // then descends to standing position. introState tracks the lerp progress.
+// IMPORTANT: yaw=0 makes the camera face -z direction (which is north in our
+// coordinate system, toward the Plein Air archway). yaw=π would face +z (south,
+// toward the back wall). Earlier code had yaw=π which was inverted.
 const intro = {
   active: false,
   startTime: 0,
   duration: 3.5,
   // Start pose: high up inside the lobby, slightly behind center, tilted down
   // to take in the floor and all three archway openings on N/E/W walls.
-  start: { x: 0, y: 5.5, z: 5.0, yaw: Math.PI, pitch: -0.55 },
+  start: { x: 0, y: 5.5, z: 5.0, yaw: 0, pitch: -0.55 },
   // End pose: eye level a bit further back, looking dead-level so the line of
   // sight passes squarely through the north (Plein Air) archway opening.
-  end:   { x: 0, y: 1.65, z: 4.5, yaw: Math.PI, pitch: 0 },
+  end:   { x: 0, y: 1.65, z: 4.5, yaw: 0, pitch: 0 },
 };
 let introHasPlayed = false;
 
@@ -2244,9 +2247,9 @@ function initScene() {
   scene.fog = new THREE.FogExp2(T.fogColor, T.fogDensity);
   camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 100);
 
-  // Default fallback position (center of room, near south wall, facing north)
+  // Default fallback position (center of room, near south wall, facing north toward -z)
   camera.position.set(0, 1.65, Math.min(4, ROOM.d / 4));
-  yaw = Math.PI;
+  yaw = 0;
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -2317,7 +2320,7 @@ function positionCameraForFirstPainting() {
   if (!lobby) return;
   if (introHasPlayed) {
     camera.position.set(lobby.cx, intro.end.y, lobby.cz + lobby.d/2 - 2.5);
-    yaw = Math.PI;
+    yaw = 0;
     pitch = 0;
   } else {
     camera.position.set(intro.start.x, intro.start.y, intro.start.z);
@@ -2368,15 +2371,17 @@ function setupControls() {
   }
   dom.addEventListener('touchstart', e => {
     e.preventDefault();
-    // Pinch-zoom (only in tap-pinch nav mode). Establish a fresh baseline whenever
-    // we transition into a 2-finger state, so adding/removing fingers doesn't desync.
+    // Pinch-to-walk (only in tap-pinch nav mode). Two-finger gesture moves the
+    // camera forward/backward along the ground plane, like a real-world dolly.
+    // Pinch out (fingers spread) = walk forward. Pinch in = walk backward.
     if (navMode === 'tap-pinch' && e.touches.length >= 2) {
       const t0 = e.touches[0], t1 = e.touches[1];
       pinchActive = true;
       pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
-      pinchStartFov = camera.fov;
-      // Cancel any in-progress touch-look so it doesn't fight the pinch
+      // Cancel any in-progress one-finger look so it doesn't fight the pinch
       touchLook = null;
+      // Cancel any in-progress tap-walk so user gets full pinch control
+      tapWalkTarget = null;
       return;
     }
     for (const t of e.changedTouches) {
@@ -2387,16 +2392,28 @@ function setupControls() {
     }
   }, { passive: false });
   dom.addEventListener('touchmove', e => {
-    // Pinch-zoom update — predictable: each pixel of finger spread changes FOV linearly
+    // Pinch-to-walk update — every frame, compare current spread to the previous
+    // sampled spread and translate the difference into a forward/back step.
     if (pinchActive && e.touches.length >= 2) {
       const t0 = e.touches[0], t1 = e.touches[1];
       const d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
       const deltaPx = d - pinchStartDist;
-      // 4 pixels of spread = 1 degree of FOV change. Pinch out (positive delta) = zoom in (less FOV).
-      let newFov = pinchStartFov - deltaPx / 4;
-      newFov = Math.max(FOV_MIN, Math.min(FOV_MAX, newFov));
-      camera.fov = newFov;
-      camera.updateProjectionMatrix();
+      // 80 pixels of finger spread = ~1m of camera movement.
+      // Tunable — higher number = less sensitive, lower number = more sensitive.
+      const stepM = deltaPx / 80;
+      // Move along the camera's horizontal forward direction (yaw only — don't
+      // change altitude when pinching).
+      const fx = -Math.sin(yaw);
+      const fz = -Math.cos(yaw);
+      const newX = camera.position.x + fx * stepM;
+      const newZ = camera.position.z + fz * stepM;
+      // Clamp to room bounds
+      const clamped = clampToRooms(newX, newZ);
+      camera.position.x = clamped.x;
+      camera.position.z = clamped.z;
+      currentRoomId = clamped.roomId;
+      // Update the baseline so the next frame's delta is incremental, not cumulative
+      pinchStartDist = d;
       return;
     }
     for (const t of e.touches) {
@@ -2420,10 +2437,9 @@ function setupControls() {
         // walk-tap on the lift point
         touchLook = null;
       } else {
-        // Still 2+ fingers — re-anchor to current spread and current FOV
+        // Still 2+ fingers — re-anchor to current spread
         const t0 = e.touches[0], t1 = e.touches[1];
         pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
-        pinchStartFov = camera.fov;
       }
     }
     for (const t of e.changedTouches) {
@@ -2464,15 +2480,20 @@ function setupControls() {
     if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
   });
 
-  // Mouse wheel — zoom FOV, but only when in tap-pinch mode (otherwise leave page-scroll alone)
+  // Mouse wheel — walk forward/back along view direction (only in tap-pinch mode).
+  // Wheel up (negative deltaY) = walk forward; wheel down = walk back.
   dom.addEventListener('wheel', e => {
     if (navMode !== 'tap-pinch') return;
     e.preventDefault();
-    const delta = e.deltaY * 0.05;   // positive deltaY = scroll down = zoom out
-    let newFov = camera.fov + delta;
-    newFov = Math.max(FOV_MIN, Math.min(FOV_MAX, newFov));
-    camera.fov = newFov;
-    camera.updateProjectionMatrix();
+    const stepM = -e.deltaY * 0.005;   // 200 wheel units ≈ 1m
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const newX = camera.position.x + fx * stepM;
+    const newZ = camera.position.z + fz * stepM;
+    const clamped = clampToRooms(newX, newZ);
+    camera.position.x = clamped.x;
+    camera.position.z = clamped.z;
+    currentRoomId = clamped.roomId;
   }, { passive: false });
 }
 
@@ -4541,8 +4562,9 @@ setupSettingsPanel();
 function setNavMode(mode) {
   if (!['classic', 'tap-art', 'tap-any', 'tap-pinch'].includes(mode)) mode = 'classic';
   navMode = mode;
-  // Reset FOV when switching out of tap-pinch (so it doesn't stay zoomed weird)
-  if (mode !== 'tap-pinch' && camera) {
+  // Always restore default FOV — pinch-to-walk no longer affects FOV but legacy
+  // sessions (or future zoom features) might leave it altered, so reset to be safe.
+  if (camera && camera.fov !== FOV_DEFAULT) {
     camera.fov = FOV_DEFAULT;
     camera.updateProjectionMatrix();
   }
@@ -4603,13 +4625,13 @@ function showTutorialOverlay() {
     if (isTouch) {
       steps = [
         { icon: '◉', text: '<strong>Tap any painting or floor</strong> to walk there.' },
-        { icon: '↔', text: '<strong>Pinch out</strong> to zoom in on details. <strong>Pinch in</strong> to zoom out.' },
+        { icon: '↔', text: '<strong>Pinch out</strong> (spread fingers) to walk forward. <strong>Pinch in</strong> to walk backward.' },
         { icon: '✥', text: '<strong>Drag with one finger</strong> to look around.' },
       ];
     } else {
       steps = [
         { icon: '◉', text: '<strong>Click any painting or floor</strong> to walk there.' },
-        { icon: '↔', text: '<strong>Scroll the mouse wheel</strong> to zoom in / out.' },
+        { icon: '↔', text: '<strong>Scroll the mouse wheel up</strong> to walk forward, <strong>down</strong> to walk back.' },
         { icon: '✥', text: '<strong>Click and drag</strong> to look around.' },
       ];
     }
