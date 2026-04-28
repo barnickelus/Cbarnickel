@@ -178,6 +178,133 @@
   }
   .detail-hint.show { opacity: 1; }
 
+  /* Navigation mode selector — 2x2 grid in the settings panel */
+  .nav-mode-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .nav-mode-btn {
+    background: rgba(239,231,215,0.05);
+    border: 1px solid var(--ink-faint);
+    color: var(--ink-dim);
+    padding: 8px 10px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.18s;
+  }
+  .nav-mode-btn:hover { color: var(--ink); border-color: var(--gold-dim, #c9a96e); }
+  .nav-mode-btn.active {
+    background: rgba(201, 169, 110, 0.18);
+    color: var(--gold, #c9a96e);
+    border-color: var(--gold, #c9a96e);
+  }
+
+  /* Generic ghost button used for tutorial trigger / dismiss */
+  .ghost-btn {
+    background: transparent;
+    border: 1px solid var(--ink-faint);
+    color: var(--ink-dim);
+    padding: 8px 12px;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.18s;
+    width: 100%;
+  }
+  .ghost-btn:hover { color: var(--ink); border-color: var(--gold-dim, #c9a96e); }
+
+  /* Intro cinematic skip button */
+  .intro-skip {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    z-index: 200;
+    background: rgba(10, 9, 8, 0.7);
+    border: 1px solid var(--gold-dim, #c9a96e);
+    color: var(--gold, #c9a96e);
+    padding: 10px 18px;
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease 0.8s;   /* fade in slightly delayed so it's not jarring */
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .intro-skip.show {
+    opacity: 0.85;
+    pointer-events: auto;
+  }
+  .intro-skip:hover { opacity: 1; }
+
+  /* Tutorial overlay — large readable card explaining current nav mode */
+  .tutorial-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 250;
+    background: rgba(10, 9, 8, 0.78);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .tutorial-overlay.show { display: flex; }
+  .tutorial-card {
+    max-width: 460px;
+    background: rgba(15, 12, 10, 0.96);
+    border: 1px solid var(--gold-dim, #c9a96e);
+    padding: 36px 32px 28px;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .tutorial-card h3 {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: 22px;
+    color: var(--gold, #c9a96e);
+    margin: 0 0 18px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    text-align: center;
+  }
+  .tutorial-card .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .tutorial-card .step-icon {
+    flex-shrink: 0;
+    width: 36px; height: 36px;
+    border: 1px solid var(--gold-dim, #c9a96e);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--gold, #c9a96e);
+    font-size: 18px;
+  }
+  .tutorial-card .step-text {
+    flex: 1;
+    color: var(--ink-dim);
+  }
+  .tutorial-card .step-text strong { color: var(--ink); font-weight: 500; }
+  .tutorial-card .ghost-btn { margin-top: 20px; }
+
   /* ── Joystick (more obvious now) ── */
   .joystick-wrap {
     position: fixed; bottom: 32px; left: 32px;
@@ -935,6 +1062,16 @@
     <label style="margin-bottom:0; flex:1;">White cube mode</label>
     <div class="toggle-switch" id="tg-white"></div>
   </div>
+  <div class="row divider">
+    <label>Navigation <span class="val" id="val-nav-tag" style="color: var(--ink-faint); font-style:italic;">testing</span></label>
+    <div class="nav-mode-grid">
+      <button class="nav-mode-btn active" data-nav="classic" title="WASD/joystick + drag to look">Classic</button>
+      <button class="nav-mode-btn" data-nav="tap-art" title="Tap painting to walk to it; classic otherwise">Tap art</button>
+      <button class="nav-mode-btn" data-nav="tap-any" title="Tap painting OR floor to walk; classic otherwise">Tap anywhere</button>
+      <button class="nav-mode-btn" data-nav="tap-pinch" title="Full point-and-click: tap to walk, pinch/wheel to zoom">Tap + pinch</button>
+    </div>
+    <button class="ghost-btn" id="btn-show-tutorial" style="margin-top:8px;">Show controls help ↗</button>
+  </div>
   <div class="row divider" style="display:flex; justify-content:space-between; align-items:center;">
     <label style="margin-bottom:0; flex:1;">Destruction mode</label>
     <div class="toggle-switch" id="tg-soup"></div>
@@ -1011,6 +1148,18 @@
 </div>
 
 <div class="detail-hint" id="detail-hint">Tap painting to view details</div>
+
+<!-- Intro cinematic skip button (only shown during intro) -->
+<button class="intro-skip" id="intro-skip">Skip intro</button>
+
+<!-- Tutorial overlay — explains current navigation mode -->
+<div class="tutorial-overlay" id="tutorial-overlay">
+  <div class="tutorial-card">
+    <h3 id="tutorial-title">How to navigate</h3>
+    <div id="tutorial-body"></div>
+    <button class="ghost-btn" id="tutorial-close">Got it</button>
+  </div>
+</div>
 
 <div id="canvas-container" style="position:fixed; inset:0; z-index:1;"></div>
 
@@ -1116,6 +1265,40 @@ let floorMesh = null;
 let detailHintShowsRemaining = 3;
 let detailHintCurrentlyShown = false;
 let detailHintLastNearPainting = null;
+
+// ── Navigation mode ──
+// Modes:
+//   'classic'    — WASD/joystick + drag-to-look (default, the original)
+//   'tap-art'    — tap painting auto-walks; classic otherwise
+//   'tap-any'    — tap painting OR floor auto-walks; classic look/move otherwise
+//   'tap-pinch'  — full point-and-click: tap to walk, pinch to zoom FOV, drag to look
+let navMode = 'classic';
+
+// Tap-to-walk target: when set, the camera smoothly moves toward { x, z, faceX, faceZ }
+// faceX/faceZ are the optional point to face after arrival (e.g. painting position)
+let tapWalkTarget = null;
+const TAP_WALK_SPEED = 6.0;        // m/s — fast enough to not feel like a slog
+
+// Pinch-to-zoom state — for tap-pinch mode. Tracks two-finger spread.
+let pinchActive = false;
+let pinchStartDist = 0;
+let pinchStartFov = 72;
+const FOV_DEFAULT = 72;
+const FOV_MIN = 50, FOV_MAX = 90;
+
+// ── Cinematic intro ──
+// On first entry, camera floats above the lobby for ~3s taking in all rooms,
+// then descends to standing position. introState tracks the lerp progress.
+const intro = {
+  active: false,
+  startTime: 0,
+  duration: 3.5,
+  // Start pose: high above the lobby's south edge, looking down/north at angle
+  start: { x: 0, y: 5.0, z: 6.5, yaw: Math.PI, pitch: -0.45 },
+  // End pose: eye level near south wall of lobby, looking straight north
+  end:   { x: 0, y: 1.65, z: 4.0, yaw: Math.PI, pitch: 0 },
+};
+let introHasPlayed = false;
 
 // Track all dynamic light & material references so we can update them at runtime
 const lightingRefs = {
@@ -1682,15 +1865,34 @@ function buildSingleRoom(room, T, isLobby) {
       const wallSpec = wallSpecs.find(s => s.dir === arch.dir);
       addArchwayPlaque(wallSpec, targetRoom.name, targetRoom.subtitle, T);
     }
-    // Also add a "C.Barnickel Artwork" name on the south wall (back of lobby)
+    // The C.Barnickel name appears in TWO places in the lobby:
+    //   1) Prominently above the north archway — this is what new visitors see
+    //      when they spawn and look forward. Centered focal point.
+    //   2) On the south wall — the original "back wall" name, as a quiet reminder
+    //      when you turn around to leave.
     const nameTex = makeNameTexture();
-    const nameMat = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.7 });
-    const nameMesh = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), nameMat);
-    // South wall is at cz + d/2, facing -z (into the room)
-    nameMesh.position.set(room.cx, 3.5, room.cz + room.d/2 - 0.05);
-    nameMesh.rotation.y = Math.PI;
-    scene.add(nameMesh);
-    themeRefs.nameLabels.push(nameMesh);
+
+    // (1) North wall — placed high above the archway
+    const northSpec = wallSpecs.find(s => s.dir === 'north');
+    if (northSpec) {
+      const nameMatN = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.92 });
+      // Big and prominent — make it the welcome sign
+      const nameMeshN = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.75), nameMatN);
+      // Position above the arch (arch top is at y = ARCH_HEIGHT, so center at ~5)
+      const nameY = (ARCH_HEIGHT + room.h) / 2 + 0.5;   // halfway between arch top and ceiling, biased up
+      nameMeshN.position.set(room.cx, nameY, room.cz - room.d/2 + 0.04);
+      nameMeshN.rotation.y = 0;     // north wall faces +z (into lobby)
+      scene.add(nameMeshN);
+      themeRefs.nameLabels.push(nameMeshN);
+    }
+
+    // (2) South wall — back wall, smaller / softer
+    const nameMatS = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.6 });
+    const nameMeshS = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), nameMatS);
+    nameMeshS.position.set(room.cx, 3.5, room.cz + room.d/2 - 0.05);
+    nameMeshS.rotation.y = Math.PI;
+    scene.add(nameMeshS);
+    themeRefs.nameLabels.push(nameMeshS);
   }
 
   // Ceiling bulbs (visual only, light comes from ambient/spots)
@@ -2104,12 +2306,20 @@ function applyTheme() {
 // Call this AFTER paintings are placed so `__firstPaintingPose` exists.
 // Positions the camera at a natural viewing distance facing painting #1.
 function positionCameraForFirstPainting() {
-  // Start in the lobby, near the south wall, facing north (toward the largest series room)
+  // Place camera at the cinematic intro START pose (high above lobby looking down).
+  // The intro animation will lerp it down to standing position over a few seconds.
+  // If the intro has already played this session, just put us at the standing position.
   const lobby = ROOMS.lobby;
   if (!lobby) return;
-  // Stand near the south wall of the lobby, looking toward the center / archway
-  camera.position.set(lobby.cx, 1.65, lobby.cz + lobby.d/2 - 2.5);
-  yaw = Math.PI;   // face -z (north)
+  if (introHasPlayed) {
+    camera.position.set(lobby.cx, intro.end.y, lobby.cz + lobby.d/2 - 2.5);
+    yaw = Math.PI;
+    pitch = 0;
+  } else {
+    camera.position.set(intro.start.x, intro.start.y, intro.start.z);
+    yaw = intro.start.yaw;
+    pitch = intro.start.pitch;
+  }
   currentRoomId = 'lobby';
 }
 
@@ -2154,6 +2364,16 @@ function setupControls() {
   }
   dom.addEventListener('touchstart', e => {
     e.preventDefault();
+    // Pinch-zoom (only in tap-pinch nav mode): detect two fingers and start tracking spread
+    if (navMode === 'tap-pinch' && e.touches.length === 2) {
+      const t0 = e.touches[0], t1 = e.touches[1];
+      pinchActive = true;
+      pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      pinchStartFov = camera.fov;
+      // Cancel any in-progress touch-look
+      touchLook = null;
+      return;
+    }
     for (const t of e.changedTouches) {
       if (inJoy(t)) continue;
       if (touchLook === null) {
@@ -2162,6 +2382,18 @@ function setupControls() {
     }
   }, { passive: false });
   dom.addEventListener('touchmove', e => {
+    // Pinch-zoom update
+    if (pinchActive && e.touches.length === 2) {
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      const ratio = pinchStartDist > 0 ? d / pinchStartDist : 1;
+      // Pinch out (ratio > 1) → zoom in (smaller FOV). Pinch in → zoom out.
+      let newFov = pinchStartFov / ratio;
+      newFov = Math.max(FOV_MIN, Math.min(FOV_MAX, newFov));
+      camera.fov = newFov;
+      camera.updateProjectionMatrix();
+      return;
+    }
     for (const t of e.touches) {
       if (touchLook && t.identifier === touchLook.id) {
         const dx = t.clientX - touchLook.x;
@@ -2175,6 +2407,10 @@ function setupControls() {
     }
   }, { passive: true });
   dom.addEventListener('touchend', e => {
+    // Stop pinch when fewer than 2 fingers remain
+    if (pinchActive && e.touches.length < 2) {
+      pinchActive = false;
+    }
     for (const t of e.changedTouches) {
       if (touchLook && t.identifier === touchLook.id) {
         if (touchLook.moved < 12) handleTap(t.clientX, t.clientY);
@@ -2212,6 +2448,17 @@ function setupControls() {
     if (k === 's' || e.key === 'ArrowDown') keys.s = false;
     if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
   });
+
+  // Mouse wheel — zoom FOV, but only when in tap-pinch mode (otherwise leave page-scroll alone)
+  dom.addEventListener('wheel', e => {
+    if (navMode !== 'tap-pinch') return;
+    e.preventDefault();
+    const delta = e.deltaY * 0.05;   // positive deltaY = scroll down = zoom out
+    let newFov = camera.fov + delta;
+    newFov = Math.max(FOV_MIN, Math.min(FOV_MAX, newFov));
+    camera.fov = newFov;
+    camera.updateProjectionMatrix();
+  }, { passive: false });
 }
 
 function setupJoystick(container, stick) {
@@ -2276,11 +2523,53 @@ function handleTap(clientX, clientY) {
     fireActiveWeapon();
     return;
   }
+  // Skip tap during cinematic intro
+  if (intro.active) return;
+
   mouse.x = (clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(clientY / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
-  const hits = raycaster.intersectObjects(paintingMeshes, false);
-  if (hits.length > 0) openModal(hits[0].object.userData.artIndex);
+
+  // First, see if we hit a painting
+  const paintingHits = raycaster.intersectObjects(paintingMeshes, false);
+
+  if (navMode === 'classic') {
+    // Original behavior: click painting → open modal
+    if (paintingHits.length > 0) openModal(paintingHits[0].object.userData.artIndex);
+    return;
+  }
+
+  // For tap-walk modes: tapping a painting walks you to viewing position.
+  // Then a SECOND tap on the same painting (when you're already close) opens the modal.
+  if (paintingHits.length > 0) {
+    const painting = paintingHits[0].object;
+    const distToPainting = Math.hypot(
+      painting.position.x - camera.position.x,
+      painting.position.z - camera.position.z,
+    );
+    // If we're already close (within 2.5m), treat as "open the modal" instead of walking
+    if (distToPainting < 2.5) {
+      openModal(painting.userData.artIndex);
+      return;
+    }
+    const view = computeViewingPosition(painting);
+    if (view) {
+      tapWalkTarget = view;
+    }
+    return;
+  }
+
+  // No painting hit. For tap-any and tap-pinch modes, also try walking to the floor point.
+  if (navMode === 'tap-any' || navMode === 'tap-pinch') {
+    const floorMeshes = themeRefs.floors || (themeRefs.floor ? [themeRefs.floor] : []);
+    const floorHits = raycaster.intersectObjects(floorMeshes, false);
+    if (floorHits.length > 0) {
+      const p = floorHits[0].point;
+      // Don't allow walking into walls — clamp the destination through clampToRooms
+      const clamped = clampToRooms(p.x, p.z);
+      tapWalkTarget = { x: clamped.x, z: clamped.z };
+    }
+  }
 }
 
 function markLooked() {
@@ -2296,11 +2585,100 @@ function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+// ── Cinematic intro: lerp camera from "above" pose to standing pose ──
+function updateIntro(now) {
+  const elapsed = (now - intro.startTime) / 1000;
+  let t = Math.min(1, elapsed / intro.duration);
+  // Ease-in-out cubic for a graceful descent
+  const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  // Lerp position
+  camera.position.x = intro.start.x + (intro.end.x - intro.start.x) * eased;
+  camera.position.y = intro.start.y + (intro.end.y - intro.start.y) * eased;
+  camera.position.z = intro.start.z + (intro.end.z - intro.start.z) * eased;
+  // Lerp angles
+  yaw   = intro.start.yaw   + (intro.end.yaw   - intro.start.yaw)   * eased;
+  pitch = intro.start.pitch + (intro.end.pitch - intro.start.pitch) * eased;
+  if (t >= 1) endIntro();
+}
+
+// ── Tap-to-walk: smoothly move camera toward tapWalkTarget ──
+function updateTapWalk(dt) {
+  if (!tapWalkTarget) return;
+  const target = tapWalkTarget;
+  const dx = target.x - camera.position.x;
+  const dz = target.z - camera.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.05) {
+    // Arrived. If a face direction was given, orient toward it.
+    if (typeof target.faceX === 'number' && typeof target.faceZ === 'number') {
+      const fdx = target.faceX - camera.position.x;
+      const fdz = target.faceZ - camera.position.z;
+      const targetYaw = Math.atan2(fdx, fdz) + Math.PI;
+      // Smoothly rotate to face — use a quick lerp toward the target yaw, taking shortest path
+      let dyaw = targetYaw - yaw;
+      while (dyaw >  Math.PI) dyaw -= 2 * Math.PI;
+      while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+      if (Math.abs(dyaw) < 0.02) {
+        yaw = targetYaw;
+        tapWalkTarget = null;
+      } else {
+        yaw += dyaw * Math.min(1, dt * 6);
+      }
+    } else {
+      tapWalkTarget = null;
+    }
+    return;
+  }
+  // Move toward target at TAP_WALK_SPEED, capped so we don't overshoot
+  const step = Math.min(dist, TAP_WALK_SPEED * dt);
+  camera.position.x += (dx / dist) * step;
+  camera.position.z += (dz / dist) * step;
+  // Optionally rotate to face direction of motion (subtle, not aggressive)
+  if (dist > 0.5) {
+    const moveYaw = Math.atan2(dx, dz) + Math.PI;
+    let dyaw = moveYaw - yaw;
+    while (dyaw >  Math.PI) dyaw -= 2 * Math.PI;
+    while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+    yaw += dyaw * Math.min(1, dt * 2.0);
+  }
+}
+
+// Compute a reasonable viewing position in front of a painting mesh.
+// Returns { x, z, faceX, faceZ } or null.
+function computeViewingPosition(painting) {
+  if (!painting || !painting.userData || !painting.userData.isPainting) return null;
+  const pPos = painting.position;
+  // Painting's outward normal: world-space, derived from its rotation.y
+  // The painting plane's normal in local space is +Z. Apply rotation.
+  const n = new THREE.Vector3(0, 0, 1).applyQuaternion(painting.quaternion);
+  // Stand back ~2.0m from the painting
+  const back = 2.0;
+  const x = pPos.x + n.x * back;
+  const z = pPos.z + n.z * back;
+  // Face the painting
+  return { x, z, faceX: pPos.x, faceZ: pPos.z };
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
+
+  // ── Cinematic intro lerp ──
+  if (intro.active) {
+    updateIntro(now);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = yaw;
+    camera.rotation.x = pitch;
+    renderer.render(scene, camera);
+    return;   // skip all other input/movement during intro
+  }
+
+  // ── Tap-to-walk auto-movement (one of the navigation modes) ──
+  if (tapWalkTarget) {
+    updateTapWalk(dt);
+  }
 
   camera.rotation.order = 'YXZ';
   camera.rotation.y = yaw;
@@ -2315,6 +2693,8 @@ function animate() {
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
   if (mx !== 0 || mz !== 0) {
+    // If user is using WASD/joystick, cancel any active tap-walk
+    tapWalkTarget = null;
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     camera.position.x += (mx * cos + mz * sin) * MOVE_SPEED * dt;
     camera.position.z += (-mx * sin + mz * cos) * MOVE_SPEED * dt;
@@ -4108,8 +4488,121 @@ function setupSettingsPanel() {
       equipWeapon(w);
     });
   });
+
+  // Navigation mode toggle — pick which control scheme is active
+  document.querySelectorAll('.nav-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.nav;
+      setNavMode(mode);
+    });
+  });
+
+  // Tutorial overlay
+  const showTutorial = document.getElementById('btn-show-tutorial');
+  if (showTutorial) showTutorial.addEventListener('click', () => {
+    closeSettingsPanel();
+    showTutorialOverlay();
+  });
+  const tutorialClose = document.getElementById('tutorial-close');
+  if (tutorialClose) tutorialClose.addEventListener('click', () => {
+    document.getElementById('tutorial-overlay').classList.remove('show');
+  });
+  // Tap outside the card to close
+  const tutorialOverlay = document.getElementById('tutorial-overlay');
+  if (tutorialOverlay) tutorialOverlay.addEventListener('click', e => {
+    if (e.target === tutorialOverlay) tutorialOverlay.classList.remove('show');
+  });
 }
 setupSettingsPanel();
+
+// Set the nav mode and update UI accordingly
+function setNavMode(mode) {
+  if (!['classic', 'tap-art', 'tap-any', 'tap-pinch'].includes(mode)) mode = 'classic';
+  navMode = mode;
+  // Reset FOV when switching out of tap-pinch (so it doesn't stay zoomed weird)
+  if (mode !== 'tap-pinch' && camera) {
+    camera.fov = FOV_DEFAULT;
+    camera.updateProjectionMatrix();
+  }
+  // Cancel any active tap-walk
+  tapWalkTarget = null;
+  // Update buttons
+  document.querySelectorAll('.nav-mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.nav === mode);
+  });
+  // Hide joystick in tap-pinch mode (it's incompatible with two-finger pinch)
+  if (entered && hasTouch) {
+    const joy = document.getElementById('joystick-wrap');
+    if (joy) joy.classList.toggle('show', mode !== 'tap-pinch');
+  }
+}
+
+// Show a tutorial overlay describing the current navigation mode
+function showTutorialOverlay() {
+  const overlay = document.getElementById('tutorial-overlay');
+  const titleEl = document.getElementById('tutorial-title');
+  const bodyEl = document.getElementById('tutorial-body');
+  if (!overlay || !titleEl || !bodyEl) return;
+
+  // Build content based on current nav mode and device
+  const isTouch = hasTouch;
+  let title = 'How to navigate';
+  let steps = [];
+  if (navMode === 'classic') {
+    title = 'Classic controls';
+    if (isTouch) {
+      steps = [
+        { icon: '⊕', text: '<strong>Drag the joystick</strong> in the bottom-left to walk forward, back, left, right.' },
+        { icon: '✥', text: '<strong>Drag the screen</strong> with one finger to look around.' },
+        { icon: '◉', text: '<strong>Tap a painting</strong> to open its detail view.' },
+      ];
+    } else {
+      steps = [
+        { icon: '⌨', text: 'Use <strong>WASD</strong> or <strong>arrow keys</strong> to walk.' },
+        { icon: '✥', text: '<strong>Click and drag</strong> the screen to look around.' },
+        { icon: '◉', text: '<strong>Click a painting</strong> to open its detail view.' },
+      ];
+    }
+  } else if (navMode === 'tap-art') {
+    title = 'Tap art controls';
+    steps = [
+      { icon: '◉', text: '<strong>Tap a painting</strong> to walk up to it. Tap it again (when close) to open its detail view.' },
+      { icon: '✥', text: 'Use <strong>drag-to-look</strong> and <strong>WASD/joystick</strong> to move freely otherwise.' },
+    ];
+  } else if (navMode === 'tap-any') {
+    title = 'Tap anywhere controls';
+    steps = [
+      { icon: '◉', text: '<strong>Tap any painting</strong> to walk up to it.' },
+      { icon: '◯', text: '<strong>Tap on the floor</strong> to walk to that spot.' },
+      { icon: '✥', text: '<strong>Drag the screen</strong> to look around.' },
+    ];
+  } else if (navMode === 'tap-pinch') {
+    title = 'Tap + pinch controls';
+    if (isTouch) {
+      steps = [
+        { icon: '◉', text: '<strong>Tap any painting or floor</strong> to walk there.' },
+        { icon: '↔', text: '<strong>Pinch out</strong> to zoom in on details. <strong>Pinch in</strong> to zoom out.' },
+        { icon: '✥', text: '<strong>Drag with one finger</strong> to look around.' },
+      ];
+    } else {
+      steps = [
+        { icon: '◉', text: '<strong>Click any painting or floor</strong> to walk there.' },
+        { icon: '↔', text: '<strong>Scroll the mouse wheel</strong> to zoom in / out.' },
+        { icon: '✥', text: '<strong>Click and drag</strong> to look around.' },
+      ];
+    }
+  }
+  titleEl.textContent = title;
+  bodyEl.innerHTML = steps.map(s =>
+    `<div class="step"><div class="step-icon">${s.icon}</div><div class="step-text">${s.text}</div></div>`
+  ).join('');
+  overlay.classList.add('show');
+}
+
+// Wire up the intro-skip button
+document.getElementById('intro-skip')?.addEventListener('click', () => {
+  if (intro.active) endIntro();
+});
 
 /* ─────── Entry ─────── */
 function enterGallery() {
@@ -4117,13 +4610,56 @@ function enterGallery() {
   entry.classList.add('fade');
   setTimeout(() => { entry.style.display = 'none'; }, 800);
   entered = true;
+  // Start the cinematic intro (camera floats above lobby and descends to standing)
+  if (!introHasPlayed) {
+    startIntro();
+  } else {
+    // Skip intro: show controls immediately
+    revealControls();
+  }
+}
+
+function revealControls() {
   if (!hasTouch) {
     document.getElementById('crosshair').classList.add('visible');
     document.getElementById('hint').classList.add('visible');
   } else {
-    document.getElementById('joystick-wrap').classList.add('show');
+    if (navMode !== 'tap-pinch') {
+      document.getElementById('joystick-wrap').classList.add('show');
+    }
     if (!hasLookedYet) document.getElementById('look-hint').classList.add('show');
   }
+}
+
+function startIntro() {
+  intro.active = true;
+  intro.startTime = performance.now();
+  // Hide UI elements during intro
+  document.getElementById('crosshair').classList.remove('visible');
+  document.getElementById('hint').classList.remove('visible');
+  document.getElementById('joystick-wrap').classList.remove('show');
+  document.getElementById('look-hint').classList.remove('show');
+  // Show skip button
+  const skip = document.getElementById('intro-skip');
+  if (skip) skip.classList.add('show');
+}
+
+function endIntro() {
+  if (!intro.active) return;
+  intro.active = false;
+  introHasPlayed = true;
+  // Snap to end pose
+  camera.position.set(intro.end.x, intro.end.y, lobbyEndZ());
+  yaw = intro.end.yaw;
+  pitch = intro.end.pitch;
+  document.getElementById('intro-skip')?.classList.remove('show');
+  revealControls();
+}
+
+// Compute the final standing-position Z based on lobby
+function lobbyEndZ() {
+  const lobby = ROOMS.lobby;
+  return lobby ? lobby.cz + lobby.d/2 - 2.5 : 4.0;
 }
 document.getElementById('entry').addEventListener('click', () => {
   const btn = document.getElementById('enterBtn');
