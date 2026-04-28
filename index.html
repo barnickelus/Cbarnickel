@@ -153,6 +153,31 @@
   }
   .controls-hint .sep { margin: 0 12px; color: var(--ink-faint); }
 
+  /* Subtle tap-for-detail hint — appears briefly when player gets close to a painting,
+     so the click-to-view interaction is discoverable. Fades after a short while.*/
+  .detail-hint {
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 41;
+    pointer-events: none;
+    font-family: var(--sans);
+    font-size: 10px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold-dim, #c9a96e);
+    opacity: 0;
+    transition: opacity 0.7s ease;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    background: rgba(10,9,8,0.4);
+    padding: 9px 16px;
+    border: 1px solid rgba(201, 169, 110, 0.25);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .detail-hint.show { opacity: 1; }
+
   /* ── Joystick (more obvious now) ── */
   .joystick-wrap {
     position: fixed; bottom: 32px; left: 32px;
@@ -437,6 +462,46 @@
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: 56px 40px;
     max-width: 1400px; margin: 0 auto;
+  }
+  /* When the index is grouped by series, .grid acts as a container of sections */
+  #grid-container { max-width: 1400px; margin: 0 auto; }
+  .grid-section {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 56px 40px;
+    margin-bottom: 80px;
+  }
+  .grid-section-header {
+    text-align: center;
+    margin: 60px 0 50px;
+  }
+  .grid-section-header:first-child { margin-top: 0; }
+  .grid-section-ornament {
+    width: 60px; height: 1px;
+    background: var(--gold-dim, #c9a96e);
+    margin: 0 auto 18px;
+  }
+  .grid-section-header h3 {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: 32px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink);
+    margin: 0;
+  }
+  .grid-section-sub {
+    color: var(--ink-dim);
+    font-size: 15px;
+    margin-top: 6px;
+  }
+  .grid-section-count {
+    font-family: var(--sans);
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 14px;
   }
   .grid-item { cursor: pointer; }
   .grid-img-wrap {
@@ -753,6 +818,29 @@
   .destruction-quick-btn svg {
     transition: transform 0.25s ease;
   }
+  /* "do not click here" bait label — small italic text to the LEFT of the button */
+  .bait-label {
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+    pointer-events: none;
+    opacity: 0.8;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    transition: color 0.2s, opacity 0.2s;
+  }
+  .destruction-quick-btn:hover .bait-label,
+  .destruction-quick-btn.active .bait-label {
+    color: var(--gold);
+    opacity: 1;
+  }
 
   .weapon-toolbar {
     position: fixed;
@@ -854,13 +942,14 @@
 </div>
 
 <!-- Quick destruction-mode toggle, positioned directly below the gear icon.
-     Uses a downward chevron + spark mark to signal "opens the destruction toolkit"
-     and visually differentiate from the weapon icons. -->
+     The "do not click here" label is bait — clearly visible to entice clicks.
+     The chevron+spark SVG hints there's something to be discovered. -->
 <button class="destruction-quick-btn" id="btn-destruction-quick" title="Toggle destruction mode" aria-label="Toggle destruction mode">
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M5 4l3 3 M19 4l-3 3 M5 9l4 0 M15 9l4 0"/>
     <path d="M6 14l6 7 l6 -7 z"/>
   </svg>
+  <span class="bait-label">do not click here</span>
 </button>
 
 <!-- Weapon toolbar — vertical stack under the destruction toggle, only visible when destruction mode is on -->
@@ -920,6 +1009,8 @@
 <div class="look-hint" id="look-hint">
   <span class="arrow">↺</span> Drag the screen<br>to look around
 </div>
+
+<div class="detail-hint" id="detail-hint">Tap painting to view details</div>
 
 <div id="canvas-container" style="position:fixed; inset:0; z-index:1;"></div>
 
@@ -989,11 +1080,22 @@
    ═══════════════════════════════════════════════════════════════════ */
 
 let ARTWORKS = [];
+let SERIES = {};       // { 'plein-air': { name, subtitle }, ... }
+
+// Room registry — keyed by series id, plus 'lobby'.
+// Each entry: { id, name, w, d, h, cx, cz, paintings: [], walls: [], floor, ceiling, archways: [] }
+// cx, cz are world-space center coordinates. Each room is its own rectangular space.
+const ROOMS = {};
+
+// Convenient pointer to whichever room the camera is currently in
+let currentRoomId = 'lobby';
 
 let scene, camera, renderer, raycaster;
 const mouse = new THREE.Vector2(0, 0);
 const paintingMeshes = [];
 let hoveredPainting = null;
+// Legacy ROOM global — kept as a fallback / for the spotlight fov tuning.
+// In hub-and-spoke mode it gets set to whichever room a painting is being placed in.
 let ROOM = { w: 24, h: 7, d: 14 };
 
 const keys = { w:false, a:false, s:false, d:false };
@@ -1010,6 +1112,10 @@ if (hasTouch) document.body.classList.add('is-touch');
 let entered = false;
 let hasLookedYet = false;
 let floorMesh = null;
+// Counter for how many times the proximity hint has shown — fades out for good after a few times
+let detailHintShowsRemaining = 3;
+let detailHintCurrentlyShown = false;
+let detailHintLastNearPainting = null;
 
 // Track all dynamic light & material references so we can update them at runtime
 const lightingRefs = {
@@ -1339,91 +1445,323 @@ const THEMES = {
 };
 function currentTheme() { return isWhiteCube ? THEMES.white : THEMES.dark; }
 
-function buildRoom(layout) {
-  const room = layout.room;
-  ROOM = room;
-  const T = currentTheme();
+/* ─────── Hub-and-spoke architecture ───────
+   Lobby in the center (~12×12m). Series rooms branch off three walls of the
+   lobby through 2.5m × 3m archway openings (no doors). Layout:
 
-  // Reset refs since we're rebuilding
+         ┌──────── PLEIN AIR (north) ────────┐
+         │                                    │
+         │                                    │
+         └────────────  arch  ────────────────┘
+                          │
+   ┌──── FIGURATIVE ──┐ LOBBY ┌── CONSTRUCTED LAND. ──┐
+   │       (west)     │       │       (east)            │
+   └──────  arch  ────┘       └──────── arch ───────────┘
+
+   Series rooms are sized to fit their paintings (using planLayout per series).
+   Each room knows its world bounds so the player-clamping & projectile collisions
+   can target only the current room. The archway openings are wide lanes that
+   connect rooms — the bounds-check function recognizes when the player is in
+   one of these lanes so they can pass through. */
+
+const WALL_THICKNESS = 0.0;        // walls are planes, but we leave a tiny gap between rooms
+const ARCH_WIDTH = 2.6;            // archway opening width
+const ARCH_HEIGHT = 3.0;           // archway opening height
+const LOBBY_W = 12, LOBBY_D = 12, LOBBY_H = 7;
+
+// Where each series sits relative to the lobby (compass direction)
+// 'south' is reserved for the lobby's "back wall" (with the gallery brand)
+const SERIES_DIRECTIONS = ['north', 'east', 'west'];   // assignment order
+
+function currentTheme() { return isWhiteCube ? THEMES.white : THEMES.dark; }
+
+// Plan and build the entire gallery: lobby + one room per series.
+function buildHubAndSpoke() {
+  const T = currentTheme();
+  // Reset refs
   lightingRefs.spots = [];
   lightingRefs.bulbs = [];
   themeRefs.walls = [];
   themeRefs.nameLabels = [];
 
-  floorMesh = new THREE.Mesh(
+  // 1) Compute per-series layouts (which paintings on which wall, room size)
+  const seriesIds = Object.keys(SERIES);
+  const layoutsBySeries = {};
+  for (const sid of seriesIds) {
+    const subset = ARTWORKS.filter(a => a.series === sid);
+    if (subset.length === 0) {
+      layoutsBySeries[sid] = null;
+      continue;
+    }
+    layoutsBySeries[sid] = planLayout(subset);
+  }
+
+  // 2) Assign each series to a compass direction (north/east/west).
+  //    Largest series gets north (most space), then east, then west.
+  const sized = seriesIds
+    .filter(sid => layoutsBySeries[sid])
+    .map(sid => ({
+      sid,
+      area: layoutsBySeries[sid].room.w * layoutsBySeries[sid].room.d,
+      count: ARTWORKS.filter(a => a.series === sid).length,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const seriesPlacement = {};   // sid -> direction
+  sized.forEach((entry, i) => {
+    if (i < SERIES_DIRECTIONS.length) seriesPlacement[entry.sid] = SERIES_DIRECTIONS[i];
+  });
+
+  // 3) Compute world-coord centers for each room.
+  //    Lobby at origin. Series rooms placed so their inner archway-edge
+  //    aligns with the lobby's outer wall.
+  ROOMS.lobby = {
+    id: 'lobby',
+    name: 'Lobby',
+    w: LOBBY_W, d: LOBBY_D, h: LOBBY_H,
+    cx: 0, cz: 0,
+    paintings: [],
+    walls: [],
+    archways: [],   // {dir, sid, openingCenterX, openingCenterZ, openingWidth}
+  };
+
+  for (const sid of Object.keys(seriesPlacement)) {
+    const dir = seriesPlacement[sid];
+    const layout = layoutsBySeries[sid];
+    const rw = layout.room.w, rd = layout.room.d, rh = layout.room.h;
+    let cx = 0, cz = 0;
+    if (dir === 'north') {
+      cz = -(LOBBY_D / 2 + rd / 2 + WALL_THICKNESS);
+    } else if (dir === 'south') {
+      cz =  (LOBBY_D / 2 + rd / 2 + WALL_THICKNESS);
+    } else if (dir === 'east') {
+      cx =  (LOBBY_W / 2 + rw / 2 + WALL_THICKNESS);
+    } else if (dir === 'west') {
+      cx = -(LOBBY_W / 2 + rw / 2 + WALL_THICKNESS);
+    }
+    ROOMS[sid] = {
+      id: sid,
+      name: SERIES[sid].name,
+      subtitle: SERIES[sid].subtitle || '',
+      w: rw, d: rd, h: rh,
+      cx, cz, dir,
+      layout,
+      paintings: [],
+      walls: [],
+      archways: [{
+        // The connecting archway, in this room's local coords
+        // For a north-room, the archway is in its SOUTH wall
+        // For an east-room, archway is in its WEST wall, etc.
+        dir: dir === 'north' ? 'south' : dir === 'south' ? 'north' : dir === 'east' ? 'west' : 'east',
+        connectsTo: 'lobby',
+      }],
+    };
+    // Lobby has the matching archway in the corresponding wall
+    ROOMS.lobby.archways.push({ dir, sid });
+  }
+
+  // 4) Build each room's geometry
+  buildSingleRoom(ROOMS.lobby, T, /*isLobby=*/true);
+  for (const sid of Object.keys(seriesPlacement)) {
+    buildSingleRoom(ROOMS[sid], T, false);
+  }
+
+  // 5) Global lights (ambient + hemi + lobby center glow)
+  lightingRefs.ambient = new THREE.AmbientLight(T.ambientColor, T.ambientIntensity);
+  scene.add(lightingRefs.ambient);
+  lightingRefs.hemi = new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiIntensity);
+  scene.add(lightingRefs.hemi);
+  // Add a center glow per room
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    const glow = new THREE.PointLight(T.centerGlowColor, T.centerGlowIntensity, Math.max(r.w, r.d) * 0.7, 2);
+    glow.position.set(r.cx, r.h - 0.4, r.cz);
+    scene.add(glow);
+    if (!lightingRefs.centerGlow) lightingRefs.centerGlow = glow;  // keep one ref for the legacy multiplier path
+    if (!lightingRefs.centerGlows) lightingRefs.centerGlows = [];
+    lightingRefs.centerGlows.push(glow);
+  }
+
+  // 6) Set ROOM legacy global to lobby for default sizing during placePainting
+  ROOM = { w: LOBBY_W, h: LOBBY_H, d: LOBBY_D };
+
+  applyLightingMultiplier();
+}
+
+// Build floor + ceiling + walls (with archway openings) + bulbs for one room.
+function buildSingleRoom(room, T, isLobby) {
+  // Floor
+  const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
     new THREE.MeshStandardMaterial({ map: makeFloorTexture(T.floorTexture), roughness: 0.85 })
   );
-  floorMesh.rotation.x = -Math.PI / 2;
-  scene.add(floorMesh);
-  themeRefs.floor = floorMesh;
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(room.cx, 0, room.cz);
+  scene.add(floor);
+  room.floor = floor;
+  if (!themeRefs.floor) themeRefs.floor = floor;   // legacy
+  if (!themeRefs.floors) themeRefs.floors = [];
+  themeRefs.floors.push(floor);
 
+  // Ceiling
   const ceiling = new THREE.Mesh(
     new THREE.PlaneGeometry(room.w, room.d),
     new THREE.MeshStandardMaterial({ color: T.ceiling, roughness: 1.0 })
   );
   ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.y = room.h;
+  ceiling.position.set(room.cx, room.h, room.cz);
   scene.add(ceiling);
-  themeRefs.ceiling = ceiling;
+  room.ceiling = ceiling;
+  if (!themeRefs.ceiling) themeRefs.ceiling = ceiling;
+  if (!themeRefs.ceilings) themeRefs.ceilings = [];
+  themeRefs.ceilings.push(ceiling);
 
-  const wallMat = new THREE.MeshStandardMaterial({ color: T.wall, roughness: 0.95 });
+  const wallMat = new THREE.MeshStandardMaterial({ color: T.wall, roughness: 0.95, side: THREE.DoubleSide });
+
+  // Build the four walls. Each wall faces inward toward the room center.
+  // 'north' wall: at z = cz - d/2, normal +z
+  // 'south' wall: at z = cz + d/2, normal -z
+  // 'east' wall:  at x = cx + w/2, normal -x
+  // 'west' wall:  at x = cx - w/2, normal +x
   const wallSpecs = [
-    { geo: [room.w, room.h], pos: [0, room.h/2, -room.d/2], rot: 0 },
-    { geo: [room.w, room.h], pos: [0, room.h/2,  room.d/2], rot: Math.PI },
-    { geo: [room.d, room.h], pos: [ room.w/2, room.h/2, 0], rot: -Math.PI/2 },
-    { geo: [room.d, room.h], pos: [-room.w/2, room.h/2, 0], rot:  Math.PI/2 },
+    { dir: 'north', length: room.w, pos: [room.cx, room.h/2, room.cz - room.d/2], rot: 0 },
+    { dir: 'south', length: room.w, pos: [room.cx, room.h/2, room.cz + room.d/2], rot: Math.PI },
+    { dir: 'east',  length: room.d, pos: [room.cx + room.w/2, room.h/2, room.cz], rot: -Math.PI/2 },
+    { dir: 'west',  length: room.d, pos: [room.cx - room.w/2, room.h/2, room.cz], rot:  Math.PI/2 },
   ];
-  wallSpecs.forEach((w, i) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(...w.geo), wallMat);
-    m.position.set(...w.pos);
-    m.rotation.y = w.rot;
-    m.userData = { isWall: true, wallIndex: i };
+
+  wallSpecs.forEach(spec => {
+    // Does this wall have an archway opening?
+    const arch = room.archways.find(a => a.dir === spec.dir);
+    let geo;
+    if (arch) {
+      // Build wall geometry as a Shape with an archway hole
+      const halfL = spec.length / 2;
+      const halfH = room.h / 2;
+      const shape = new THREE.Shape();
+      shape.moveTo(-halfL, -halfH);
+      shape.lineTo( halfL, -halfH);
+      shape.lineTo( halfL,  halfH);
+      shape.lineTo(-halfL,  halfH);
+      shape.lineTo(-halfL, -halfH);
+      const hole = new THREE.Path();
+      const ax = 0, ay = ARCH_HEIGHT/2 - halfH;   // arch centered horizontally, sitting on floor
+      const aw = ARCH_WIDTH / 2, ah = ARCH_HEIGHT / 2;
+      // Square-topped archway
+      hole.moveTo(ax - aw, ay - ah);
+      hole.lineTo(ax + aw, ay - ah);
+      hole.lineTo(ax + aw, ay + ah);
+      hole.lineTo(ax - aw, ay + ah);
+      hole.lineTo(ax - aw, ay - ah);
+      shape.holes.push(hole);
+      geo = new THREE.ShapeGeometry(shape);
+    } else {
+      geo = new THREE.PlaneGeometry(spec.length, room.h);
+    }
+    const m = new THREE.Mesh(geo, wallMat);
+    m.position.set(...spec.pos);
+    m.rotation.y = spec.rot;
+    m.userData = { isWall: true, roomId: room.id, dir: spec.dir, hasArch: !!arch };
     scene.add(m);
     themeRefs.walls.push(m);
+    room.walls.push(m);
+
+    // For walls with an archway, add a gold name plaque above the opening
+    if (arch && !isLobby) {
+      // Plaque on the SERIES side of the arch isn't visible from the lobby,
+      // but it's a nice "you are in [series]" reminder. Also add one on the lobby side.
+      addArchwayPlaque(spec, room.name, room.subtitle, T);
+    }
   });
 
-  const nameTex = makeNameTexture();
-  const nameMat = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.7 });
-  const nameGeo = new THREE.PlaneGeometry(6, 1.5);
-  if (layout.walls[2].length === 0) {
-    const eastName = new THREE.Mesh(nameGeo, nameMat);
-    eastName.position.set(room.w/2 - 0.05, 3.5, 0);
-    eastName.rotation.y = -Math.PI / 2;
-    scene.add(eastName);
-    themeRefs.nameLabels.push(eastName);
-  }
-  if (layout.walls[3].length === 0) {
-    const westName = new THREE.Mesh(nameGeo, nameMat);
-    westName.position.set(-room.w/2 + 0.05, 3.5, 0);
-    westName.rotation.y = Math.PI / 2;
-    scene.add(westName);
-    themeRefs.nameLabels.push(westName);
+  // Lobby archway plaques (visible from inside the lobby — these name the destination)
+  if (isLobby) {
+    for (const arch of room.archways) {
+      const targetRoom = ROOMS[arch.sid];
+      if (!targetRoom) continue;
+      const wallSpec = wallSpecs.find(s => s.dir === arch.dir);
+      addArchwayPlaque(wallSpec, targetRoom.name, targetRoom.subtitle, T);
+    }
+    // Also add a "C.Barnickel Artwork" name on the south wall (back of lobby)
+    const nameTex = makeNameTexture();
+    const nameMat = new THREE.MeshBasicMaterial({ map: nameTex, transparent: true, opacity: 0.7 });
+    const nameMesh = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), nameMat);
+    // South wall is at cz + d/2, facing -z (into the room)
+    nameMesh.position.set(room.cx, 3.5, room.cz + room.d/2 - 0.05);
+    nameMesh.rotation.y = Math.PI;
+    scene.add(nameMesh);
+    themeRefs.nameLabels.push(nameMesh);
   }
 
-  lightingRefs.ambient = new THREE.AmbientLight(T.ambientColor, T.ambientIntensity);
-  scene.add(lightingRefs.ambient);
-  lightingRefs.hemi = new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiIntensity);
-  scene.add(lightingRefs.hemi);
-  lightingRefs.centerGlow = new THREE.PointLight(T.centerGlowColor, T.centerGlowIntensity, room.w * 0.7, 2);
-  lightingRefs.centerGlow.position.set(0, room.h - 0.4, 0);
-  scene.add(lightingRefs.centerGlow);
-
+  // Ceiling bulbs (visual only, light comes from ambient/spots)
   const bulbGeo = new THREE.SphereGeometry(0.06, 8, 8);
   const bulbMat = new THREE.MeshBasicMaterial({ color: T.bulbColor });
   const bulbsPerSide = Math.max(2, Math.ceil(room.w / 6));
-  for (let z of [-room.d/2 + 3, room.d/2 - 3]) {
+  for (let zOff of [-room.d/2 + 3, room.d/2 - 3]) {
     for (let i = 0; i < bulbsPerSide; i++) {
-      const x = (i + 0.5) * (room.w / bulbsPerSide) - room.w/2;
+      const x = (i + 0.5) * (room.w / bulbsPerSide) - room.w/2 + room.cx;
       const bulb = new THREE.Mesh(bulbGeo, bulbMat);
-      bulb.position.set(x, room.h - 0.15, z);
+      bulb.position.set(x, room.h - 0.15, room.cz + zOff);
       scene.add(bulb);
       lightingRefs.bulbs.push(bulb);
     }
   }
+}
 
-  // Apply current lighting multiplier and store baseline intensities for live updates
-  applyLightingMultiplier();
+// Add a small gold-on-dark plaque above an archway on the inside-room face of the wall
+function addArchwayPlaque(wallSpec, label, subtitle, T) {
+  const tex = makeArchwayPlaqueTexture(label, subtitle, T);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.92 });
+  const plaqueWidth = 2.2;
+  const plaqueHeight = 0.5;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(plaqueWidth, plaqueHeight), mat);
+  // Position above arch: arch top at y = ARCH_HEIGHT, plaque centered at ARCH_HEIGHT + 0.4
+  // Wall position is wallSpec.pos with appropriate rotation
+  const yPlaque = ARCH_HEIGHT + 0.45;
+  // Offset the plaque slightly toward the room interior so it sits in front of the wall
+  const inset = 0.02;
+  let pos = [...wallSpec.pos];
+  pos[1] = yPlaque;
+  if (wallSpec.dir === 'north')      pos[2] += inset;
+  else if (wallSpec.dir === 'south') pos[2] -= inset;
+  else if (wallSpec.dir === 'east')  pos[0] -= inset;
+  else if (wallSpec.dir === 'west')  pos[0] += inset;
+  mesh.position.set(...pos);
+  mesh.rotation.y = wallSpec.rot;
+  scene.add(mesh);
+  themeRefs.nameLabels.push(mesh);
+}
+
+// Procedurally draw a gold-on-dark archway plaque
+function makeArchwayPlaqueTexture(label, subtitle, T) {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 240;
+  const ctx = c.getContext('2d');
+  // Background: subtle dark panel
+  ctx.fillStyle = isWhiteCube ? 'rgba(28, 22, 18, 0.85)' : 'rgba(20, 16, 14, 0.92)';
+  ctx.fillRect(0, 0, c.width, c.height);
+  // Thin gold border
+  ctx.strokeStyle = '#c9a96e';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(8, 8, c.width - 16, c.height - 16);
+  // Inner border
+  ctx.strokeStyle = 'rgba(201, 169, 110, 0.4)';
+  ctx.lineWidth = 0.7;
+  ctx.strokeRect(20, 20, c.width - 40, c.height - 40);
+  // Gold text
+  ctx.fillStyle = '#e6c885';
+  ctx.font = '500 56px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label.toUpperCase(), c.width / 2, c.height / 2 - (subtitle ? 30 : 0));
+  if (subtitle) {
+    ctx.fillStyle = 'rgba(201, 169, 110, 0.65)';
+    ctx.font = 'italic 26px Georgia, serif';
+    ctx.fillText(subtitle, c.width / 2, c.height / 2 + 40);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
 }
 
 // Apply the lighting multiplier to all dynamic lights using their theme-baseline values
@@ -1432,27 +1770,160 @@ function applyLightingMultiplier() {
   const m = lightingMultiplier;
   if (lightingRefs.ambient)    lightingRefs.ambient.intensity    = T.ambientIntensity * m;
   if (lightingRefs.hemi)       lightingRefs.hemi.intensity       = T.hemiIntensity * m;
-  if (lightingRefs.centerGlow) lightingRefs.centerGlow.intensity = T.centerGlowIntensity * m;
+  if (lightingRefs.centerGlows) {
+    lightingRefs.centerGlows.forEach(g => g.intensity = T.centerGlowIntensity * m);
+  } else if (lightingRefs.centerGlow) {
+    lightingRefs.centerGlow.intensity = T.centerGlowIntensity * m;
+  }
   lightingRefs.spots.forEach(s => { s.intensity = T.spotIntensity * m; });
-  // Brighten bulb meshes too — though they're MeshBasic so they don't actually emit
-  // light, but visually they should look more lit. We tint toward white as multiplier rises.
 }
 
-function placeAllPaintings(layout) {
+// Determine which room the player is in given world coords.
+// Returns { roomId, inArchway: bool } — inArchway means they're in the lane
+// passing between two rooms.
+function roomAt(x, z) {
+  // Test each room's interior. If the point is inside any room's bounding rect
+  // (with a small grace), return that room.
+  const grace = 0.01;
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    if (x >= r.cx - r.w/2 - grace && x <= r.cx + r.w/2 + grace &&
+        z >= r.cz - r.d/2 - grace && z <= r.cz + r.d/2 + grace) {
+      return { roomId: id, inArchway: false };
+    }
+  }
+  // Not in any room — check if we're in an archway lane between lobby and a series.
+  // Each lobby archway has a corresponding series room on the other side.
+  for (const arch of (ROOMS.lobby ? ROOMS.lobby.archways : [])) {
+    const target = ROOMS[arch.sid];
+    if (!target) continue;
+    // The archway lane is a thin strip ARCH_WIDTH wide between the two rooms.
+    if (arch.dir === 'north') {
+      // Lane in z between -LOBBY_D/2 and target's south wall (target.cz + target.d/2)
+      const zMin = target.cz + target.d/2;
+      const zMax = -ROOMS.lobby.d/2;
+      if (z >= zMin - 0.05 && z <= zMax + 0.05 && Math.abs(x) <= ARCH_WIDTH/2 + 0.05) {
+        return { roomId: 'lobby', inArchway: true, archDir: 'north', archSid: arch.sid };
+      }
+    } else if (arch.dir === 'south') {
+      const zMin = ROOMS.lobby.d/2;
+      const zMax = target.cz - target.d/2;
+      if (z >= zMin - 0.05 && z <= zMax + 0.05 && Math.abs(x) <= ARCH_WIDTH/2 + 0.05) {
+        return { roomId: 'lobby', inArchway: true, archDir: 'south', archSid: arch.sid };
+      }
+    } else if (arch.dir === 'east') {
+      const xMin = ROOMS.lobby.w/2;
+      const xMax = target.cx - target.w/2;
+      if (x >= xMin - 0.05 && x <= xMax + 0.05 && Math.abs(z) <= ARCH_WIDTH/2 + 0.05) {
+        return { roomId: 'lobby', inArchway: true, archDir: 'east', archSid: arch.sid };
+      }
+    } else if (arch.dir === 'west') {
+      const xMin = target.cx + target.w/2;
+      const xMax = -ROOMS.lobby.w/2;
+      if (x >= xMin - 0.05 && x <= xMax + 0.05 && Math.abs(z) <= ARCH_WIDTH/2 + 0.05) {
+        return { roomId: 'lobby', inArchway: true, archDir: 'west', archSid: arch.sid };
+      }
+    }
+  }
+  // Not in any known room or lane — fall back to the room with the closest center
+  let bestId = currentRoomId, bestD = Infinity;
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    const d = Math.hypot(x - r.cx, z - r.cz);
+    if (d < bestD) { bestD = d; bestId = id; }
+  }
+  return { roomId: bestId, inArchway: false };
+}
+
+// Clamp the player's intended position so they stay inside their current room,
+// or pass cleanly through an archway. Returns { x, z, roomId }.
+function clampToRooms(x, z) {
+  const buf = PLAYER_BUFFER;
+  // Determine which room the player should belong to. Look at where they ARE
+  // first, and where they're TRYING to go second.
+  const here = roomAt(x, z);
+  if (here.inArchway) {
+    // In a lane — clamp lateral motion to lane width, free movement along the lane axis
+    if (here.archDir === 'north' || here.archDir === 'south') {
+      const limX = ARCH_WIDTH/2 - buf*0.4;   // smaller buffer in archways so we don't get stuck
+      x = Math.max(-limX, Math.min(limX, x));
+    } else {
+      const limZ = ARCH_WIDTH/2 - buf*0.4;
+      z = Math.max(-limZ, Math.min(limZ, z));
+    }
+    return { x, z, roomId: here.roomId };
+  }
+  // Inside a room — clamp to room bounds, but loosen the bound where an archway is
+  const r = ROOMS[here.roomId];
+  if (!r) return { x, z, roomId: 'lobby' };
+  const limXleft  = r.cx - r.w/2 + buf;
+  const limXright = r.cx + r.w/2 - buf;
+  const limZtop   = r.cz - r.d/2 + buf;
+  const limZbot   = r.cz + r.d/2 + buf;
+
+  // Helper to check if there's an archway in a specific wall direction
+  const hasArch = (dir) => r.archways && r.archways.some(a => a.dir === dir);
+  // Allow leak through archway: if our X (or Z) is within the archway opening,
+  // don't clamp on that wall.
+  const inArchXrange = Math.abs(x - r.cx) <= ARCH_WIDTH/2;
+  const inArchZrange = Math.abs(z - r.cz) <= ARCH_WIDTH/2;
+
+  if (z < limZtop && !(hasArch('north') && inArchXrange)) z = limZtop;
+  if (z > limZbot && !(hasArch('south') && inArchXrange)) z = limZbot;
+  if (x < limXleft && !(hasArch('west') && inArchZrange)) x = limXleft;
+  if (x > limXright && !(hasArch('east') && inArchZrange)) x = limXright;
+
+  return { x, z, roomId: here.roomId };
+}
+
+// Place every painting in its assigned room
+function placeAllPaintings() {
   const wallNames = ['north', 'south', 'east', 'west'];
-  const wallLengths = [ROOM.w, ROOM.w, ROOM.d, ROOM.d];
-  for (let w = 0; w < 4; w++) {
-    if (layout.walls[w].length === 0) continue;
-    const placements = spaceWallPaintings(layout.walls[w], ARTWORKS, wallLengths[w]);
-    placements.forEach(p => {
-      placePainting(ARTWORKS[p.artworkIndex], p.artworkIndex, wallNames[w], p.coord);
-    });
+  for (const sid of Object.keys(ROOMS)) {
+    const room = ROOMS[sid];
+    if (!room.layout) continue;   // lobby has no paintings
+    const layout = room.layout;
+    const wallLengths = [room.w, room.w, room.d, room.d];
+    // We need to map indices in layout.walls (which reference the per-series subset)
+    // back to indices in the global ARTWORKS array
+    const subset = ARTWORKS.filter(a => a.series === sid);
+    for (let w = 0; w < 4; w++) {
+      // Skip walls that have an archway — paintings shouldn't overlap doorways
+      const hasArch = room.archways.some(a => a.dir === wallNames[w]);
+      if (layout.walls[w].length === 0) continue;
+      if (hasArch) {
+        // Move these paintings to a non-arch wall instead. Find the longest
+        // available wall in this room with no arch.
+        let bestW = -1, bestLen = -1;
+        for (let altW = 0; altW < 4; altW++) {
+          if (room.archways.some(a => a.dir === wallNames[altW])) continue;
+          if (wallLengths[altW] > bestLen) { bestLen = wallLengths[altW]; bestW = altW; }
+        }
+        if (bestW < 0) continue;  // shouldn't happen
+        layout.walls[bestW].push(...layout.walls[w]);
+        layout.walls[w] = [];
+      }
+    }
+    for (let w = 0; w < 4; w++) {
+      if (layout.walls[w].length === 0) continue;
+      const placements = spaceWallPaintings(layout.walls[w], subset, wallLengths[w]);
+      placements.forEach(p => {
+        const subsetArt = subset[p.artworkIndex];
+        const globalIndex = ARTWORKS.indexOf(subsetArt);
+        placePainting(subsetArt, globalIndex, wallNames[w], p.coord, room);
+      });
+    }
   }
 }
 
-function placePainting(art, index, wall, coord) {
-  const wallZ = wall === 'north' ? -ROOM.d/2 : (wall === 'south' ? ROOM.d/2 : 0);
-  const wallX = wall === 'east' ? ROOM.w/2 : (wall === 'west' ? -ROOM.w/2 : 0);
+function placePainting(art, index, wall, coord, room) {
+  // Operate in this room's local coords; positions become world coords by adding room.cx/cz
+  room = room || ROOMS.lobby;
+  const rw = room.w, rd = room.d, rh = room.h;
+  ROOM = { w: rw, h: rh, d: rd };  // legacy global for spot-light fov sizing
+
+  const wallZLocal = wall === 'north' ? -rd/2 : (wall === 'south' ? rd/2 : 0);
+  const wallXLocal = wall === 'east' ? rw/2 : (wall === 'west' ? -rw/2 : 0);
   const facingY = wall === 'north' ? 0
                 : wall === 'south' ? Math.PI
                 : wall === 'east' ? -Math.PI/2
@@ -1460,25 +1931,31 @@ function placePainting(art, index, wall, coord) {
   const inwardN = wall === 'north' ? 1 : (wall === 'south' ? -1 : 0);
   const inwardX = wall === 'west' ? 1 : (wall === 'east' ? -1 : 0);
 
-  const baseX = (wall === 'north' || wall === 'south') ? coord : wallX;
-  const baseZ = (wall === 'east'  || wall === 'west')  ? coord : wallZ;
+  const baseXLocal = (wall === 'north' || wall === 'south') ? coord : wallXLocal;
+  const baseZLocal = (wall === 'east'  || wall === 'west')  ? coord : wallZLocal;
+
+  // Translate to world coords
+  const baseX = baseXLocal + room.cx;
+  const baseZ = baseZLocal + room.cz;
 
   const pW = art._size.wM;
   const pH = art._size.hM;
 
-  // Hang at standard eye-line for the center; clamp so painting fits in room
   const eyeLine = 1.55;
   let yCenter = eyeLine + pH * 0.15;
-  if (yCenter + pH/2 > ROOM.h - 0.5) yCenter = ROOM.h - 0.5 - pH/2;
+  if (yCenter + pH/2 > rh - 0.5) yCenter = rh - 0.5 - pH/2;
   if (yCenter - pH/2 < 0.4) yCenter = 0.4 + pH/2;
 
-  // Store the first painting's position and wall normal so the camera can face it on entry
-  if (index === 0) {
+  // Camera entry — face the first painting in the lobby's "northern destination" room
+  // (the first room along the north direction). We just take the very first placed
+  // painting overall as a fallback.
+  if (!window.__firstPaintingPose) {
     window.__firstPaintingPose = {
       x: baseX, y: yCenter, z: baseZ,
       normalX: inwardX, normalZ: inwardN,
       paintingWidth: pW, paintingHeight: pH,
       wall: wall,
+      roomId: room.id,
     };
   }
 
@@ -1511,9 +1988,10 @@ function placePainting(art, index, wall, coord) {
       );
       painting.position.set(baseX + inwardX * 0.025, yCenter, baseZ + inwardN * 0.025);
       painting.rotation.y = facingY;
-      painting.userData = { artIndex: index, isPainting: true };
+      painting.userData = { artIndex: index, isPainting: true, roomId: room.id };
       scene.add(painting);
       paintingMeshes.push(painting);
+      room.paintings.push(painting);
     },
     undefined,
     () => {
@@ -1532,11 +2010,13 @@ function placePainting(art, index, wall, coord) {
   plaque.rotation.y = facingY;
   scene.add(plaque);
 
-  const lightZ = baseZ + inwardN * Math.min(2.5, ROOM.d / 4);
-  const lightX = baseX + inwardX * Math.min(2.5, ROOM.w / 4);
+  // Spotlight — positioned out from the wall, aimed at the painting center.
+  // Distance from wall scaled to room size to keep cone reasonable in big rooms.
+  const lightZ = baseZ + inwardN * Math.min(2.5, rd / 4);
+  const lightX = baseX + inwardX * Math.min(2.5, rw / 4);
   const T = currentTheme();
   const spot = new THREE.SpotLight(T.spotColor, T.spotIntensity * lightingMultiplier, 8, Math.PI / 6, 0.45, 1.2);
-  spot.position.set(lightX, ROOM.h - 0.3, lightZ);
+  spot.position.set(lightX, rh - 0.3, lightZ);
   spot.target = new THREE.Object3D();
   spot.target.position.set(baseX + inwardX * 0.025, yCenter, baseZ + inwardN * 0.025);
   scene.add(spot);
@@ -1576,23 +2056,25 @@ function initScene() {
 // Live-swap to/from white-cube mode without rebuilding the room from scratch
 function applyTheme() {
   const T = currentTheme();
-  // Floor texture
-  if (themeRefs.floor) {
-    themeRefs.floor.material.map = makeFloorTexture(T.floorTexture);
-    themeRefs.floor.material.needsUpdate = true;
-  }
-  // Ceiling
-  if (themeRefs.ceiling) {
-    themeRefs.ceiling.material.color.setHex(T.ceiling);
-  }
+  // Floors — each room has its own
+  const floorList = themeRefs.floors || (themeRefs.floor ? [themeRefs.floor] : []);
+  // Generate texture once and share across all floors
+  const newFloorTex = floorList.length ? makeFloorTexture(T.floorTexture) : null;
+  floorList.forEach(f => {
+    f.material.map = newFloorTex;
+    f.material.needsUpdate = true;
+  });
+  // Ceilings — each room has its own
+  const ceilingList = themeRefs.ceilings || (themeRefs.ceiling ? [themeRefs.ceiling] : []);
+  ceilingList.forEach(c => c.material.color.setHex(T.ceiling));
   // Walls (all share one material so we mutate via the first wall's material)
   if (themeRefs.walls.length > 0) {
     themeRefs.walls[0].material.color.setHex(T.wall);
     themeRefs.walls[0].material.needsUpdate = true;
   }
-  // Name labels: in white mode the gold-on-white still reads OK; lower opacity
+  // Name labels: in white mode lower opacity
   themeRefs.nameLabels.forEach(l => {
-    l.material.opacity = isWhiteCube ? 0.45 : 0.7;
+    l.material.opacity = isWhiteCube ? 0.6 : 0.92;
   });
   // Fog
   if (scene && scene.fog) {
@@ -1601,44 +2083,34 @@ function applyTheme() {
   }
   // Renderer background
   if (renderer) renderer.setClearColor(T.rendererClear, 1);
-  // Lights baseline colors (intensities also re-applied below)
+  // Lights baseline colors
   if (lightingRefs.ambient) lightingRefs.ambient.color.setHex(T.ambientColor);
   if (lightingRefs.hemi) {
     lightingRefs.hemi.color.setHex(T.hemiSky);
     lightingRefs.hemi.groundColor.setHex(T.hemiGround);
   }
-  if (lightingRefs.centerGlow) lightingRefs.centerGlow.color.setHex(T.centerGlowColor);
+  // Center glows (one per room) and the legacy single ref
+  if (lightingRefs.centerGlows) {
+    lightingRefs.centerGlows.forEach(g => g.color.setHex(T.centerGlowColor));
+  } else if (lightingRefs.centerGlow) {
+    lightingRefs.centerGlow.color.setHex(T.centerGlowColor);
+  }
   lightingRefs.spots.forEach(s => s.color.setHex(T.spotColor));
   lightingRefs.bulbs.forEach(b => b.material.color.setHex(T.bulbColor));
-  // Re-apply lighting multiplier (recomputes intensities from new theme baselines)
+  // Re-apply lighting multiplier
   applyLightingMultiplier();
 }
 
 // Call this AFTER paintings are placed so `__firstPaintingPose` exists.
 // Positions the camera at a natural viewing distance facing painting #1.
 function positionCameraForFirstPainting() {
-  if (!window.__firstPaintingPose) return;
-  const p = window.__firstPaintingPose;
-
-  // Viewing distance: scale with painting size, but clamp inside the room
-  const largestDim = Math.max(p.paintingWidth, p.paintingHeight);
-  const viewDistance = Math.max(2.8, Math.min(largestDim * 2.2, ROOM.d / 2 - 1.8, ROOM.w / 2 - 1.8));
-
-  const camX = p.x + p.normalX * viewDistance;
-  const camZ = p.z + p.normalZ * viewDistance;
-
-  const limX = ROOM.w/2 - PLAYER_BUFFER;
-  const limZ = ROOM.d/2 - PLAYER_BUFFER;
-  camera.position.set(
-    Math.max(-limX, Math.min(limX, camX)),
-    1.65,
-    Math.max(-limZ, Math.min(limZ, camZ))
-  );
-
-  // Face the painting
-  const dx = p.x - camera.position.x;
-  const dz = p.z - camera.position.z;
-  yaw = Math.atan2(dx, dz) + Math.PI;
+  // Start in the lobby, near the south wall, facing north (toward the largest series room)
+  const lobby = ROOMS.lobby;
+  if (!lobby) return;
+  // Stand near the south wall of the lobby, looking toward the center / archway
+  camera.position.set(lobby.cx, 1.65, lobby.cz + lobby.d/2 - 2.5);
+  yaw = Math.PI;   // face -z (north)
+  currentRoomId = 'lobby';
 }
 
 function setupControls() {
@@ -1848,10 +2320,17 @@ function animate() {
     camera.position.z += (-mx * sin + mz * cos) * MOVE_SPEED * dt;
   }
 
-  const limX = ROOM.w/2 - PLAYER_BUFFER;
-  const limZ = ROOM.d/2 - PLAYER_BUFFER;
-  camera.position.x = Math.max(-limX, Math.min(limX, camera.position.x));
-  camera.position.z = Math.max(-limZ, Math.min(limZ, camera.position.z));
+  // Room-aware clamping — keeps player inside whichever room they're in,
+  // but allows passing through archway openings.
+  const clamped = clampToRooms(camera.position.x, camera.position.z);
+  camera.position.x = clamped.x;
+  camera.position.z = clamped.z;
+  currentRoomId = clamped.roomId;
+
+  // Subtle proximity-detail hint — show when the player gets close to any
+  // painting they haven't been near recently. Limit total shows so it doesn't
+  // become noise after the user has clearly figured it out.
+  updateDetailHint();
 
   const modalOpen = document.getElementById('modal').classList.contains('open');
   const otherViewOpen = document.getElementById('grid-view').classList.contains('open')
@@ -2256,6 +2735,43 @@ function disposeMesh(obj) {
 }
 
 // Master per-frame update — called from animate() when soupMode is on
+// Show "tap painting to view details" near a painting the user just approached.
+// Disabled in soup mode (which has its own hints).
+function updateDetailHint() {
+  const hintEl = document.getElementById('detail-hint');
+  if (!hintEl || soupMode) {
+    if (hintEl && detailHintCurrentlyShown) {
+      hintEl.classList.remove('show');
+      detailHintCurrentlyShown = false;
+    }
+    return;
+  }
+  if (detailHintShowsRemaining <= 0) return;
+  // Find the nearest painting
+  let nearest = null, nearestDist = Infinity;
+  for (const p of paintingMeshes) {
+    const d = Math.hypot(p.position.x - camera.position.x, p.position.z - camera.position.z);
+    if (d < nearestDist) { nearestDist = d; nearest = p; }
+  }
+  const PROXIMITY = 2.5;
+  if (nearest && nearestDist < PROXIMITY) {
+    if (!detailHintCurrentlyShown && nearest !== detailHintLastNearPainting) {
+      hintEl.classList.add('show');
+      detailHintCurrentlyShown = true;
+      detailHintShowsRemaining--;
+      detailHintLastNearPainting = nearest;
+      // Auto-hide after 4 seconds even if still close
+      setTimeout(() => {
+        hintEl.classList.remove('show');
+        detailHintCurrentlyShown = false;
+      }, 4000);
+    }
+  } else if (nearestDist > PROXIMITY * 1.6) {
+    // Reset "near" tracking once we've moved away
+    detailHintLastNearPainting = null;
+  }
+}
+
 function updateDestruction(dt) {
   updateProjectiles(dt);
   updateDrips();
@@ -3417,20 +3933,48 @@ document.getElementById('slide-next').addEventListener('click', () => navSlide(1
 function buildGrid() {
   const container = document.getElementById('grid-container');
   container.innerHTML = '';
-  ARTWORKS.forEach((art, i) => {
-    const item = document.createElement('div');
-    item.className = 'grid-item';
-    const sizeStr = art._size ? formatSize(art._size) : '';
-    item.innerHTML = `
-      <div class="grid-img-wrap"><img src="paintings/${art.file}" alt="${art.title}" loading="lazy" /></div>
-      <div class="grid-info">
-        <div class="num">${String(i + 1).padStart(2, '0')}${art.year ? ' — ' + art.year : ''}</div>
-        <h3>${art.title}</h3>
-        <div class="meta"><em>${art.medium || ''}</em></div>
-        ${sizeStr ? `<div class="size">${sizeStr}</div>` : ''}
-      </div>`;
-    item.addEventListener('click', () => openModal(i));
-    container.appendChild(item);
+  // Group paintings by series so each room has its own section in the index
+  const seriesIds = Object.keys(SERIES);
+  // Track global painting indices to keep modal lookups working
+  let globalIndex = -1;
+  const indexMap = new Map();   // painting -> its global ARTWORKS index
+  ARTWORKS.forEach((a, i) => indexMap.set(a, i));
+
+  seriesIds.forEach(sid => {
+    const inSeries = ARTWORKS.filter(a => a.series === sid);
+    if (inSeries.length === 0) return;
+    const meta = SERIES[sid];
+    // Section header — gold-on-dark band matching gallery aesthetic
+    const header = document.createElement('div');
+    header.className = 'grid-section-header';
+    header.innerHTML = `
+      <div class="grid-section-ornament"></div>
+      <h3>${meta.name}</h3>
+      ${meta.subtitle ? `<div class="grid-section-sub"><em>${meta.subtitle}</em></div>` : ''}
+      <div class="grid-section-count">${inSeries.length} ${inSeries.length === 1 ? 'work' : 'works'}</div>
+    `;
+    container.appendChild(header);
+
+    // Each series has its own grid wrapper so the layout breaks between sections
+    const sectionGrid = document.createElement('div');
+    sectionGrid.className = 'grid-section';
+    inSeries.forEach(art => {
+      const i = indexMap.get(art);
+      const item = document.createElement('div');
+      item.className = 'grid-item';
+      const sizeStr = art._size ? formatSize(art._size) : '';
+      item.innerHTML = `
+        <div class="grid-img-wrap"><img src="paintings/${art.file}" alt="${art.title}" loading="lazy" /></div>
+        <div class="grid-info">
+          <div class="num">${String(i + 1).padStart(2, '0')}${art.year ? ' — ' + art.year : ''}</div>
+          <h3>${art.title}</h3>
+          <div class="meta"><em>${art.medium || ''}</em></div>
+          ${sizeStr ? `<div class="size">${sizeStr}</div>` : ''}
+        </div>`;
+      item.addEventListener('click', () => openModal(i));
+      sectionGrid.appendChild(item);
+    });
+    container.appendChild(sectionGrid);
   });
 }
 
@@ -3595,6 +4139,12 @@ async function loadPaintings() {
     if (!data.paintings || !Array.isArray(data.paintings)) {
       throw new Error('paintings.json must contain a "paintings" array');
     }
+    // Default series block if missing — backward compat with old JSON
+    if (!data.series || typeof data.series !== 'object') {
+      data.series = {
+        'all': { name: 'Gallery', subtitle: '' }
+      };
+    }
     for (const art of data.paintings) {
       const parsed = parseSize(art.size);
       if (!parsed) {
@@ -3603,8 +4153,16 @@ async function loadPaintings() {
       } else {
         art._size = parsed;
       }
+      // Default series if missing — assigns to the first series in the block
+      if (!art.series) {
+        art.series = Object.keys(data.series)[0];
+        console.warn(`"${art.title}" has no series — defaulting to "${art.series}".`);
+      } else if (!data.series[art.series]) {
+        console.warn(`"${art.title}" has unknown series "${art.series}" — defaulting to first series.`);
+        art.series = Object.keys(data.series)[0];
+      }
     }
-    return data.paintings;
+    return data;
   } catch (err) {
     console.error('Failed to load paintings.json:', err);
     if (window.location.protocol === 'file:') {
@@ -3618,20 +4176,21 @@ async function loadPaintings() {
         err.message + ". Make sure paintings.json sits next to index.html and is valid JSON."
       );
     }
-    return [];
+    return { paintings: [], series: {} };
   }
 }
 
 (async function boot() {
-  ARTWORKS = await loadPaintings();
+  const data = await loadPaintings();
+  ARTWORKS = data.paintings;
+  SERIES = data.series;
   if (ARTWORKS.length === 0) {
     document.getElementById('enterBtn').textContent = 'No paintings loaded';
     return;
   }
-  const layout = planLayout(ARTWORKS);
   initScene();
-  buildRoom(layout);
-  placeAllPaintings(layout);
+  buildHubAndSpoke();
+  placeAllPaintings();
   positionCameraForFirstPainting();
   buildGrid();
   setTimeout(() => {
