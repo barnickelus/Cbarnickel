@@ -1161,7 +1161,7 @@
   </div>
 </div>
 
-<div id="canvas-container" style="position:fixed; inset:0; z-index:1;"></div>
+<div id="canvas-container" style="position:fixed; inset:0; z-index:1; touch-action:none;"></div>
 
 <div id="modal">
   <button id="modal-close">✕</button>
@@ -1293,10 +1293,12 @@ const intro = {
   active: false,
   startTime: 0,
   duration: 3.5,
-  // Start pose: high above the lobby's south edge, looking down/north at angle
-  start: { x: 0, y: 5.0, z: 6.5, yaw: Math.PI, pitch: -0.45 },
-  // End pose: eye level near south wall of lobby, looking straight north
-  end:   { x: 0, y: 1.65, z: 4.0, yaw: Math.PI, pitch: 0 },
+  // Start pose: high up inside the lobby, slightly behind center, tilted down
+  // to take in the floor and all three archway openings on N/E/W walls.
+  start: { x: 0, y: 5.5, z: 5.0, yaw: Math.PI, pitch: -0.55 },
+  // End pose: eye level a bit further back, looking dead-level so the line of
+  // sight passes squarely through the north (Plein Air) archway opening.
+  end:   { x: 0, y: 1.65, z: 4.5, yaw: Math.PI, pitch: 0 },
 };
 let introHasPlayed = false;
 
@@ -1831,10 +1833,12 @@ function buildSingleRoom(room, T, isLobby) {
       const ax = 0, ay = ARCH_HEIGHT/2 - halfH;   // arch centered horizontally, sitting on floor
       const aw = ARCH_WIDTH / 2, ah = ARCH_HEIGHT / 2;
       // Square-topped archway
+      // Hole vertices wound CLOCKWISE (opposite of the outer shape) so that
+      // Three.js treats this as a true cutout rather than overlapping geometry.
       hole.moveTo(ax - aw, ay - ah);
-      hole.lineTo(ax + aw, ay - ah);
-      hole.lineTo(ax + aw, ay + ah);
       hole.lineTo(ax - aw, ay + ah);
+      hole.lineTo(ax + aw, ay + ah);
+      hole.lineTo(ax + aw, ay - ah);
       hole.lineTo(ax - aw, ay - ah);
       shape.holes.push(hole);
       geo = new THREE.ShapeGeometry(shape);
@@ -2364,13 +2368,14 @@ function setupControls() {
   }
   dom.addEventListener('touchstart', e => {
     e.preventDefault();
-    // Pinch-zoom (only in tap-pinch nav mode): detect two fingers and start tracking spread
-    if (navMode === 'tap-pinch' && e.touches.length === 2) {
+    // Pinch-zoom (only in tap-pinch nav mode). Establish a fresh baseline whenever
+    // we transition into a 2-finger state, so adding/removing fingers doesn't desync.
+    if (navMode === 'tap-pinch' && e.touches.length >= 2) {
       const t0 = e.touches[0], t1 = e.touches[1];
       pinchActive = true;
       pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
       pinchStartFov = camera.fov;
-      // Cancel any in-progress touch-look
+      // Cancel any in-progress touch-look so it doesn't fight the pinch
       touchLook = null;
       return;
     }
@@ -2382,13 +2387,13 @@ function setupControls() {
     }
   }, { passive: false });
   dom.addEventListener('touchmove', e => {
-    // Pinch-zoom update
-    if (pinchActive && e.touches.length === 2) {
+    // Pinch-zoom update — predictable: each pixel of finger spread changes FOV linearly
+    if (pinchActive && e.touches.length >= 2) {
       const t0 = e.touches[0], t1 = e.touches[1];
       const d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
-      const ratio = pinchStartDist > 0 ? d / pinchStartDist : 1;
-      // Pinch out (ratio > 1) → zoom in (smaller FOV). Pinch in → zoom out.
-      let newFov = pinchStartFov / ratio;
+      const deltaPx = d - pinchStartDist;
+      // 4 pixels of spread = 1 degree of FOV change. Pinch out (positive delta) = zoom in (less FOV).
+      let newFov = pinchStartFov - deltaPx / 4;
       newFov = Math.max(FOV_MIN, Math.min(FOV_MAX, newFov));
       camera.fov = newFov;
       camera.updateProjectionMatrix();
@@ -2405,11 +2410,21 @@ function setupControls() {
         if (!hasLookedYet && touchLook.moved > 30) markLooked();
       }
     }
-  }, { passive: true });
+  }, { passive: false });
   dom.addEventListener('touchend', e => {
-    // Stop pinch when fewer than 2 fingers remain
-    if (pinchActive && e.touches.length < 2) {
-      pinchActive = false;
+    // Re-anchor or stop pinch as touch count changes
+    if (pinchActive) {
+      if (e.touches.length < 2) {
+        pinchActive = false;
+        // After a pinch ends, suppress the immediate "tap" so we don't accidentally
+        // walk-tap on the lift point
+        touchLook = null;
+      } else {
+        // Still 2+ fingers — re-anchor to current spread and current FOV
+        const t0 = e.touches[0], t1 = e.touches[1];
+        pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+        pinchStartFov = camera.fov;
+      }
     }
     for (const t of e.changedTouches) {
       if (touchLook && t.identifier === touchLook.id) {
@@ -2608,54 +2623,61 @@ function updateTapWalk(dt) {
   const dx = target.x - camera.position.x;
   const dz = target.z - camera.position.z;
   const dist = Math.hypot(dx, dz);
-  if (dist < 0.05) {
-    // Arrived. If a face direction was given, orient toward it.
-    if (typeof target.faceX === 'number' && typeof target.faceZ === 'number') {
-      const fdx = target.faceX - camera.position.x;
-      const fdz = target.faceZ - camera.position.z;
-      const targetYaw = Math.atan2(fdx, fdz) + Math.PI;
-      // Smoothly rotate to face — use a quick lerp toward the target yaw, taking shortest path
-      let dyaw = targetYaw - yaw;
-      while (dyaw >  Math.PI) dyaw -= 2 * Math.PI;
-      while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-      if (Math.abs(dyaw) < 0.02) {
-        yaw = targetYaw;
-        tapWalkTarget = null;
-      } else {
-        yaw += dyaw * Math.min(1, dt * 6);
-      }
-    } else {
-      tapWalkTarget = null;
-    }
+
+  // PHASE 1: walk to the destination point. Don't rotate during this — the user's
+  // current view stays steady so they can see the painting growing as they approach.
+  if (dist >= 0.05) {
+    const step = Math.min(dist, TAP_WALK_SPEED * dt);
+    camera.position.x += (dx / dist) * step;
+    camera.position.z += (dz / dist) * step;
     return;
   }
-  // Move toward target at TAP_WALK_SPEED, capped so we don't overshoot
-  const step = Math.min(dist, TAP_WALK_SPEED * dt);
-  camera.position.x += (dx / dist) * step;
-  camera.position.z += (dz / dist) * step;
-  // Optionally rotate to face direction of motion (subtle, not aggressive)
-  if (dist > 0.5) {
-    const moveYaw = Math.atan2(dx, dz) + Math.PI;
-    let dyaw = moveYaw - yaw;
+
+  // PHASE 2: arrived at the destination. If a face direction was given, rotate
+  // smoothly to face it (taking the shortest angular path).
+  if (typeof target.faceX === 'number' && typeof target.faceZ === 'number') {
+    const fdx = target.faceX - camera.position.x;
+    const fdz = target.faceZ - camera.position.z;
+    const targetYaw = Math.atan2(fdx, fdz) + Math.PI;
+    let dyaw = targetYaw - yaw;
     while (dyaw >  Math.PI) dyaw -= 2 * Math.PI;
     while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-    yaw += dyaw * Math.min(1, dt * 2.0);
+    if (Math.abs(dyaw) < 0.015) {
+      yaw = targetYaw;
+      // Also gently tilt pitch back to level if it was off (keeps the painting framed)
+      if (Math.abs(pitch) < 0.5) pitch = pitch * 0.85;
+      tapWalkTarget = null;
+    } else {
+      // Faster rotation than before so the turn feels deliberate, not lazy
+      yaw += dyaw * Math.min(1, dt * 9);
+      // Also lerp pitch toward 0 so we end up at level view of the painting
+      pitch = pitch * (1 - Math.min(1, dt * 4));
+    }
+  } else {
+    tapWalkTarget = null;
   }
 }
 
 // Compute a reasonable viewing position in front of a painting mesh.
-// Returns { x, z, faceX, faceZ } or null.
+// Distance scales with painting size so a 6'x4' canvas isn't viewed from 2 feet.
 function computeViewingPosition(painting) {
   if (!painting || !painting.userData || !painting.userData.isPainting) return null;
   const pPos = painting.position;
   // Painting's outward normal: world-space, derived from its rotation.y
-  // The painting plane's normal in local space is +Z. Apply rotation.
   const n = new THREE.Vector3(0, 0, 1).applyQuaternion(painting.quaternion);
-  // Stand back ~2.0m from the painting
-  const back = 2.0;
+  // Compute the painting's actual world-space size from its geometry
+  const geom = painting.geometry;
+  if (!geom.boundingBox) geom.computeBoundingBox();
+  const bbox = geom.boundingBox;
+  const pW = bbox ? (bbox.max.x - bbox.min.x) : 1;
+  const pH = bbox ? (bbox.max.y - bbox.min.y) : 1;
+  const largestDim = Math.max(pW, pH);
+  // Standing distance = roughly the painting's largest dimension * 1.6, clamped
+  // so very small paintings don't get nose-pressed and very large ones don't
+  // get viewed from across the room.
+  const back = Math.max(1.5, Math.min(largestDim * 1.6, 4.0));
   const x = pPos.x + n.x * back;
   const z = pPos.z + n.z * back;
-  // Face the painting
   return { x, z, faceX: pPos.x, faceZ: pPos.z };
 }
 
