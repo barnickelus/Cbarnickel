@@ -1671,18 +1671,18 @@ function currentTheme() { return isWhiteCube ? THEMES.white : THEMES.dark; }
 */
 
 const WALL_THICKNESS = 0.0;        // walls are planes
-const ARCH_WIDTH = 2.4;            // archway opening width
+const ARCH_WIDTH = 2.0;            // archway opening width (narrowed so side arches fit cleanly in their walls)
 const ARCH_HEIGHT = 3.0;           // archway opening height
 const LOBBY_W = 18, LOBBY_D = 12, LOBBY_H = 7;
 
-// Three series rooms tile north of the lobby, each 8m wide, with shared walls
-// at x=-4 and x=+4. Each room's arch is centered (or near-centered) in its
-// south wall, opening onto the lobby's north wall. Lobby has arches at
-// x=-7, 0, +7 (slightly inset so they fit within the lobby's 18m wide north wall).
+// Three series rooms tile north of the lobby, with shared walls so they
+// connect cleanly. Side doors are brought close enough to be visible in a
+// single frame from the lobby spawn. Each arch sits comfortably inside its
+// south wall (≥ 1m from the room corner).
 const NORTH_DOOR_LAYOUT = [
-  { sid: 'plein-air',             archX: -7, roomCx: -8, roomW: 8, roomD: 14 },
-  { sid: 'constructed-landscape', archX:  0, roomCx:  0, roomW: 8, roomD: 14 },
-  { sid: 'figurative',            archX: +7, roomCx: +8, roomW: 8, roomD: 10 },
+  { sid: 'plein-air',             archX: -5, roomCx: -7, roomW: 8, roomD: 14 },
+  { sid: 'constructed-landscape', archX:  0, roomCx:  0, roomW: 6, roomD: 14 },
+  { sid: 'figurative',            archX: +5, roomCx: +7, roomW: 8, roomD: 10 },
 ];
 
 // Plan and build the entire gallery: lobby + one room per series.
@@ -1931,12 +1931,13 @@ function buildSingleRoom(room, T, isLobby) {
 function addArchwayPlaque(wallSpec, label, subtitle, T, archWorldX) {
   const tex = makeArchwayPlaqueTexture(label, subtitle, T);
   const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.95 });
-  const plaqueWidth = 2.0;
-  const plaqueHeight = 0.45;
+  // Plaque is larger and more readable from across the lobby
+  const plaqueWidth = 3.2;
+  const plaqueHeight = 0.75;
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(plaqueWidth, plaqueHeight), mat);
-  const yPlaque = ARCH_HEIGHT + 0.45;
+  // Position above the arch, with extra clearance now that the plaque is bigger
+  const yPlaque = ARCH_HEIGHT + 0.6;
   const inset = 0.02;
-  // Start with wall center, then override the lateral coord with archWorldX (if provided)
   let pos = [...wallSpec.pos];
   pos[1] = yPlaque;
   if (wallSpec.dir === 'north') {
@@ -1959,23 +1960,24 @@ function addArchwayPlaque(wallSpec, label, subtitle, T, archWorldX) {
 // Draw a transparent plaque with just floating gold text — no border, no panel
 function makeArchwayPlaqueTexture(label, subtitle, T) {
   const c = document.createElement('canvas');
-  c.width = 1024; c.height = 240;
+  // Higher resolution canvas for crisper text at the new size
+  c.width = 1536; c.height = 360;
   const ctx = c.getContext('2d');
-  // Fully transparent — no background fill, no borders. Just text.
   ctx.clearRect(0, 0, c.width, c.height);
-  // Gold text with a subtle dark shadow so it's readable against light walls (white-cube mode)
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-  ctx.shadowBlur = 6;
-  ctx.shadowOffsetY = 2;
+  // Subtle dark shadow for readability against light walls (white-cube mode)
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 3;
   ctx.fillStyle = '#e6c885';
-  ctx.font = '500 60px Georgia, serif';
+  // Bigger, slightly bolder font
+  ctx.font = '600 110px Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label.toUpperCase(), c.width / 2, c.height / 2 - (subtitle ? 32 : 0));
+  ctx.fillText(label.toUpperCase(), c.width / 2, c.height / 2 - (subtitle ? 50 : 0));
   if (subtitle) {
     ctx.fillStyle = 'rgba(228, 200, 133, 0.78)';
-    ctx.font = 'italic 26px Georgia, serif';
-    ctx.fillText(subtitle, c.width / 2, c.height / 2 + 42);
+    ctx.font = 'italic 42px Georgia, serif';
+    ctx.fillText(subtitle, c.width / 2, c.height / 2 + 70);
   }
   ctx.shadowColor = 'transparent';
   ctx.shadowBlur = 0;
@@ -2127,29 +2129,91 @@ function placeAllPaintings() {
     if (!room.layout) continue;   // lobby has no paintings
     const layout = room.layout;
     const wallLengths = [room.w, room.w, room.d, room.d];
-    // We need to map indices in layout.walls (which reference the per-series subset)
-    // back to indices in the global ARTWORKS array
     const subset = ARTWORKS.filter(a => a.series === sid);
+
+    // Move paintings off of any wall that has an archway opening (paintings
+    // shouldn't overlap doorways). Push them to the longest non-arch wall.
     for (let w = 0; w < 4; w++) {
-      // Skip walls that have an archway — paintings shouldn't overlap doorways
       const hasArch = room.archways.some(a => a.dir === wallNames[w]);
       if (layout.walls[w].length === 0) continue;
       if (hasArch) {
-        // Move these paintings to a non-arch wall instead. Find the longest
-        // available wall in this room with no arch.
         let bestW = -1, bestLen = -1;
         for (let altW = 0; altW < 4; altW++) {
           if (room.archways.some(a => a.dir === wallNames[altW])) continue;
           if (wallLengths[altW] > bestLen) { bestLen = wallLengths[altW]; bestW = altW; }
         }
-        if (bestW < 0) continue;  // shouldn't happen
+        if (bestW < 0) continue;
         layout.walls[bestW].push(...layout.walls[w]);
         layout.walls[w] = [];
       }
     }
+
+    // For each series room, figure out which wall the lobby's spawn line of
+    // sight actually hits when looking through the arch, and bias a feature
+    // painting onto that wall along the sight line. For the central arch this
+    // is straight ahead (north wall); for side arches it's an oblique line
+    // that hits the OUTER wall (west wall for Plein Air, east wall for Figurative).
+    const southArch = room.archways.find(a => a.dir === 'south');
+    let featureWall = -1;        // 0=north, 1=south, 2=east, 3=west
+    let featureLocalCoord = 0;   // along-wall position in wall-local coords
+    if (southArch) {
+      const spawnX = ROOMS.lobby.cx;
+      const spawnZ = ROOMS.lobby.cz + ROOMS.lobby.d/2 - 2.5;
+      const archX = southArch.worldX !== undefined ? southArch.worldX : room.cx;
+      const archZ = -ROOMS.lobby.d/2;
+      // Direction past the arch into the room
+      const dirX = archX - spawnX;
+      const dirZ = archZ - spawnZ;
+      // Find which of the room's three other walls (N/E/W) the sight line hits first.
+      // Parameterize line as (archX, archZ) + s * (dirX, dirZ); find smallest positive s.
+      const candidates = [
+        { wall: 0, sFor: () => (dirZ !== 0 ? ((room.cz - room.d/2) - archZ) / dirZ : Infinity), valid: s => s > 0 },   // north
+        { wall: 2, sFor: () => (dirX !== 0 ? ((room.cx + room.w/2) - archX) / dirX : Infinity), valid: s => s > 0 },   // east
+        { wall: 3, sFor: () => (dirX !== 0 ? ((room.cx - room.w/2) - archX) / dirX : Infinity), valid: s => s > 0 },   // west
+      ];
+      let bestWall = -1, bestS = Infinity, bestHit = null;
+      for (const c of candidates) {
+        const s = c.sFor();
+        if (!c.valid(s) || s >= bestS) continue;
+        // Check the hit point is within the wall's extent
+        const hitX = archX + s * dirX;
+        const hitZ = archZ + s * dirZ;
+        const inN = (c.wall === 0) && hitX >= room.cx - room.w/2 && hitX <= room.cx + room.w/2;
+        const inE = (c.wall === 2) && hitZ >= room.cz - room.d/2 && hitZ <= room.cz + room.d/2;
+        const inW = (c.wall === 3) && hitZ >= room.cz - room.d/2 && hitZ <= room.cz + room.d/2;
+        if (inN || inE || inW) {
+          bestS = s;
+          bestWall = c.wall;
+          bestHit = { x: hitX, z: hitZ };
+        }
+      }
+      if (bestWall >= 0 && bestHit) {
+        featureWall = bestWall;
+        // Convert hit point to wall-local coord (x for N/S walls, z for E/W walls)
+        if (bestWall === 0) featureLocalCoord = bestHit.x - room.cx;        // north wall: along x
+        else if (bestWall === 2) featureLocalCoord = bestHit.z - room.cz;   // east wall: along z (no flip needed if camera looks "into" it)
+        else if (bestWall === 3) featureLocalCoord = bestHit.z - room.cz;   // west wall: along z
+        // Clamp to wall interior with margin
+        const wallLen = (bestWall < 2) ? room.w : room.d;
+        const halfL = wallLen/2 - 1.0;
+        featureLocalCoord = Math.max(-halfL, Math.min(halfL, featureLocalCoord));
+      }
+    }
+
     for (let w = 0; w < 4; w++) {
       if (layout.walls[w].length === 0) continue;
       const placements = spaceWallPaintings(layout.walls[w], subset, wallLengths[w]);
+      // If this is the feature wall (the one the lobby sight line hits),
+      // shift placements so they cluster around the feature target.
+      if (w === featureWall) {
+        const centroid = placements.reduce((sum, p) => sum + p.coord, 0) / placements.length;
+        const shift = featureLocalCoord - centroid;
+        const wallLen = (w < 2) ? room.w : room.d;
+        const halfL = wallLen/2 - 0.6;
+        placements.forEach(p => {
+          p.coord = Math.max(-halfL, Math.min(halfL, p.coord + shift));
+        });
+      }
       placements.forEach(p => {
         const subsetArt = subset[p.artworkIndex];
         const globalIndex = ARTWORKS.indexOf(subsetArt);
