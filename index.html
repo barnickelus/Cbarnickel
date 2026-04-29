@@ -700,10 +700,11 @@
       padding: 24px 0 0; width: 100%;
     }
     #modal-title { font-size: 28px; }
-    .top-bar { padding: 16px 18px; }
-    .brand { font-size: 13px; }
+    .top-bar { padding: 14px 14px; }
+    .brand { font-size: 12px; letter-spacing: 0.2em; }
     .brand .gallery-suffix { display: none; }
-    .view-toggle button { padding: 9px 12px; font-size: 9px; letter-spacing: 0.16em; }
+    .view-toggle button { padding: 8px 10px; font-size: 9px; letter-spacing: 0.12em; }
+    .settings-btn { width: 34px; height: 34px; font-size: 16px; margin-left: 8px; }
     #grid-view { padding: 90px 20px 60px; }
     .grid-intro h2 { font-size: 28px; }
     .modal-nav, .slide-nav { width: 38px; height: 38px; font-size: 18px; }
@@ -716,6 +717,14 @@
     .slide-title { font-size: 22px; }
     .slide-prev { left: 8px; }
     .slide-next { right: 8px; }
+  }
+  /* Very narrow iPhone vertical — hide the brand text entirely so the toolbar fits */
+  @media (max-width: 380px) {
+    .brand { font-size: 11px; max-width: 90px; overflow: hidden; }
+    .view-toggle button { padding: 7px 8px; }
+    .destruction-quick-btn { right: 14px; top: 64px; }
+    .weapon-toolbar { right: 14px; top: 110px; }
+    .settings-panel { right: 14px; width: calc(100vw - 28px); }
   }
 
   /* ── Settings panel ── */
@@ -909,10 +918,10 @@
   /* Tomato quick-toggle — sits directly below the gear icon */
   .destruction-quick-btn {
     position: fixed;
-    top: 78px;          /* directly under the gear */
+    top: 76px;
     right: 32px;
     z-index: 49;
-    width: 38px; height: 38px;
+    width: 44px; height: 44px;
     border-radius: 50%;
     background: rgba(10,9,8,0.55);
     border: 1px solid var(--ink-faint);
@@ -921,11 +930,17 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s ease;
+    transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     pointer-events: auto;
     padding: 0;
+    /* Subtle pulsing gold glow drawing the eye to the bait */
+    animation: bait-pulse 2.6s ease-in-out infinite;
+  }
+  @keyframes bait-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(201, 169, 110, 0.0), 0 0 0 0 rgba(201, 169, 110, 0.0); }
+    50%      { box-shadow: 0 0 12px 2px rgba(201, 169, 110, 0.22), 0 0 22px 4px rgba(201, 169, 110, 0.10); }
   }
   .destruction-quick-btn:hover {
     border-color: var(--gold);
@@ -937,18 +952,21 @@
     color: var(--gold);
     background: rgba(201, 169, 110, 0.18);
     box-shadow: 0 0 0 1px var(--gold) inset;
+    /* When active (destruction mode on), stop pulsing — purpose served */
+    animation: none;
   }
   .destruction-quick-btn.active svg {
     transform: rotate(180deg);
     transition: transform 0.25s ease;
   }
   .destruction-quick-btn svg {
+    width: 22px; height: 22px;
     transition: transform 0.25s ease;
   }
   /* "do not click here" bait label — small italic text to the LEFT of the button */
   .bait-label {
     position: absolute;
-    right: calc(100% + 8px);
+    right: calc(100% + 10px);
     top: 50%;
     transform: translateY(-50%);
     white-space: nowrap;
@@ -971,7 +989,7 @@
 
   .weapon-toolbar {
     position: fixed;
-    top: 124px;          /* below the gear AND the tomato (78 + 38 + 8 gap) */
+    top: 128px;          /* below the gear (76px top + 44px height + 8px gap) */
     right: 32px;
     z-index: 48;
     display: none;
@@ -1034,7 +1052,7 @@
   <div style="text-align:center">
     <div class="ornament"></div>
     <h1>C<span class="dot">.</span>Barnickel <span style="font-style:italic; opacity:0.85">Artwork</span></h1>
-    <div class="sub">A virtual exhibition of plein air painting</div>
+    <div class="sub">A virtual exhibition of paintings</div>
     <button class="enter-btn" id="enterBtn" disabled>Loading exhibition…</button>
   </div>
   <div class="hint">Click anywhere to begin</div>
@@ -1282,6 +1300,7 @@ const TAP_WALK_SPEED = 6.0;        // m/s — fast enough to not feel like a slo
 // Pinch-to-zoom state — for tap-pinch mode. Tracks two-finger spread.
 let pinchActive = false;
 let pinchStartDist = 0;
+let pinchStartMidX = 0;
 let pinchStartFov = 72;
 const FOV_DEFAULT = 72;
 const FOV_MIN = 50, FOV_MAX = 90;
@@ -1634,34 +1653,37 @@ const THEMES = {
 function currentTheme() { return isWhiteCube ? THEMES.white : THEMES.dark; }
 
 /* ─────── Hub-and-spoke architecture ───────
-   Lobby in the center (~12×12m). Series rooms branch off three walls of the
-   lobby through 2.5m × 3m archway openings (no doors). Layout:
+   Three series rooms tile to the north of the lobby, side by side, with
+   Constructed Landscape centered, Plein Air to the west, Figurative to the east.
+   The lobby has THREE archways on its north wall — one for each series room —
+   so all three "doors" are visible from a single forward gaze.
 
-         ┌──────── PLEIN AIR (north) ────────┐
-         │                                    │
-         │                                    │
-         └────────────  arch  ────────────────┘
-                          │
-   ┌──── FIGURATIVE ──┐ LOBBY ┌── CONSTRUCTED LAND. ──┐
-   │       (west)     │       │       (east)            │
-   └──────  arch  ────┘       └──────── arch ───────────┘
+         ┌──── PLEIN AIR ────┬─CONSTRUCTED LAND.─┬── FIGURATIVE ──┐
+         │                   │                   │                │
+         │                   │                   │                │
+         └─── arch (-4) ─────┴── arch (0) ───────┴── arch (+4) ──┘
+                                       │
+                       ┌── arch ── arch ── arch ──┐
+                       │                          │
+                       │           LOBBY          │
+                       │                          │
+                       └──────────────────────────┘
+*/
 
-   Series rooms are sized to fit their paintings (using planLayout per series).
-   Each room knows its world bounds so the player-clamping & projectile collisions
-   can target only the current room. The archway openings are wide lanes that
-   connect rooms — the bounds-check function recognizes when the player is in
-   one of these lanes so they can pass through. */
-
-const WALL_THICKNESS = 0.0;        // walls are planes, but we leave a tiny gap between rooms
-const ARCH_WIDTH = 2.6;            // archway opening width
+const WALL_THICKNESS = 0.0;        // walls are planes
+const ARCH_WIDTH = 2.4;            // archway opening width
 const ARCH_HEIGHT = 3.0;           // archway opening height
-const LOBBY_W = 12, LOBBY_D = 12, LOBBY_H = 7;
+const LOBBY_W = 18, LOBBY_D = 12, LOBBY_H = 7;
 
-// Where each series sits relative to the lobby (compass direction)
-// 'south' is reserved for the lobby's "back wall" (with the gallery brand)
-const SERIES_DIRECTIONS = ['north', 'east', 'west'];   // assignment order
-
-function currentTheme() { return isWhiteCube ? THEMES.white : THEMES.dark; }
+// Three series rooms tile north of the lobby, each 8m wide, with shared walls
+// at x=-4 and x=+4. Each room's arch is centered (or near-centered) in its
+// south wall, opening onto the lobby's north wall. Lobby has arches at
+// x=-7, 0, +7 (slightly inset so they fit within the lobby's 18m wide north wall).
+const NORTH_DOOR_LAYOUT = [
+  { sid: 'plein-air',             archX: -7, roomCx: -8, roomW: 8, roomD: 14 },
+  { sid: 'constructed-landscape', archX:  0, roomCx:  0, roomW: 8, roomD: 14 },
+  { sid: 'figurative',            archX: +7, roomCx: +8, roomW: 8, roomD: 10 },
+];
 
 // Plan and build the entire gallery: lobby + one room per series.
 function buildHubAndSpoke() {
@@ -1672,7 +1694,9 @@ function buildHubAndSpoke() {
   themeRefs.walls = [];
   themeRefs.nameLabels = [];
 
-  // 1) Compute per-series layouts (which paintings on which wall, room size)
+  // 1) Compute per-series painting layouts (planLayout figures out which painting
+  //    goes on which wall). Override the auto-computed room dimensions with the
+  //    fixed sizes from NORTH_DOOR_LAYOUT.
   const seriesIds = Object.keys(SERIES);
   const layoutsBySeries = {};
   for (const sid of seriesIds) {
@@ -1681,28 +1705,17 @@ function buildHubAndSpoke() {
       layoutsBySeries[sid] = null;
       continue;
     }
-    layoutsBySeries[sid] = planLayout(subset);
+    const def = NORTH_DOOR_LAYOUT.find(d => d.sid === sid);
+    const layout = planLayout(subset);
+    if (def) {
+      layout.room.w = def.roomW;
+      layout.room.d = def.roomD;
+      layout.room.h = LOBBY_H;
+    }
+    layoutsBySeries[sid] = layout;
   }
 
-  // 2) Assign each series to a compass direction (north/east/west).
-  //    Largest series gets north (most space), then east, then west.
-  const sized = seriesIds
-    .filter(sid => layoutsBySeries[sid])
-    .map(sid => ({
-      sid,
-      area: layoutsBySeries[sid].room.w * layoutsBySeries[sid].room.d,
-      count: ARTWORKS.filter(a => a.series === sid).length,
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  const seriesPlacement = {};   // sid -> direction
-  sized.forEach((entry, i) => {
-    if (i < SERIES_DIRECTIONS.length) seriesPlacement[entry.sid] = SERIES_DIRECTIONS[i];
-  });
-
-  // 3) Compute world-coord centers for each room.
-  //    Lobby at origin. Series rooms placed so their inner archway-edge
-  //    aligns with the lobby's outer wall.
+  // 2) Lobby
   ROOMS.lobby = {
     id: 'lobby',
     name: 'Lobby',
@@ -1710,69 +1723,57 @@ function buildHubAndSpoke() {
     cx: 0, cz: 0,
     paintings: [],
     walls: [],
-    archways: [],   // {dir, sid, openingCenterX, openingCenterZ, openingWidth}
+    archways: [],
   };
 
-  for (const sid of Object.keys(seriesPlacement)) {
-    const dir = seriesPlacement[sid];
+  // 3) Each series room
+  for (const def of NORTH_DOOR_LAYOUT) {
+    const sid = def.sid;
+    if (!layoutsBySeries[sid]) continue;
     const layout = layoutsBySeries[sid];
-    const rw = layout.room.w, rd = layout.room.d, rh = layout.room.h;
-    let cx = 0, cz = 0;
-    if (dir === 'north') {
-      cz = -(LOBBY_D / 2 + rd / 2 + WALL_THICKNESS);
-    } else if (dir === 'south') {
-      cz =  (LOBBY_D / 2 + rd / 2 + WALL_THICKNESS);
-    } else if (dir === 'east') {
-      cx =  (LOBBY_W / 2 + rw / 2 + WALL_THICKNESS);
-    } else if (dir === 'west') {
-      cx = -(LOBBY_W / 2 + rw / 2 + WALL_THICKNESS);
-    }
+    const rw = def.roomW, rd = def.roomD, rh = LOBBY_H;
+    const cx = def.roomCx;
+    const cz = -(LOBBY_D/2 + rd/2 + WALL_THICKNESS);
     ROOMS[sid] = {
       id: sid,
       name: SERIES[sid].name,
       subtitle: SERIES[sid].subtitle || '',
       w: rw, d: rd, h: rh,
-      cx, cz, dir,
+      cx, cz,
       layout,
       paintings: [],
       walls: [],
       archways: [{
-        // The connecting archway, in this room's local coords
-        // For a north-room, the archway is in its SOUTH wall
-        // For an east-room, archway is in its WEST wall, etc.
-        dir: dir === 'north' ? 'south' : dir === 'south' ? 'north' : dir === 'east' ? 'west' : 'east',
+        dir: 'south',
+        worldX: def.archX,    // world-space X coord of the arch center
         connectsTo: 'lobby',
       }],
     };
-    // Lobby has the matching archway in the corresponding wall
-    ROOMS.lobby.archways.push({ dir, sid });
+    ROOMS.lobby.archways.push({ dir: 'north', worldX: def.archX, sid });
   }
 
-  // 4) Build each room's geometry
+  // 4) Build geometry
   buildSingleRoom(ROOMS.lobby, T, /*isLobby=*/true);
-  for (const sid of Object.keys(seriesPlacement)) {
-    buildSingleRoom(ROOMS[sid], T, false);
+  for (const def of NORTH_DOOR_LAYOUT) {
+    if (ROOMS[def.sid]) buildSingleRoom(ROOMS[def.sid], T, false);
   }
 
-  // 5) Global lights (ambient + hemi + lobby center glow)
+  // 5) Global lights
   lightingRefs.ambient = new THREE.AmbientLight(T.ambientColor, T.ambientIntensity);
   scene.add(lightingRefs.ambient);
   lightingRefs.hemi = new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiIntensity);
   scene.add(lightingRefs.hemi);
-  // Add a center glow per room
   for (const id of Object.keys(ROOMS)) {
     const r = ROOMS[id];
     const glow = new THREE.PointLight(T.centerGlowColor, T.centerGlowIntensity, Math.max(r.w, r.d) * 0.7, 2);
     glow.position.set(r.cx, r.h - 0.4, r.cz);
     scene.add(glow);
-    if (!lightingRefs.centerGlow) lightingRefs.centerGlow = glow;  // keep one ref for the legacy multiplier path
+    if (!lightingRefs.centerGlow) lightingRefs.centerGlow = glow;
     if (!lightingRefs.centerGlows) lightingRefs.centerGlows = [];
     lightingRefs.centerGlows.push(glow);
   }
 
-  // 6) Set ROOM legacy global to lobby for default sizing during placePainting
   ROOM = { w: LOBBY_W, h: LOBBY_H, d: LOBBY_D };
-
   applyLightingMultiplier();
 }
 
@@ -1819,11 +1820,11 @@ function buildSingleRoom(room, T, isLobby) {
   ];
 
   wallSpecs.forEach(spec => {
-    // Does this wall have an archway opening?
-    const arch = room.archways.find(a => a.dir === spec.dir);
+    // Find ALL archways in this wall direction (could be multiple — e.g. lobby's north wall)
+    const archesOnThisWall = room.archways.filter(a => a.dir === spec.dir);
     let geo;
-    if (arch) {
-      // Build wall geometry as a Shape with an archway hole
+    if (archesOnThisWall.length > 0) {
+      // Build wall geometry as a Shape with one hole per archway
       const halfL = spec.length / 2;
       const halfH = room.h / 2;
       const shape = new THREE.Shape();
@@ -1832,18 +1833,26 @@ function buildSingleRoom(room, T, isLobby) {
       shape.lineTo( halfL,  halfH);
       shape.lineTo(-halfL,  halfH);
       shape.lineTo(-halfL, -halfH);
-      const hole = new THREE.Path();
-      const ax = 0, ay = ARCH_HEIGHT/2 - halfH;   // arch centered horizontally, sitting on floor
-      const aw = ARCH_WIDTH / 2, ah = ARCH_HEIGHT / 2;
-      // Square-topped archway
-      // Hole vertices wound CLOCKWISE (opposite of the outer shape) so that
-      // Three.js treats this as a true cutout rather than overlapping geometry.
-      hole.moveTo(ax - aw, ay - ah);
-      hole.lineTo(ax - aw, ay + ah);
-      hole.lineTo(ax + aw, ay + ah);
-      hole.lineTo(ax + aw, ay - ah);
-      hole.lineTo(ax - aw, ay - ah);
-      shape.holes.push(hole);
+      // Compute wall-local X for each arch from its worldX coordinate.
+      // For north walls (rotation 0), wall-local X aligns with world X minus room.cx.
+      // For south walls (rotation π), the geometry is flipped relative to world,
+      // so wall-local X = -(worldX - room.cx).
+      // For east/west walls, archways open along Z, but currently we only put
+      // archways on N/S walls so we don't need to handle them yet.
+      for (const arch of archesOnThisWall) {
+        let archLocalX = (arch.worldX !== undefined ? arch.worldX : 0) - room.cx;
+        if (spec.dir === 'south') archLocalX = -archLocalX;
+        const aw = ARCH_WIDTH / 2, ah = ARCH_HEIGHT / 2;
+        const ay = ARCH_HEIGHT/2 - halfH;
+        const hole = new THREE.Path();
+        // Hole vertices wound CLOCKWISE (opposite of the outer shape) to be a true cutout
+        hole.moveTo(archLocalX - aw, ay - ah);
+        hole.lineTo(archLocalX - aw, ay + ah);
+        hole.lineTo(archLocalX + aw, ay + ah);
+        hole.lineTo(archLocalX + aw, ay - ah);
+        hole.lineTo(archLocalX - aw, ay - ah);
+        shape.holes.push(hole);
+      }
       geo = new THREE.ShapeGeometry(shape);
     } else {
       geo = new THREE.PlaneGeometry(spec.length, room.h);
@@ -1851,26 +1860,27 @@ function buildSingleRoom(room, T, isLobby) {
     const m = new THREE.Mesh(geo, wallMat);
     m.position.set(...spec.pos);
     m.rotation.y = spec.rot;
-    m.userData = { isWall: true, roomId: room.id, dir: spec.dir, hasArch: !!arch };
+    m.userData = { isWall: true, roomId: room.id, dir: spec.dir, hasArch: archesOnThisWall.length > 0 };
     scene.add(m);
     themeRefs.walls.push(m);
     room.walls.push(m);
 
-    // For walls with an archway, add a gold name plaque above the opening
-    if (arch && !isLobby) {
-      // Plaque on the SERIES side of the arch isn't visible from the lobby,
-      // but it's a nice "you are in [series]" reminder. Also add one on the lobby side.
-      addArchwayPlaque(spec, room.name, room.subtitle, T);
+    // For walls with archway(s), add a name plaque above each opening on the SERIES side
+    if (archesOnThisWall.length > 0 && !isLobby) {
+      // Just one plaque (since each series room has one south arch back to the lobby)
+      addArchwayPlaque(spec, room.name, room.subtitle, T,
+        archesOnThisWall[0].worldX !== undefined ? archesOnThisWall[0].worldX : room.cx);
     }
   });
 
-  // Lobby archway plaques (visible from inside the lobby — these name the destination)
+  // Lobby archway plaques — visible from inside the lobby, above each archway
   if (isLobby) {
     for (const arch of room.archways) {
       const targetRoom = ROOMS[arch.sid];
       if (!targetRoom) continue;
       const wallSpec = wallSpecs.find(s => s.dir === arch.dir);
-      addArchwayPlaque(wallSpec, targetRoom.name, targetRoom.subtitle, T);
+      const archWorldX = arch.worldX !== undefined ? arch.worldX : room.cx;
+      addArchwayPlaque(wallSpec, targetRoom.name, targetRoom.subtitle, T, archWorldX);
     }
     // The C.Barnickel name appears in TWO places in the lobby:
     //   1) Prominently above the north archway — this is what new visitors see
@@ -1918,56 +1928,58 @@ function buildSingleRoom(room, T, isLobby) {
 }
 
 // Add a small gold-on-dark plaque above an archway on the inside-room face of the wall
-function addArchwayPlaque(wallSpec, label, subtitle, T) {
+function addArchwayPlaque(wallSpec, label, subtitle, T, archWorldX) {
   const tex = makeArchwayPlaqueTexture(label, subtitle, T);
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.92 });
-  const plaqueWidth = 2.2;
-  const plaqueHeight = 0.5;
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.95 });
+  const plaqueWidth = 2.0;
+  const plaqueHeight = 0.45;
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(plaqueWidth, plaqueHeight), mat);
-  // Position above arch: arch top at y = ARCH_HEIGHT, plaque centered at ARCH_HEIGHT + 0.4
-  // Wall position is wallSpec.pos with appropriate rotation
   const yPlaque = ARCH_HEIGHT + 0.45;
-  // Offset the plaque slightly toward the room interior so it sits in front of the wall
   const inset = 0.02;
+  // Start with wall center, then override the lateral coord with archWorldX (if provided)
   let pos = [...wallSpec.pos];
   pos[1] = yPlaque;
-  if (wallSpec.dir === 'north')      pos[2] += inset;
-  else if (wallSpec.dir === 'south') pos[2] -= inset;
-  else if (wallSpec.dir === 'east')  pos[0] -= inset;
-  else if (wallSpec.dir === 'west')  pos[0] += inset;
+  if (wallSpec.dir === 'north') {
+    pos[2] += inset;
+    if (typeof archWorldX === 'number') pos[0] = archWorldX;
+  } else if (wallSpec.dir === 'south') {
+    pos[2] -= inset;
+    if (typeof archWorldX === 'number') pos[0] = archWorldX;
+  } else if (wallSpec.dir === 'east') {
+    pos[0] -= inset;
+  } else if (wallSpec.dir === 'west') {
+    pos[0] += inset;
+  }
   mesh.position.set(...pos);
   mesh.rotation.y = wallSpec.rot;
   scene.add(mesh);
   themeRefs.nameLabels.push(mesh);
 }
 
-// Procedurally draw a gold-on-dark archway plaque
+// Draw a transparent plaque with just floating gold text — no border, no panel
 function makeArchwayPlaqueTexture(label, subtitle, T) {
   const c = document.createElement('canvas');
   c.width = 1024; c.height = 240;
   const ctx = c.getContext('2d');
-  // Background: subtle dark panel
-  ctx.fillStyle = isWhiteCube ? 'rgba(28, 22, 18, 0.85)' : 'rgba(20, 16, 14, 0.92)';
-  ctx.fillRect(0, 0, c.width, c.height);
-  // Thin gold border
-  ctx.strokeStyle = '#c9a96e';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(8, 8, c.width - 16, c.height - 16);
-  // Inner border
-  ctx.strokeStyle = 'rgba(201, 169, 110, 0.4)';
-  ctx.lineWidth = 0.7;
-  ctx.strokeRect(20, 20, c.width - 40, c.height - 40);
-  // Gold text
+  // Fully transparent — no background fill, no borders. Just text.
+  ctx.clearRect(0, 0, c.width, c.height);
+  // Gold text with a subtle dark shadow so it's readable against light walls (white-cube mode)
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
   ctx.fillStyle = '#e6c885';
-  ctx.font = '500 56px Georgia, serif';
+  ctx.font = '500 60px Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label.toUpperCase(), c.width / 2, c.height / 2 - (subtitle ? 30 : 0));
+  ctx.fillText(label.toUpperCase(), c.width / 2, c.height / 2 - (subtitle ? 32 : 0));
   if (subtitle) {
-    ctx.fillStyle = 'rgba(201, 169, 110, 0.65)';
+    ctx.fillStyle = 'rgba(228, 200, 133, 0.78)';
     ctx.font = 'italic 26px Georgia, serif';
-    ctx.fillText(subtitle, c.width / 2, c.height / 2 + 40);
+    ctx.fillText(subtitle, c.width / 2, c.height / 2 + 42);
   }
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   return tex;
@@ -1991,8 +2003,6 @@ function applyLightingMultiplier() {
 // Returns { roomId, inArchway: bool } — inArchway means they're in the lane
 // passing between two rooms.
 function roomAt(x, z) {
-  // Test each room's interior. If the point is inside any room's bounding rect
-  // (with a small grace), return that room.
   const grace = 0.01;
   for (const id of Object.keys(ROOMS)) {
     const r = ROOMS[id];
@@ -2002,39 +2012,27 @@ function roomAt(x, z) {
     }
   }
   // Not in any room — check if we're in an archway lane between lobby and a series.
-  // Each lobby archway has a corresponding series room on the other side.
+  // With WALL_THICKNESS=0 the lane is essentially zero-depth (rooms touch directly),
+  // so this branch rarely fires, but we keep it as defense.
   for (const arch of (ROOMS.lobby ? ROOMS.lobby.archways : [])) {
     const target = ROOMS[arch.sid];
     if (!target) continue;
-    // The archway lane is a thin strip ARCH_WIDTH wide between the two rooms.
+    const archX = arch.worldX !== undefined ? arch.worldX : 0;
     if (arch.dir === 'north') {
-      // Lane in z between -LOBBY_D/2 and target's south wall (target.cz + target.d/2)
       const zMin = target.cz + target.d/2;
       const zMax = -ROOMS.lobby.d/2;
-      if (z >= zMin - 0.05 && z <= zMax + 0.05 && Math.abs(x) <= ARCH_WIDTH/2 + 0.05) {
-        return { roomId: 'lobby', inArchway: true, archDir: 'north', archSid: arch.sid };
+      if (z >= zMin - 0.1 && z <= zMax + 0.1 && Math.abs(x - archX) <= ARCH_WIDTH/2 + 0.1) {
+        return { roomId: 'lobby', inArchway: true, archDir: 'north', archSid: arch.sid, archX };
       }
     } else if (arch.dir === 'south') {
       const zMin = ROOMS.lobby.d/2;
       const zMax = target.cz - target.d/2;
-      if (z >= zMin - 0.05 && z <= zMax + 0.05 && Math.abs(x) <= ARCH_WIDTH/2 + 0.05) {
-        return { roomId: 'lobby', inArchway: true, archDir: 'south', archSid: arch.sid };
-      }
-    } else if (arch.dir === 'east') {
-      const xMin = ROOMS.lobby.w/2;
-      const xMax = target.cx - target.w/2;
-      if (x >= xMin - 0.05 && x <= xMax + 0.05 && Math.abs(z) <= ARCH_WIDTH/2 + 0.05) {
-        return { roomId: 'lobby', inArchway: true, archDir: 'east', archSid: arch.sid };
-      }
-    } else if (arch.dir === 'west') {
-      const xMin = target.cx + target.w/2;
-      const xMax = -ROOMS.lobby.w/2;
-      if (x >= xMin - 0.05 && x <= xMax + 0.05 && Math.abs(z) <= ARCH_WIDTH/2 + 0.05) {
-        return { roomId: 'lobby', inArchway: true, archDir: 'west', archSid: arch.sid };
+      if (z >= zMin - 0.1 && z <= zMax + 0.1 && Math.abs(x - archX) <= ARCH_WIDTH/2 + 0.1) {
+        return { roomId: 'lobby', inArchway: true, archDir: 'south', archSid: arch.sid, archX };
       }
     }
   }
-  // Not in any known room or lane — fall back to the room with the closest center
+  // Fall back to nearest-center room
   let bestId = currentRoomId, bestD = Infinity;
   for (const id of Object.keys(ROOMS)) {
     const r = ROOMS[id];
@@ -2048,21 +2046,13 @@ function roomAt(x, z) {
 // or pass cleanly through an archway. Returns { x, z, roomId }.
 function clampToRooms(x, z) {
   const buf = PLAYER_BUFFER;
-  // Determine which room the player should belong to. Look at where they ARE
-  // first, and where they're TRYING to go second.
   const here = roomAt(x, z);
   if (here.inArchway) {
-    // In a lane — clamp lateral motion to lane width, free movement along the lane axis
-    if (here.archDir === 'north' || here.archDir === 'south') {
-      const limX = ARCH_WIDTH/2 - buf*0.4;   // smaller buffer in archways so we don't get stuck
-      x = Math.max(-limX, Math.min(limX, x));
-    } else {
-      const limZ = ARCH_WIDTH/2 - buf*0.4;
-      z = Math.max(-limZ, Math.min(limZ, z));
-    }
+    // In a north/south archway lane — clamp X to the archway's lateral range
+    const limX = ARCH_WIDTH/2 - buf*0.4;
+    x = Math.max(here.archX - limX, Math.min(here.archX + limX, x));
     return { x, z, roomId: here.roomId };
   }
-  // Inside a room — clamp to room bounds, but loosen the bound where an archway is
   const r = ROOMS[here.roomId];
   if (!r) return { x, z, roomId: 'lobby' };
   const limXleft  = r.cx - r.w/2 + buf;
@@ -2070,17 +2060,61 @@ function clampToRooms(x, z) {
   const limZtop   = r.cz - r.d/2 + buf;
   const limZbot   = r.cz + r.d/2 + buf;
 
-  // Helper to check if there's an archway in a specific wall direction
-  const hasArch = (dir) => r.archways && r.archways.some(a => a.dir === dir);
-  // Allow leak through archway: if our X (or Z) is within the archway opening,
-  // don't clamp on that wall.
-  const inArchXrange = Math.abs(x - r.cx) <= ARCH_WIDTH/2;
-  const inArchZrange = Math.abs(z - r.cz) <= ARCH_WIDTH/2;
+  // Helper: is x within ANY archway opening on the given wall direction?
+  const inArchOpeningX = (dir) => {
+    if (!r.archways) return false;
+    for (const a of r.archways) {
+      if (a.dir !== dir) continue;
+      const archX = a.worldX !== undefined ? a.worldX : r.cx;
+      if (Math.abs(x - archX) <= ARCH_WIDTH/2) return true;
+    }
+    return false;
+  };
+  const inArchOpeningZ = (dir) => {
+    if (!r.archways) return false;
+    for (const a of r.archways) {
+      if (a.dir !== dir) continue;
+      const archZ = a.worldZ !== undefined ? a.worldZ : r.cz;
+      if (Math.abs(z - archZ) <= ARCH_WIDTH/2) return true;
+    }
+    return false;
+  };
 
-  if (z < limZtop && !(hasArch('north') && inArchXrange)) z = limZtop;
-  if (z > limZbot && !(hasArch('south') && inArchXrange)) z = limZbot;
-  if (x < limXleft && !(hasArch('west') && inArchZrange)) x = limXleft;
-  if (x > limXright && !(hasArch('east') && inArchZrange)) x = limXright;
+  if (z < limZtop && !inArchOpeningX('north')) z = limZtop;
+  if (z > limZbot && !inArchOpeningX('south')) z = limZbot;
+  if (x < limXleft && !inArchOpeningZ('west')) x = limXleft;
+  if (x > limXright && !inArchOpeningZ('east')) x = limXright;
+
+  // Painting collision — keep camera at least 0.4m from any painting plane.
+  // Each painting is a thin plane on a wall; we treat it as a 2D AABB extruded
+  // along its normal and push the camera out along the normal if too close.
+  const PAINT_BUFFER = 0.40;
+  for (const p of paintingMeshes) {
+    if (!p.userData || !p.userData.isPainting) continue;
+    // Painting outward normal in world space
+    const n = new THREE.Vector3(0, 0, 1).applyQuaternion(p.quaternion);
+    // Distance from camera (x,z) to the painting plane along its normal
+    const dx = x - p.position.x;
+    const dz = z - p.position.z;
+    const distAlongNormal = dx * n.x + dz * n.z;
+    // Only block if camera is on the FRONT side of the painting (positive normal dist)
+    // and within the painting's bounds laterally.
+    if (distAlongNormal > 0 && distAlongNormal < PAINT_BUFFER) {
+      // Compute lateral position along the painting's plane
+      // Tangent vector along the painting's width (perpendicular to normal, horizontal)
+      const tx = -n.z, tz = n.x;
+      const lateral = dx * tx + dz * tz;
+      // Get painting's half-width from its geometry
+      if (!p.geometry.boundingBox) p.geometry.computeBoundingBox();
+      const halfW = p.geometry.boundingBox ? (p.geometry.boundingBox.max.x - p.geometry.boundingBox.min.x) / 2 : 1;
+      if (Math.abs(lateral) < halfW + 0.2) {
+        // Too close laterally too — push camera out along the normal to the buffer distance
+        const push = PAINT_BUFFER - distAlongNormal;
+        x += n.x * push;
+        z += n.z * push;
+      }
+    }
+  }
 
   return { x, z, roomId: here.roomId };
 }
@@ -2371,16 +2405,16 @@ function setupControls() {
   }
   dom.addEventListener('touchstart', e => {
     e.preventDefault();
-    // Pinch-to-walk (only in tap-pinch nav mode). Two-finger gesture moves the
-    // camera forward/backward along the ground plane, like a real-world dolly.
-    // Pinch out (fingers spread) = walk forward. Pinch in = walk backward.
+    // Two-finger gesture (only in tap-pinch nav mode):
+    //   spread (pinch in/out) → walk forward/back
+    //   midpoint horizontal swipe → strafe left/right
     if (navMode === 'tap-pinch' && e.touches.length >= 2) {
       const t0 = e.touches[0], t1 = e.touches[1];
       pinchActive = true;
       pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      pinchStartMidX = (t0.clientX + t1.clientX) / 2;
       // Cancel any in-progress one-finger look so it doesn't fight the pinch
       touchLook = null;
-      // Cancel any in-progress tap-walk so user gets full pinch control
       tapWalkTarget = null;
       return;
     }
@@ -2392,28 +2426,29 @@ function setupControls() {
     }
   }, { passive: false });
   dom.addEventListener('touchmove', e => {
-    // Pinch-to-walk update — every frame, compare current spread to the previous
-    // sampled spread and translate the difference into a forward/back step.
     if (pinchActive && e.touches.length >= 2) {
       const t0 = e.touches[0], t1 = e.touches[1];
       const d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
-      const deltaPx = d - pinchStartDist;
-      // 80 pixels of finger spread = ~1m of camera movement.
-      // Tunable — higher number = less sensitive, lower number = more sensitive.
-      const stepM = deltaPx / 80;
-      // Move along the camera's horizontal forward direction (yaw only — don't
-      // change altitude when pinching).
+      const midX = (t0.clientX + t1.clientX) / 2;
+      // Spread delta → forward/back
+      const spreadDelta = d - pinchStartDist;
+      const forwardStep = spreadDelta / 80;   // 80px = 1m
+      // Midpoint horizontal delta → strafe (perpendicular to view direction)
+      const swipeDelta = midX - pinchStartMidX;
+      const strafeStep = -swipeDelta / 100;   // swipe right = strafe right; tunable
       const fx = -Math.sin(yaw);
       const fz = -Math.cos(yaw);
-      const newX = camera.position.x + fx * stepM;
-      const newZ = camera.position.z + fz * stepM;
-      // Clamp to room bounds
+      // Right vector (perpendicular to forward, horizontal): rotate forward 90° clockwise around Y
+      const rx = fz, rz = -fx;   // (right = forward × up); for our convention this gives right of forward
+      const newX = camera.position.x + fx * forwardStep + rx * strafeStep;
+      const newZ = camera.position.z + fz * forwardStep + rz * strafeStep;
       const clamped = clampToRooms(newX, newZ);
       camera.position.x = clamped.x;
       camera.position.z = clamped.z;
       currentRoomId = clamped.roomId;
-      // Update the baseline so the next frame's delta is incremental, not cumulative
+      // Re-anchor each frame so motion is incremental
       pinchStartDist = d;
+      pinchStartMidX = midX;
       return;
     }
     for (const t of e.touches) {
@@ -2429,17 +2464,14 @@ function setupControls() {
     }
   }, { passive: false });
   dom.addEventListener('touchend', e => {
-    // Re-anchor or stop pinch as touch count changes
     if (pinchActive) {
       if (e.touches.length < 2) {
         pinchActive = false;
-        // After a pinch ends, suppress the immediate "tap" so we don't accidentally
-        // walk-tap on the lift point
         touchLook = null;
       } else {
-        // Still 2+ fingers — re-anchor to current spread
         const t0 = e.touches[0], t1 = e.touches[1];
         pinchStartDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+        pinchStartMidX = (t0.clientX + t1.clientX) / 2;
       }
     }
     for (const t of e.changedTouches) {
@@ -4574,10 +4606,11 @@ function setNavMode(mode) {
   document.querySelectorAll('.nav-mode-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.nav === mode);
   });
-  // Hide joystick in tap-pinch mode (it's incompatible with two-finger pinch)
+  // Joystick is visible in ALL touch modes (the user uses it for up/down/left/right
+  // movement; pinch handles forward/back; two-finger horizontal swipe strafes)
   if (entered && hasTouch) {
     const joy = document.getElementById('joystick-wrap');
-    if (joy) joy.classList.toggle('show', mode !== 'tap-pinch');
+    if (joy) joy.classList.add('show');
   }
 }
 
@@ -4625,13 +4658,16 @@ function showTutorialOverlay() {
     if (isTouch) {
       steps = [
         { icon: '◉', text: '<strong>Tap any painting or floor</strong> to walk there.' },
-        { icon: '↔', text: '<strong>Pinch out</strong> (spread fingers) to walk forward. <strong>Pinch in</strong> to walk backward.' },
+        { icon: '↔', text: '<strong>Pinch out</strong> (spread two fingers) to walk forward. <strong>Pinch in</strong> to walk back.' },
+        { icon: '⇄', text: '<strong>Two-finger swipe left/right</strong> to step sideways.' },
+        { icon: '⊕', text: 'The <strong>joystick</strong> still works for free up/down/left/right movement.' },
         { icon: '✥', text: '<strong>Drag with one finger</strong> to look around.' },
       ];
     } else {
       steps = [
         { icon: '◉', text: '<strong>Click any painting or floor</strong> to walk there.' },
-        { icon: '↔', text: '<strong>Scroll the mouse wheel up</strong> to walk forward, <strong>down</strong> to walk back.' },
+        { icon: '↔', text: '<strong>Scroll wheel up</strong> to walk forward, <strong>down</strong> to walk back.' },
+        { icon: '⌨', text: '<strong>WASD / arrow keys</strong> still work for free movement.' },
         { icon: '✥', text: '<strong>Click and drag</strong> to look around.' },
       ];
     }
