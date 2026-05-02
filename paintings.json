@@ -1,22 +1,5 @@
 {
-  "_comment": "Each painting needs: file, title, size, medium, year, description, series. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. The series field assigns the painting to a room — must match one of the keys in the 'series' block below. If you add a new series, just add a key here and the gallery will auto-build a room for it. To move a painting between rooms, just change its series field.",
-  "series": {
-    "plein-air": {
-      "name": "Plein Air",
-      "subtitle": "Painted on location",
-      "_comment": "Naturalistic studies done outdoors — coastal, hills, valleys, deserts, gardens"
-    },
-    "constructed-landscape": {
-      "name": "Constructed Landscape",
-      "subtitle": "Geometric & conceptual works",
-      "_comment": "Stratified, abstracted, or architecturally-composed landscapes — layered ridges, structural studies, semi-abstract conceptual pieces"
-    },
-    "figurative": {
-      "name": "Figurative",
-      "subtitle": "Portraits & figures",
-      "_comment": "Paintings of people"
-    }
-  },
+  "_comment": "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. You can mix units across paintings.",
   "paintings": [
     {
       "file": "07-strands.jpg",
@@ -188,6 +171,14 @@
       "year": "",
       "series": "constructed-landscape",
       "description": "A small conceptual study — a tideline at dawn or dusk, the wet sand inlaid with glass marbles catching the last light."
+    },
+    {
+      "file": "20-anima-mundi.jpg",
+      "title": "Anima Mundi",
+      "size": "30x45in",
+      "medium": "Oil on Canvas",
+      "year": "2013",
+      "description": ""
     }
   ]
 }
