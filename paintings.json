@@ -15,6 +15,11 @@
       "name": "Figurative",
       "subtitle": "Portraits & figures",
       "_comment": "Paintings of people"
+    },
+    "older-work": {
+      "name": "Older Work",
+      "subtitle": "Earlier pieces",
+      "_comment": "Earlier paintings — placed in the room behind the lobby's south wall. Reassign paintings here by changing their series field to 'older-work'."
     }
   },
   "paintings": [
