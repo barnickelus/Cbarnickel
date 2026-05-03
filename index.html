@@ -1715,8 +1715,6 @@ function onMouseMove(e) {
   pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
 }
 function onMouseUp(e) {
-  // Always stop lighter burn on release, regardless of whether tap fires
-  if (lighterHeld) stopLighterBurn();
   if (!mouseLook) return;
   if (mouseLook.moved < 6) handleTap(e.clientX, e.clientY);
   mouseLook = null;
@@ -1780,8 +1778,6 @@ function onTouchMove(e) {
   }
 }
 function onTouchEnd(e) {
-  // Always stop lighter burn on release
-  if (lighterHeld && e.touches.length === 0) stopLighterBurn();
   if (pinchActive) {
     if (e.touches.length < 2) {
       pinchActive = false;
@@ -2390,16 +2386,38 @@ function makeSplatTexture(seed) {
 function makeBulletHoleTexture() {
   const c = document.createElement('canvas'); c.width = 128; c.height = 128;
   const ctx = c.getContext('2d');
-  // Dark center + gradient ring
-  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 32);
-  grad.addColorStop(0, '#000');
-  grad.addColorStop(0.4, '#1a0a05');
-  grad.addColorStop(0.7, 'rgba(40, 20, 10, 0.5)');
-  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  // Outer scorch ring — soft warm reddish-orange that fades into the surface
+  // (drawn first so cracks + hole sit on top)
+  const scorch = ctx.createRadialGradient(64, 64, 18, 64, 64, 60);
+  scorch.addColorStop(0,   'rgba(120, 35, 12, 0.0)');    // inside the hole — transparent
+  scorch.addColorStop(0.15,'rgba(165, 60, 22, 0.55)');   // hot inner singe edge
+  scorch.addColorStop(0.45,'rgba(120, 38, 14, 0.35)');   // warm midband
+  scorch.addColorStop(0.75,'rgba(60, 22, 10, 0.15)');    // cooling toward outside
+  scorch.addColorStop(1,   'rgba(40, 20, 10, 0)');
+  ctx.fillStyle = scorch;
+  ctx.fillRect(0, 0, 128, 128);
+  // Subtle uneven scorch — a few warm splotches around the rim for organic feel
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 26 + Math.random() * 18;
+    const sx = 64 + Math.cos(a) * r;
+    const sy = 64 + Math.sin(a) * r;
+    const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, 8 + Math.random() * 6);
+    sg.addColorStop(0, 'rgba(180, 65, 25, ' + (0.18 + Math.random() * 0.15) + ')');
+    sg.addColorStop(1, 'rgba(180, 65, 25, 0)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(0, 0, 128, 128);
+  }
+  // Dark center hole + gradient ring (drawn over the scorch)
+  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 28);
+  grad.addColorStop(0,   '#000');
+  grad.addColorStop(0.45,'#0e0604');
+  grad.addColorStop(0.8, 'rgba(20, 10, 5, 0.6)');
+  grad.addColorStop(1,   'rgba(0, 0, 0, 0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 128, 128);
-  // Cracks
-  ctx.strokeStyle = 'rgba(20, 10, 5, 0.7)';
+  // Cracks radiating from center
+  ctx.strokeStyle = 'rgba(15, 8, 4, 0.78)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 5; i++) {
     const a = Math.random() * Math.PI * 2;
@@ -2415,7 +2433,7 @@ function spawnDecal(hit, type) {
   // Place a small plane decal on the hit surface, oriented to its normal
   const hitPos = hit.point;
   const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-  const size = type === 'splat' ? 0.6 : 0.18;
+  const size = type === 'splat' ? 0.6 : 0.32;   // bullet holes get scorch ring → bigger
   let tex;
   if (type === 'splat') tex = makeSplatTexture(Math.random() * 1000);
   else if (type === 'hole') tex = makeBulletHoleTexture();
@@ -2429,12 +2447,32 @@ function spawnDecal(hit, type) {
   updateClearButton();
 }
 
+// No-op stub — kept so legacy callers (mouseup, touchend, setDestructionActive,
+// setWeapon) don't throw. The new persistent-fire system doesn't need a "stop
+// holding" hook; fires are extinguished only via Clear.
+function stopLighterBurn() { /* no-op for persistent-fire system */ }
+
 function clearAllDamage() {
-  // Stop any active burn first
-  stopLighterBurn();
-  // Restore charred paintings
+  // Extinguish every active fire and restore each affected painting
+  for (const fire of activeFires) {
+    if (fire.painting) {
+      if (fire.originalColor) fire.painting.material.color.copy(fire.originalColor);
+      if (fire.originalMap && fire.painting.material.map !== fire.originalMap) {
+        fire.painting.material.map = fire.originalMap;
+      }
+      fire.painting.material.needsUpdate = true;
+    }
+    if (fire.root) {
+      scene.remove(fire.root);
+      disposeMesh(fire.root);
+    }
+  }
+  activeFires.length = 0;
+
+  // Sweep the legacy decals list (splats + bullet holes + smoke + restore markers)
   for (const d of decals) {
     if (d._restore) {
+      // Legacy progressive-char marker — restore from charredOriginals if present
       const orig = charredOriginals.get(d._restore);
       if (orig) {
         if (d._restore.material.map && d._restore.material.map !== orig.map) {
@@ -2444,16 +2482,9 @@ function clearAllDamage() {
         d._restore.material.color.copy(orig.color);
         d._restore.material.needsUpdate = true;
         charredOriginals.delete(d._restore);
-        // Reset burn state so lighter starts over next time
-        d._restore.userData.burnTime = 0;
-        d._restore.userData.charCanvas = null;
-        d._restore.userData.charCtx = null;
-        d._restore.userData.charBase = null;
-        d._restore.userData.charTex = null;
       }
-    } else if (d._flame) {
-      // Flame markers — actual flame mesh already removed by stopLighterBurn
-      // (no-op here)
+    } else if (d._fire || d._flame) {
+      // Already handled by activeFires sweep above
     } else if (d.parent) {
       scene.remove(d);
       if (d.material) {
@@ -2470,8 +2501,9 @@ function clearAllDamage() {
 function updateClearButton() {
   const btn = document.getElementById('clear-damage');
   if (!btn) return;
-  btn.disabled = decals.length === 0;
-  btn.title = decals.length > 0 ? 'Clear damage (' + decals.length + ')' : 'Clear damage';
+  const total = decals.length + activeFires.length;
+  btn.disabled = total === 0;
+  btn.title = total > 0 ? 'Clear damage (' + total + ')' : 'Clear damage';
 }
 
 /* Destruction state machine */
@@ -2549,201 +2581,328 @@ function fireGun() {
   const hits = raycaster.intersectObjects(targets, false);
   if (hits.length > 0) {
     spawnDecal(hits[0], 'hole');
+    spawnGunSmoke(hits[0]);
   }
   playGunshot();
 }
 
-/* ── Lighter: HELD-DOWN progressive burn ──
-   Holding the lighter (mousedown / touchstart with lighter weapon) starts the
-   flame. Each frame, while the user is aiming at a painting within range, we
-   accumulate burn time. The painting's texture is progressively charred over
-   BURN_DURATION seconds. Releasing or aiming away stops the flame; partial
-   char is preserved. Switching weapons or toggling out of destruction mode
-   also stops it. */
-
-const BURN_DURATION = 18;   // seconds for full char
-let lighterHeld = false;
-let activeBurnPainting = null;
-
-function startLighterBurn() {
-  if (destruction.weapon !== 'lighter') return;
-  lighterHeld = true;
-  // Don't play sound here — we play it once we actually find a target
-}
-
-function stopLighterBurn() {
-  lighterHeld = false;
-  if (activeBurnPainting && activeBurnPainting.userData.flameMesh) {
-    scene.remove(activeBurnPainting.userData.flameMesh);
-    if (activeBurnPainting.userData.flameMesh.geometry) activeBurnPainting.userData.flameMesh.geometry.dispose();
-    if (activeBurnPainting.userData.flameMesh.material) {
-      if (activeBurnPainting.userData.flameMesh.material.map) activeBurnPainting.userData.flameMesh.material.map.dispose();
-      activeBurnPainting.userData.flameMesh.material.dispose();
-    }
-    activeBurnPainting.userData.flameMesh = null;
-  }
-  activeBurnPainting = null;
-}
-
-// Replaces the old instant fireLighter. Now just initiates the held-burn
-// (this function is wired to be called on mousedown/touchstart).
-function fireLighter() {
-  startLighterBurn();
-}
-
-function findLighterTargetPainting() {
-  // Find painting in front of us within 2.6m, in view
-  const fx = -Math.sin(yaw) * Math.cos(pitch);
-  const fz = -Math.cos(yaw) * Math.cos(pitch);
-  let best = null, bestDist = Infinity;
-  for (const p of paintingMeshes) {
-    const dx = p.position.x - camera.position.x;
-    const dz = p.position.z - camera.position.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > 2.6) continue;
-    const dnx = dx / dist, dnz = dz / dist;
-    const dot = fx * dnx + fz * dnz;
-    if (dot < 0.55) continue;
-    if (dist < bestDist) { bestDist = dist; best = p; }
-  }
-  return best;
-}
-
-// Per-frame update called from animate loop while in destruction mode
-function updateLighterBurn(dt) {
-  if (!lighterHeld || destruction.weapon !== 'lighter' || !destruction.active) {
-    if (activeBurnPainting) stopLighterBurn();
-    return;
-  }
-  const target = findLighterTargetPainting();
-  if (!target) {
-    if (activeBurnPainting) stopLighterBurn();
-    return;
-  }
-  // Switch target painting if needed
-  if (activeBurnPainting && activeBurnPainting !== target) {
-    if (activeBurnPainting.userData.flameMesh) {
-      scene.remove(activeBurnPainting.userData.flameMesh);
-      activeBurnPainting.userData.flameMesh = null;
-    }
-  }
-  activeBurnPainting = target;
-  if (target.userData.burnTime === undefined) target.userData.burnTime = 0;
-  target.userData.burnTime += dt;
-  const frac = Math.min(1, target.userData.burnTime / BURN_DURATION);
-
-  // Apply progressive char
-  applyCharProgress(target, frac);
-
-  // Spawn / update flame visual
-  if (!target.userData.flameMesh) {
-    const flame = makeFlameMesh();
-    // Position at painting's lower edge, just in front of it
-    const n = target.userData.outwardNormal;
-    if (n) {
-      flame.position.set(
-        target.position.x + n.x * 0.06,
-        target.position.y - 0.18,
-        target.position.z + n.z * 0.06
-      );
-    } else {
-      flame.position.copy(target.position);
-    }
-    flame.lookAt(camera.position);
-    scene.add(flame);
-    target.userData.flameMesh = flame;
-    decals.push({ _flame: target });   // for clearAll
-    updateClearButton();
-    playFire();   // sound only on flame ignition
-  } else {
-    // Flicker
-    const f = target.userData.flameMesh;
-    const flick = 0.85 + Math.random() * 0.3;
-    f.scale.set(flick, flick * (0.9 + Math.random() * 0.2), flick);
-    f.lookAt(camera.position);
-  }
-
-  // If fully charred, kill the flame (job's done)
-  if (frac >= 1) stopLighterBurn();
-}
-
-function makeFlameMesh() {
-  const c = document.createElement('canvas');
-  c.width = 128; c.height = 256;
+// Smoke after a gun hit — a few translucent gray puffs that drift up and out
+// over ~1.2s. Lightweight: each puff is a single billboarded plane.
+const activeSmoke = [];
+let _smokeTexCache = null;
+function getSmokeTexture() {
+  if (_smokeTexCache) return _smokeTexCache;
+  const c = document.createElement('canvas'); c.width = 128; c.height = 128;
   const ctx = c.getContext('2d');
-  ctx.clearRect(0, 0, 128, 256);
-  const grad = ctx.createRadialGradient(64, 200, 8, 64, 200, 80);
-  grad.addColorStop(0, 'rgba(255, 240, 180, 0.95)');
-  grad.addColorStop(0.3, 'rgba(255, 180, 60, 0.78)');
-  grad.addColorStop(0.7, 'rgba(220, 80, 20, 0.4)');
-  grad.addColorStop(1, 'rgba(200, 60, 0, 0)');
-  ctx.fillStyle = grad;
+  // Soft cloudy gray puff — radial gradient with a couple of internal
+  // density variations for an organic feel
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 60);
+  g.addColorStop(0,   'rgba(200, 195, 188, 0.78)');
+  g.addColorStop(0.4, 'rgba(160, 155, 148, 0.50)');
+  g.addColorStop(0.8, 'rgba(120, 115, 108, 0.18)');
+  g.addColorStop(1,   'rgba(100, 95, 88, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 4; i++) {
+    const cx = 40 + Math.random() * 48;
+    const cy = 40 + Math.random() * 48;
+    const r = 14 + Math.random() * 14;
+    const sg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    sg.addColorStop(0, 'rgba(220, 215, 208, ' + (0.18 + Math.random() * 0.18) + ')');
+    sg.addColorStop(1, 'rgba(220, 215, 208, 0)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(0, 0, 128, 128);
+  }
+  _smokeTexCache = new THREE.CanvasTexture(c);
+  _smokeTexCache.needsUpdate = true;
+  return _smokeTexCache;
+}
+function spawnGunSmoke(hit) {
+  const tex = getSmokeTexture();
+  const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+  // Spawn 5 puffs with small position jitter and varying upward drift
+  for (let i = 0; i < 5; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.55,
+    });
+    const size0 = 0.10 + Math.random() * 0.08;
+    const puff = new THREE.Mesh(new THREE.PlaneGeometry(size0, size0), mat);
+    // Start near the hit point, slightly offset along the surface normal so
+    // the puffs sit OUT FROM the wall rather than being buried in it
+    const jitter = new THREE.Vector3(
+      (Math.random() - 0.5) * 0.12,
+      (Math.random() - 0.5) * 0.06,
+      (Math.random() - 0.5) * 0.12
+    );
+    puff.position.copy(hit.point).addScaledVector(normal, 0.04 + Math.random() * 0.04).add(jitter);
+    // Rise + drift outward
+    const vel = new THREE.Vector3(
+      normal.x * (0.25 + Math.random() * 0.2) + (Math.random() - 0.5) * 0.18,
+      0.5 + Math.random() * 0.4,
+      normal.z * (0.25 + Math.random() * 0.2) + (Math.random() - 0.5) * 0.18
+    );
+    scene.add(puff);
+    activeSmoke.push({
+      mesh: puff,
+      vel,
+      age: 0,
+      lifetime: 1.0 + Math.random() * 0.6,
+      growth: 0.6 + Math.random() * 0.5,   // m/s of size growth
+      startSize: size0,
+    });
+  }
+  // Cap simultaneous puffs
+  while (activeSmoke.length > 60) {
+    const old = activeSmoke.shift();
+    scene.remove(old.mesh);
+    if (old.mesh.geometry) old.mesh.geometry.dispose();
+    if (old.mesh.material) old.mesh.material.dispose();
+  }
+}
+
+function updateGunSmoke(dt) {
+  for (let i = activeSmoke.length - 1; i >= 0; i--) {
+    const s = activeSmoke[i];
+    s.age += dt;
+    s.mesh.position.x += s.vel.x * dt;
+    s.mesh.position.y += s.vel.y * dt;
+    s.mesh.position.z += s.vel.z * dt;
+    // Decelerate (air resistance)
+    s.vel.multiplyScalar(0.96);
+    // Grow + fade
+    const t = s.age / s.lifetime;
+    const sz = s.startSize + s.growth * s.age;
+    s.mesh.scale.setScalar(sz / s.startSize);
+    s.mesh.material.opacity = Math.max(0, 0.55 * (1 - t));
+    // Always face camera
+    s.mesh.lookAt(camera.position);
+    if (t >= 1) {
+      scene.remove(s.mesh);
+      if (s.mesh.geometry) s.mesh.geometry.dispose();
+      if (s.mesh.material) s.mesh.material.dispose();
+      activeSmoke.splice(i, 1);
+    }
+  }
+}
+
+/* ── Lighter: tap to ignite a persistent fire ──
+   Tapping with the lighter on a painting (within range) ignites a fire that
+   PERSISTS — flames continue to flicker and the painting progressively chars
+   over BURN_DURATION seconds. Multiple fires can burn at once. The Clear
+   button extinguishes everything and restores original textures.
+
+   This is the implementation from the original soup-mode iteration that
+   worked well — two layered flame planes (additive blended) + a glow point
+   light, animated each frame in updateLighterBurn(dt). */
+
+const BURN_DURATION = 56;       // seconds — full char takes a while; flames are persistent
+const LIGHTER_RANGE = 3.5;      // how close you must be to ignite
+const activeFires = [];         // {root, flame, flame2, glow, painting, originalColor, originalMap, charredMap, age, intensity, startTime, swappedToCharred}
+
+function fireLighter() {
+  if (!destruction.active || destruction.weapon !== 'lighter') return;
+  // Raycast from camera; if it hits a painting within LIGHTER_RANGE, ignite it
+  const ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+  ray.far = LIGHTER_RANGE;
+  const hits = ray.intersectObjects(paintingMeshes, false);
+  if (hits.length === 0) return;
+  spawnFire(hits[0]);
+  playFire();
+}
+
+function spawnFire(hit) {
+  const point = hit.point;
+  const normal = hit.face
+    ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
+    : new THREE.Vector3(0, 0, 1);
+  const painting = hit.object;
+
+  const fireRoot = new THREE.Group();
+
+  // Main flame plane — flickers in updateLighterBurn
+  const flameTex = makeFlameTexture();
+  const flameMat = new THREE.MeshBasicMaterial({
+    map: flameTex,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const flame = new THREE.Mesh(new THREE.PlaneGeometry(0.30, 0.45), flameMat);
+  flame.position.set(0, 0.18, 0.005);
+  fireRoot.add(flame);
+
+  // Secondary smaller flame for layered look
+  const flame2 = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.28), flameMat.clone());
+  flame2.position.set(0.05, 0.12, 0.012);
+  fireRoot.add(flame2);
+
+  // Glow point light
+  const glow = new THREE.PointLight(0xff7a30, 0.8, 1.6, 2);
+  glow.position.set(0, 0.10, 0.05);
+  fireRoot.add(glow);
+
+  fireRoot.position.copy(point).addScaledVector(normal, 0.005);
+  fireRoot.lookAt(point.clone().add(normal));
+  scene.add(fireRoot);
+
+  // Capture original color & texture once per painting so we can restore on Clear
+  const originalColor = painting.material.color ? painting.material.color.clone() : null;
+  const originalMap = painting.material.map || null;
+  // Generate the charred texture once per painting (cache on painting)
+  let charredMap = painting.userData.charredMap;
+  if (!charredMap && originalMap) {
+    charredMap = makeCharredTexture(originalMap);
+    painting.userData.charredMap = charredMap;
+  }
+
+  activeFires.push({
+    root: fireRoot,
+    flame, flame2, glow,
+    painting,
+    originalColor,
+    originalMap,
+    charredMap,
+    age: 0,
+    intensity: 0.2,
+    startTime: performance.now() / 1000,
+    swappedToCharred: false,
+  });
+
+  decals.push({ _fire: activeFires[activeFires.length - 1] });   // for Clear button
+  // Cap total fires to avoid runaway
+  while (activeFires.length > 60) {
+    const old = activeFires.shift();
+    if (old.painting && old.originalColor) old.painting.material.color.copy(old.originalColor);
+    if (old.painting && old.originalMap && old.painting.material.map !== old.originalMap) {
+      old.painting.material.map = old.originalMap;
+      old.painting.material.needsUpdate = true;
+    }
+    scene.remove(old.root);
+    disposeMesh(old.root);
+  }
+  updateClearButton();
+}
+
+// Per-frame: flicker every active fire and progress its char
+function updateLighterBurn(dt) {
+  if (!destruction.active) return;
+  const now = performance.now() / 1000;
+  for (const fire of activeFires) {
+    fire.age += dt;
+    fire.intensity = Math.min(1, 0.2 + fire.age / 6);   // ramp up over 6s
+
+    const flickerA = 0.85 + Math.sin(now * 22 + fire.startTime) * 0.10 + Math.random() * 0.08;
+    const flickerB = 0.80 + Math.cos(now * 18 + fire.startTime * 2) * 0.12 + Math.random() * 0.08;
+    fire.flame.scale.set(
+      fire.intensity * flickerA,
+      fire.intensity * (0.9 + Math.random() * 0.2),
+      1
+    );
+    fire.flame2.scale.set(
+      fire.intensity * flickerB * 0.7,
+      fire.intensity * 0.8,
+      1
+    );
+    if (fire.glow) fire.glow.intensity = fire.intensity * (0.7 + Math.random() * 0.5);
+
+    // Slow burn: gradually char the painting
+    if (fire.painting && fire.originalColor) {
+      const burnFrac = Math.min(1, fire.age / BURN_DURATION);
+      const c = fire.painting.material.color;
+      const o = fire.originalColor;
+      // Glow factor peaks around burnFrac=0.4
+      const glowF = Math.max(0, 1 - Math.abs(burnFrac - 0.4) * 2.2);
+      if (!fire.swappedToCharred) {
+        // Phase 1: still showing original texture, tint progressing toward dark with mid-burn glow
+        c.r = o.r * (1 - burnFrac * 0.85) + glowF * 0.4;
+        c.g = o.g * (1 - burnFrac * 0.85) + glowF * 0.10;
+        c.b = o.b * (1 - burnFrac * 0.85);
+        if (burnFrac >= 0.95 && fire.charredMap) {
+          fire.painting.material.map = fire.charredMap;
+          fire.painting.material.color.setRGB(1, 1, 1);
+          fire.painting.material.needsUpdate = true;
+          fire.swappedToCharred = true;
+        }
+      }
+      // Post-burnout: flames keep flickering but slowly shrink
+      if (burnFrac >= 1) {
+        const decay = Math.max(0.2, 1 - (fire.age - BURN_DURATION) / 8);
+        fire.flame.scale.multiplyScalar(decay * 0.5);
+        fire.flame2.scale.multiplyScalar(decay * 0.5);
+        if (fire.glow) fire.glow.intensity *= decay * 0.5;
+      }
+    }
+  }
+}
+
+function makeFlameTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 96;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 64, 96);
+  // Outer red-orange envelope — teardrop shape
+  const outer = ctx.createRadialGradient(32, 70, 6, 32, 50, 38);
+  outer.addColorStop(0,    'rgba(255, 200, 100, 0.0)');
+  outer.addColorStop(0.3,  'rgba(255, 130, 40, 0.7)');
+  outer.addColorStop(0.7,  'rgba(220, 60, 20, 0.4)');
+  outer.addColorStop(1,    'rgba(120, 30, 10, 0.0)');
+  ctx.fillStyle = outer;
   ctx.beginPath();
-  ctx.moveTo(40, 240);
-  ctx.quadraticCurveTo(20, 180, 50, 100);
-  ctx.quadraticCurveTo(64, 60, 64, 30);
-  ctx.quadraticCurveTo(64, 60, 78, 100);
-  ctx.quadraticCurveTo(108, 180, 88, 240);
-  ctx.closePath();
+  ctx.moveTo(32, 96);
+  ctx.bezierCurveTo(0, 60, 8, 30, 32, 4);
+  ctx.bezierCurveTo(56, 30, 64, 60, 32, 96);
+  ctx.fill();
+  // Inner bright yellow core
+  const inner = ctx.createRadialGradient(32, 75, 2, 32, 60, 22);
+  inner.addColorStop(0,   'rgba(255, 255, 220, 1)');
+  inner.addColorStop(0.3, 'rgba(255, 220, 100, 0.85)');
+  inner.addColorStop(0.7, 'rgba(255, 160, 40, 0.4)');
+  inner.addColorStop(1,   'rgba(255, 100, 20, 0)');
+  ctx.fillStyle = inner;
+  ctx.beginPath();
+  ctx.ellipse(32, 65, 14, 26, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Tiny blue base
+  ctx.fillStyle = 'rgba(120, 180, 255, 0.6)';
+  ctx.beginPath();
+  ctx.ellipse(32, 86, 4, 6, 0, 0, Math.PI * 2);
   ctx.fill();
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
-  return new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.95), mat);
+  return tex;
 }
 
-// Replaces the old single-shot applyCharring. Applies char in proportion to
-// `frac` (0..1). Caches the original texture and a working canvas on the
-// painting, then writes a fresh blended version each call.
-function applyCharProgress(painting, frac) {
-  // Preserve original on first call so we can restore on Clear
-  if (!charredOriginals.has(painting)) {
-    if (!painting.material.map || !painting.material.map.image || !painting.material.map.image.width) return;
-    charredOriginals.set(painting, {
-      map: painting.material.map,
-      color: painting.material.color.clone(),
-    });
+// Generate a "charred" version of a painting texture: extract luminance,
+// remap it to a near-black palette with reddish warmth, so the painting is
+// visible as a "ghost of itself" after burnout.
+function makeCharredTexture(sourceTex) {
+  const img = sourceTex.image;
+  if (!img || !img.width) return null;
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  const d = data.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    const v = 8 + (lum / 255) * 28;     // map to dark range 8..36
+    d[i]   = Math.min(255, v * 1.20);   // R — slight warm tint
+    d[i+1] = v * 0.92;                  // G
+    d[i+2] = v * 0.82;                  // B
   }
-  // Initialize working canvas + base image on first call
-  if (!painting.userData.charCanvas) {
-    const origMap = charredOriginals.get(painting).map;
-    const img = origMap.image;
-    if (!img || !img.width) return;
-    const c = document.createElement('canvas');
-    c.width = img.width; c.height = img.height;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    painting.userData.charCanvas = c;
-    painting.userData.charCtx = ctx;
-    painting.userData.charBase = ctx.getImageData(0, 0, c.width, c.height);
-    const newTex = new THREE.CanvasTexture(c);
-    newTex.encoding = THREE.sRGBEncoding;
-    painting.material.map = newTex;
-    painting.material.needsUpdate = true;
-    painting.userData.charTex = newTex;
-    decals.push({ _restore: painting });   // marker so clearAll restores it
-  }
-  // Re-render current frame
-  const ctx = painting.userData.charCtx;
-  const c = painting.userData.charCanvas;
-  const base = painting.userData.charBase;
-  const out = ctx.createImageData(c.width, c.height);
-  const od = out.data, bd = base.data;
-  // Char target: dark red-brown, modulated by luminance
-  const blend = frac * 0.95;   // 0..0.95
-  for (let i = 0; i < bd.length; i += 4) {
-    const r = bd[i], g = bd[i+1], b = bd[i+2];
-    const lum = (r + g + b) / 3 / 255;   // 0..1
-    const tR = 30 + lum * 40;
-    const tG = 14 + lum * 18;
-    const tB = 6 + lum * 8;
-    od[i]   = (r * (1 - blend) + tR * blend) | 0;
-    od[i+1] = (g * (1 - blend) + tG * blend) | 0;
-    od[i+2] = (b * (1 - blend) + tB * blend) | 0;
-    od[i+3] = bd[i+3];
-  }
-  ctx.putImageData(out, 0, 0);
-  if (painting.userData.charTex) painting.userData.charTex.needsUpdate = true;
+  ctx.putImageData(data, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.encoding = THREE.sRGBEncoding;
+  tex.needsUpdate = true;
+  tex.wrapS = sourceTex.wrapS;
+  tex.wrapT = sourceTex.wrapT;
+  return tex;
 }
 
 function updateProjectiles(dt) {
@@ -3096,7 +3255,9 @@ function animate() {
   // Projectile physics
   if (projectiles.length > 0) updateProjectiles(dt);
   // Lighter held-down progressive burn
-  if (destruction.active && destruction.weapon === 'lighter') updateLighterBurn(dt);
+  if (destruction.active) updateLighterBurn(dt);
+  // Gun smoke puffs (run regardless of weapon — smoke can outlive a weapon swap)
+  if (activeSmoke.length > 0) updateGunSmoke(dt);
 
   renderer.render(scene, camera);
 }
