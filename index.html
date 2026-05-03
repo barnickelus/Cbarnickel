@@ -821,11 +821,11 @@ body { overscroll-behavior: none; }
   </button>
   <div class="weapon-divider"></div>
   <button class="weapon-btn clear" id="clear-damage" title="Clear damage" disabled>
+    <!-- Eraser / wipe-clean icon: an eraser shape sweeping with motion lines -->
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="3 6 5 6 21 6"/>
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-      <path d="M10 11v6 M14 11v6"/>
-      <path d="M9 6V3h6v3"/>
+      <path d="M19 14l-7.5 7.5a2.12 2.12 0 0 1-3 0L4 17a2.12 2.12 0 0 1 0-3L11.5 6.5"/>
+      <path d="M11.5 6.5L17 1l6 6-5.5 5.5"/>
+      <path d="M9 22h12"/>
     </svg>
   </button>
 </div>
@@ -980,13 +980,19 @@ let lastSnappedPainting = null;
 const intro = {
   active: false,
   startTime: 0,
-  duration: 5.2,
-  // Multi-keyframe sweep — never points at a wall, ends framing all 3 doors
+  duration: 6.5,
+  // 360° helicopter descent: start high above the lobby looking nearly
+  // straight down so the whole gallery layout fits in view. Yaw values
+  // decrease monotonically from 2π → 0 to force a single rotation (lerp
+  // picks shortest path otherwise — intermediate keyframes guarantee
+  // the long way around). As we descend, pitch eases up toward level
+  // and we settle at the spawn point facing through the central arch.
   keyframes: [
-    { t: 0.00, pos: { x:  3.5, y: 4.2, z: 5.0 }, yaw: -0.40, pitch: -0.30 },
-    { t: 0.40, pos: { x: -2.5, y: 3.4, z: 4.8 }, yaw:  0.20, pitch: -0.20 },
-    { t: 0.75, pos: { x:  0.5, y: 2.2, z: 4.7 }, yaw: -0.05, pitch: -0.06 },
-    { t: 1.00, pos: { x:  0.0, y: PLAYER_HEIGHT, z: 4.5 }, yaw: 0, pitch: 0 },
+    { t: 0.00, pos: { x:  0.0, y: 5.8, z:  0.0 }, yaw:  Math.PI * 2,    pitch: -1.30 },
+    { t: 0.25, pos: { x:  0.0, y: 5.0, z:  1.0 }, yaw:  Math.PI * 1.5,  pitch: -1.05 },
+    { t: 0.50, pos: { x:  0.0, y: 4.0, z:  2.0 }, yaw:  Math.PI,        pitch: -0.75 },
+    { t: 0.75, pos: { x:  0.0, y: 2.9, z:  3.2 }, yaw:  Math.PI * 0.5,  pitch: -0.35 },
+    { t: 1.00, pos: { x:  0.0, y: PLAYER_HEIGHT, z: 4.5 }, yaw: 0,      pitch: 0 },
   ],
 };
 let introHasPlayed = false;
@@ -998,21 +1004,21 @@ let hintHideTimer = 0;
 const THEMES = {
   dark: {
     bg: 0x0a0908,
-    wall: 0x171311,
-    wallStrong: 0x100c08,
-    floor: 0x130f0a,
-    ceiling: 0x06050a,
-    ambient: { color: 0xfff6e0, intensity: 0.32 },
-    hemi: { sky: 0xfff8e8, ground: 0x1a1410, intensity: 0.5 },
-    spot: { color: 0xfff2d4, intensity: 1.5 },
-    glow: { color: 0xc9a96e, intensity: 0.45 },
+    wall: 0x2a221d,             // lighter warm brown — structure reads clearly
+    wallStrong: 0x352a22,       // edges/accent: lighter still, gives definition
+    floor: 0x1a1410,
+    ceiling: 0x0a0808,
+    ambient: { color: 0xfff6e0, intensity: 0.55 },   // was 0.32 — lifted considerably
+    hemi: { sky: 0xfff8e8, ground: 0x2a221c, intensity: 0.7 },   // was 0.5
+    spot: { color: 0xfff2d4, intensity: 1.6 },
+    glow: { color: 0xc9a96e, intensity: 0.55 },     // was 0.45
     trackBar: 0x1a1612,
     title: '#e6c885',
     titleAlpha: 0.92,
     label: '#e6c885',
     labelAlpha: 0.95,
-    fog: { color: 0x07060a, density: 0.02 },
-    rendererClear: 0x07060a,
+    fog: { color: 0x12100e, density: 0.012 },       // was 0.02 — much less obscuring
+    rendererClear: 0x12100e,
   },
   white: {
     bg: 0xefe9dc,
@@ -2451,6 +2457,22 @@ function spawnDecal(hit, type) {
 // setWeapon) don't throw. The new persistent-fire system doesn't need a "stop
 // holding" hook; fires are extinguished only via Clear.
 function stopLighterBurn() { /* no-op for persistent-fire system */ }
+
+/* Helper: recursively dispose a Three.js group/mesh's geometries + materials.
+   Used when extinguishing fires and clearing damage. */
+function disposeMesh(obj) {
+  if (!obj) return;
+  obj.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (m.map) m.map.dispose();
+        m.dispose();
+      }
+    }
+  });
+}
 
 function clearAllDamage() {
   // Extinguish every active fire and restore each affected painting
