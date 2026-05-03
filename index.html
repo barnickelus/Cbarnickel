@@ -797,7 +797,7 @@ body { overscroll-behavior: none; }
   </div>
 </div>
 
-<div class="bait">
+<div class="bait" id="bait">
   <span class="bait-label">do not click here</span>
   <button class="bait-btn" id="bait-btn" aria-label="Toggle destruction mode">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -923,11 +923,11 @@ const FOV = 65;
 const HANG_HEIGHT = 1.55;
 const WALK_SPEED = 3.2;
 const TAP_WALK_SPEED = 5.5;
-const PINCH_PX_PER_M = 95;
-const STRAFE_PX_PER_M = 110;
-const SNAP_TRIGGER_DIST = 2.6;
-const SNAP_IDLE_TIME = 0.5;
-const SNAP_VIEW_ANGLE = Math.PI / 4;
+const PINCH_PX_PER_M = 110;
+const STRAFE_PX_PER_M = 130;
+const SNAP_TRIGGER_DIST = 2.4;
+const SNAP_IDLE_TIME = 0.7;        // wait longer before snapping (less aggressive)
+const SNAP_VIEW_ANGLE = Math.PI / 5;
 
 /* ─── 2. Globals ─── */
 let scene, camera, renderer, raycaster;
@@ -1094,13 +1094,15 @@ function initScene() {
 }
 
 /* ─── 6. Room layout ─── */
-// Layout: 3 series rooms tile north of the lobby, sharing walls.
-// Each room has ONE archway in its south wall (= lobby's north wall).
-// Lobby has 3 archways on its north wall.
-const NORTH_DOOR_LAYOUT = [
-  { sid: 'plein-air',             archX: -5, roomCx: -7, roomW: 8,  roomD: 14 },
-  { sid: 'constructed-landscape', archX:  0, roomCx:  0, roomW: 6,  roomD: 14 },
-  { sid: 'figurative',            archX: +5, roomCx:  7, roomW: 8,  roomD: 10 },
+// Layout: 3 series rooms tile north of the lobby, plus an "Older Work" room
+// south of the lobby (behind spawn). Each room has ONE archway to the lobby.
+// Lobby has up to 4 archways: 3 north, 1 south.
+// Each entry: side specifies which lobby wall the arch sits on.
+const SERIES_LAYOUT = [
+  { sid: 'plein-air',             side: 'north', archX: -5, roomCx: -7, roomW: 8,  roomD: 14 },
+  { sid: 'constructed-landscape', side: 'north', archX:  0, roomCx:  0, roomW: 6,  roomD: 14 },
+  { sid: 'figurative',            side: 'north', archX: +5, roomCx:  7, roomW: 8,  roomD: 10 },
+  { sid: 'older-work',            side: 'south', archX:  0, roomCx:  0, roomW: 12, roomD: 9  },
 ];
 
 function buildGallery() {
@@ -1115,19 +1117,37 @@ function buildGallery() {
     archways: [],
   };
 
-  // Series rooms
-  for (const def of NORTH_DOOR_LAYOUT) {
+  // Series rooms — north or south of lobby per def.side
+  for (const def of SERIES_LAYOUT) {
     if (!SERIES[def.sid]) continue;
-    const cz = -(LOBBY_D/2 + def.roomD/2);
+    let cz;
+    if (def.side === 'north') {
+      cz = -(LOBBY_D/2 + def.roomD/2);
+    } else {
+      // south side — older work, behind spawn
+      cz = (LOBBY_D/2 + def.roomD/2);
+    }
     ROOMS[def.sid] = {
       id: def.sid,
       name: SERIES[def.sid].name,
       subtitle: SERIES[def.sid].subtitle || '',
+      side: def.side,
       w: def.roomW, d: def.roomD, h: LOBBY_H,
       cx: def.roomCx, cz: cz,
-      archways: [{ dir: 'south', worldX: def.archX, connectsTo: 'lobby' }],
+      archways: [{
+        // For a north-side room, its arch is on its OWN south wall (to the lobby).
+        // For a south-side room, its arch is on its OWN north wall.
+        dir: def.side === 'north' ? 'south' : 'north',
+        worldX: def.archX,
+        connectsTo: 'lobby',
+      }],
     };
-    ROOMS.lobby.archways.push({ dir: 'north', worldX: def.archX, sid: def.sid });
+    // Lobby gets a matching arch on the corresponding wall
+    ROOMS.lobby.archways.push({
+      dir: def.side,            // 'north' or 'south'
+      worldX: def.archX,
+      sid: def.sid,
+    });
   }
 
   // Build floors and ceilings
@@ -1373,11 +1393,20 @@ function buildRoomLabels() {
     if (!target) continue;
     const tex = makeLabelTexture(target.name, target.subtitle);
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: T().labelAlpha });
-    // Width based on label canvas aspect (1024 / 256 = 4:1)
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), mat);
-    // Position above the arch, on the lobby side of the wall
-    const z = lobby.cz - lobby.d/2 + WALL_THICKNESS/2 + 0.012;
-    mesh.position.set(arch.worldX, ARCH_HEIGHT + 0.55, z);
+    // Position above the arch on the lobby-side of the appropriate wall.
+    // For a north arch, the label is on lobby's north wall (z = -d/2),
+    // facing INTO the lobby (toward +z). For a south arch, label is on
+    // lobby's south wall (z = +d/2), facing INTO the lobby (toward -z).
+    if (arch.dir === 'north') {
+      const z = lobby.cz - lobby.d/2 + WALL_THICKNESS/2 + 0.012;
+      mesh.position.set(arch.worldX, ARCH_HEIGHT + 0.55, z);
+      // Plane default normal is +z — that points into the lobby. ✓
+    } else {
+      const z = lobby.cz + lobby.d/2 - WALL_THICKNESS/2 - 0.012;
+      mesh.position.set(arch.worldX, ARCH_HEIGHT + 0.55, z);
+      mesh.rotation.y = Math.PI;   // flip to face -z (into lobby)
+    }
     scene.add(mesh);
     seriesLabels.push({ mesh, name: target.name, subtitle: target.subtitle, sid: arch.sid });
   }
@@ -1449,17 +1478,20 @@ function placeAllPaintings() {
   }
 }
 
-// Place subset of paintings into room, distributing across N, E, W walls.
+// Place subset of paintings into room, distributing across non-arch walls.
 function placeSeriesInRoom(room, paintings, sid) {
-  // Available walls: north (length=room.w), east (length=room.d), west (length=room.d)
-  // Skip south because it has the archway.
-  // Each painting needs a nominal slot of (paintingWidth + 0.6m gap on each side).
-  const avail = [
-    { dir: 'north', len: room.w, capacity: 0, list: [] },
-    { dir: 'east',  len: room.d, capacity: 0, list: [] },
-    { dir: 'west',  len: room.d, capacity: 0, list: [] },
+  // Determine which wall direction has the arch — that wall is unavailable.
+  // Use the room's own archways list (which has dir set per the room's frame).
+  const archDirs = new Set((room.archways || []).map(a => a.dir));
+  // Build the list of available walls, skipping any that contain an arch
+  const ALL = [
+    { dir: 'north', len: room.w },
+    { dir: 'south', len: room.w },
+    { dir: 'east',  len: room.d },
+    { dir: 'west',  len: room.d },
   ];
-  // Sort paintings by area, biggest first. Big paintings get prime real estate.
+  const avail = ALL.filter(w => !archDirs.has(w.dir)).map(w => ({ ...w, capacity: 0, list: [] }));
+  // Sort paintings by area, biggest first
   const sorted = [...paintings].sort((a, b) =>
     (b._size.wM * b._size.hM) - (a._size.wM * a._size.hM));
 
@@ -1467,9 +1499,9 @@ function placeSeriesInRoom(room, paintings, sid) {
   for (const art of sorted) {
     const slot = art._size.wM + 0.7;
     const wall = avail.reduce((best, w) =>
-      (w.len - w.capacity > best.len - best.capacity) ? w : best);
+      (w.len - w.capacity > best.len - best.capacity) ? w : best, avail[0]);
+    if (!wall) break;
     if (wall.capacity + slot > wall.len - 0.4) {
-      // No room — try next wall
       const alt = avail
         .filter(w => w.len - w.capacity > slot + 0.4)
         .sort((a, b) => (b.len - b.capacity) - (a.len - a.capacity))[0];
@@ -1480,8 +1512,6 @@ function placeSeriesInRoom(room, paintings, sid) {
     }
   }
 
-  // Now space them along each wall, biased toward the line-of-sight target
-  // for the north wall (so a painting is visible through the arch from the lobby).
   for (const w of avail) {
     if (w.list.length === 0) continue;
     placeOnWall(room, w.dir, w.list);
@@ -1680,11 +1710,13 @@ function onMouseMove(e) {
   const dx = e.clientX - mouseLook.x;
   const dy = e.clientY - mouseLook.y;
   mouseLook.moved += Math.abs(dx) + Math.abs(dy);
-  yaw = mouseLook.yaw - dx * 0.004;
-  pitch = mouseLook.pitch - dy * 0.004;
+  yaw = mouseLook.yaw - dx * 0.0034;
+  pitch = mouseLook.pitch - dy * 0.0034;
   pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
 }
 function onMouseUp(e) {
+  // Always stop lighter burn on release, regardless of whether tap fires
+  if (lighterHeld) stopLighterBurn();
   if (!mouseLook) return;
   if (mouseLook.moved < 6) handleTap(e.clientX, e.clientY);
   mouseLook = null;
@@ -1740,14 +1772,16 @@ function onTouchMove(e) {
       const dx = t.clientX - touchLook.x;
       const dy = t.clientY - touchLook.y;
       touchLook.moved += Math.abs(dx) + Math.abs(dy);
-      yaw = touchLook.yaw - dx * 0.004;
-      pitch = touchLook.pitch - dy * 0.004;
+      yaw = touchLook.yaw - dx * 0.0034;
+      pitch = touchLook.pitch - dy * 0.0034;
       pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
       noteUserInput();
     }
   }
 }
 function onTouchEnd(e) {
+  // Always stop lighter burn on release
+  if (lighterHeld && e.touches.length === 0) stopLighterBurn();
   if (pinchActive) {
     if (e.touches.length < 2) {
       pinchActive = false;
@@ -2395,47 +2429,31 @@ function spawnDecal(hit, type) {
   updateClearButton();
 }
 
-function applyCharring(painting) {
-  if (charredOriginals.has(painting)) return;   // already charred
-  const map = painting.material.map;
-  if (!map) return;
-  charredOriginals.set(painting, { map, color: painting.material.color.clone() });
-  // Make a charred version of the texture
-  const img = map.image;
-  if (!img || !img.width) return;
-  const c = document.createElement('canvas');
-  c.width = img.width; c.height = img.height;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(img, 0, 0);
-  const data = ctx.getImageData(0, 0, c.width, c.height);
-  for (let i = 0; i < data.data.length; i += 4) {
-    const r = data.data[i], g = data.data[i+1], b = data.data[i+2];
-    const lum = (r + g + b) / 3;
-    const charred = 8 + (lum / 255) * 28;   // 8-36
-    data.data[i]   = Math.floor(charred * 1.4);   // tint red
-    data.data[i+1] = Math.floor(charred * 0.7);
-    data.data[i+2] = Math.floor(charred * 0.5);
-  }
-  ctx.putImageData(data, 0, 0);
-  const newTex = new THREE.CanvasTexture(c);
-  newTex.encoding = THREE.sRGBEncoding;
-  painting.material.map = newTex;
-  painting.material.needsUpdate = true;
-  decals.push({ _restore: painting });   // marker for clear
-  updateClearButton();
-}
-
 function clearAllDamage() {
+  // Stop any active burn first
+  stopLighterBurn();
   // Restore charred paintings
   for (const d of decals) {
     if (d._restore) {
       const orig = charredOriginals.get(d._restore);
       if (orig) {
+        if (d._restore.material.map && d._restore.material.map !== orig.map) {
+          d._restore.material.map.dispose();
+        }
         d._restore.material.map = orig.map;
         d._restore.material.color.copy(orig.color);
         d._restore.material.needsUpdate = true;
         charredOriginals.delete(d._restore);
+        // Reset burn state so lighter starts over next time
+        d._restore.userData.burnTime = 0;
+        d._restore.userData.charCanvas = null;
+        d._restore.userData.charCtx = null;
+        d._restore.userData.charBase = null;
+        d._restore.userData.charTex = null;
       }
+    } else if (d._flame) {
+      // Flame markers — actual flame mesh already removed by stopLighterBurn
+      // (no-op here)
     } else if (d.parent) {
       scene.remove(d);
       if (d.material) {
@@ -2473,16 +2491,18 @@ function setDestructionActive(on) {
     setWeapon(destruction.weapon);
     showHint('click anywhere to attack', 3000);
   } else {
+    stopLighterBurn();   // make sure no flame is left running
     document.getElementById('bottom-hint').classList.remove('show');
   }
 }
 
 function setWeapon(w) {
+  // Stop any active burn if we're switching away from the lighter
+  if (destruction.weapon === 'lighter' && w !== 'lighter') stopLighterBurn();
   destruction.weapon = w;
   document.querySelectorAll('.weapon-btn[data-weapon]').forEach(b => {
     b.classList.toggle('active', b.dataset.weapon === w);
   });
-  // The shared "fire" function dispatches based on selected weapon
   destruction.fire = () => fireWeapon(destruction.weapon);
 }
 
@@ -2524,7 +2544,8 @@ function fireSoup() {
 function fireGun() {
   // Instant raycast from camera forward
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-  const targets = [...paintingMeshes, ...wallMeshes];
+  // Hit ANY solid surface (paintings, walls, floors, ceilings)
+  const targets = [...paintingMeshes, ...wallMeshes, ...floorMeshes, ...ceilingMeshes];
   const hits = raycaster.intersectObjects(targets, false);
   if (hits.length > 0) {
     spawnDecal(hits[0], 'hole');
@@ -2532,8 +2553,46 @@ function fireGun() {
   playGunshot();
 }
 
+/* ── Lighter: HELD-DOWN progressive burn ──
+   Holding the lighter (mousedown / touchstart with lighter weapon) starts the
+   flame. Each frame, while the user is aiming at a painting within range, we
+   accumulate burn time. The painting's texture is progressively charred over
+   BURN_DURATION seconds. Releasing or aiming away stops the flame; partial
+   char is preserved. Switching weapons or toggling out of destruction mode
+   also stops it. */
+
+const BURN_DURATION = 18;   // seconds for full char
+let lighterHeld = false;
+let activeBurnPainting = null;
+
+function startLighterBurn() {
+  if (destruction.weapon !== 'lighter') return;
+  lighterHeld = true;
+  // Don't play sound here — we play it once we actually find a target
+}
+
+function stopLighterBurn() {
+  lighterHeld = false;
+  if (activeBurnPainting && activeBurnPainting.userData.flameMesh) {
+    scene.remove(activeBurnPainting.userData.flameMesh);
+    if (activeBurnPainting.userData.flameMesh.geometry) activeBurnPainting.userData.flameMesh.geometry.dispose();
+    if (activeBurnPainting.userData.flameMesh.material) {
+      if (activeBurnPainting.userData.flameMesh.material.map) activeBurnPainting.userData.flameMesh.material.map.dispose();
+      activeBurnPainting.userData.flameMesh.material.dispose();
+    }
+    activeBurnPainting.userData.flameMesh = null;
+  }
+  activeBurnPainting = null;
+}
+
+// Replaces the old instant fireLighter. Now just initiates the held-burn
+// (this function is wired to be called on mousedown/touchstart).
 function fireLighter() {
-  // Find painting in front of us within 3.5m
+  startLighterBurn();
+}
+
+function findLighterTargetPainting() {
+  // Find painting in front of us within 2.6m, in view
   const fx = -Math.sin(yaw) * Math.cos(pitch);
   const fz = -Math.cos(yaw) * Math.cos(pitch);
   let best = null, bestDist = Infinity;
@@ -2541,16 +2600,150 @@ function fireLighter() {
     const dx = p.position.x - camera.position.x;
     const dz = p.position.z - camera.position.z;
     const dist = Math.hypot(dx, dz);
-    if (dist > 3.5) continue;
+    if (dist > 2.6) continue;
     const dnx = dx / dist, dnz = dz / dist;
     const dot = fx * dnx + fz * dnz;
-    if (dot < 0.5) continue;
+    if (dot < 0.55) continue;
     if (dist < bestDist) { bestDist = dist; best = p; }
   }
-  if (best && best.material.map) {
-    applyCharring(best);
+  return best;
+}
+
+// Per-frame update called from animate loop while in destruction mode
+function updateLighterBurn(dt) {
+  if (!lighterHeld || destruction.weapon !== 'lighter' || !destruction.active) {
+    if (activeBurnPainting) stopLighterBurn();
+    return;
   }
-  playFire();
+  const target = findLighterTargetPainting();
+  if (!target) {
+    if (activeBurnPainting) stopLighterBurn();
+    return;
+  }
+  // Switch target painting if needed
+  if (activeBurnPainting && activeBurnPainting !== target) {
+    if (activeBurnPainting.userData.flameMesh) {
+      scene.remove(activeBurnPainting.userData.flameMesh);
+      activeBurnPainting.userData.flameMesh = null;
+    }
+  }
+  activeBurnPainting = target;
+  if (target.userData.burnTime === undefined) target.userData.burnTime = 0;
+  target.userData.burnTime += dt;
+  const frac = Math.min(1, target.userData.burnTime / BURN_DURATION);
+
+  // Apply progressive char
+  applyCharProgress(target, frac);
+
+  // Spawn / update flame visual
+  if (!target.userData.flameMesh) {
+    const flame = makeFlameMesh();
+    // Position at painting's lower edge, just in front of it
+    const n = target.userData.outwardNormal;
+    if (n) {
+      flame.position.set(
+        target.position.x + n.x * 0.06,
+        target.position.y - 0.18,
+        target.position.z + n.z * 0.06
+      );
+    } else {
+      flame.position.copy(target.position);
+    }
+    flame.lookAt(camera.position);
+    scene.add(flame);
+    target.userData.flameMesh = flame;
+    decals.push({ _flame: target });   // for clearAll
+    updateClearButton();
+    playFire();   // sound only on flame ignition
+  } else {
+    // Flicker
+    const f = target.userData.flameMesh;
+    const flick = 0.85 + Math.random() * 0.3;
+    f.scale.set(flick, flick * (0.9 + Math.random() * 0.2), flick);
+    f.lookAt(camera.position);
+  }
+
+  // If fully charred, kill the flame (job's done)
+  if (frac >= 1) stopLighterBurn();
+}
+
+function makeFlameMesh() {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 128, 256);
+  const grad = ctx.createRadialGradient(64, 200, 8, 64, 200, 80);
+  grad.addColorStop(0, 'rgba(255, 240, 180, 0.95)');
+  grad.addColorStop(0.3, 'rgba(255, 180, 60, 0.78)');
+  grad.addColorStop(0.7, 'rgba(220, 80, 20, 0.4)');
+  grad.addColorStop(1, 'rgba(200, 60, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(40, 240);
+  ctx.quadraticCurveTo(20, 180, 50, 100);
+  ctx.quadraticCurveTo(64, 60, 64, 30);
+  ctx.quadraticCurveTo(64, 60, 78, 100);
+  ctx.quadraticCurveTo(108, 180, 88, 240);
+  ctx.closePath();
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.95), mat);
+}
+
+// Replaces the old single-shot applyCharring. Applies char in proportion to
+// `frac` (0..1). Caches the original texture and a working canvas on the
+// painting, then writes a fresh blended version each call.
+function applyCharProgress(painting, frac) {
+  // Preserve original on first call so we can restore on Clear
+  if (!charredOriginals.has(painting)) {
+    if (!painting.material.map || !painting.material.map.image || !painting.material.map.image.width) return;
+    charredOriginals.set(painting, {
+      map: painting.material.map,
+      color: painting.material.color.clone(),
+    });
+  }
+  // Initialize working canvas + base image on first call
+  if (!painting.userData.charCanvas) {
+    const origMap = charredOriginals.get(painting).map;
+    const img = origMap.image;
+    if (!img || !img.width) return;
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    painting.userData.charCanvas = c;
+    painting.userData.charCtx = ctx;
+    painting.userData.charBase = ctx.getImageData(0, 0, c.width, c.height);
+    const newTex = new THREE.CanvasTexture(c);
+    newTex.encoding = THREE.sRGBEncoding;
+    painting.material.map = newTex;
+    painting.material.needsUpdate = true;
+    painting.userData.charTex = newTex;
+    decals.push({ _restore: painting });   // marker so clearAll restores it
+  }
+  // Re-render current frame
+  const ctx = painting.userData.charCtx;
+  const c = painting.userData.charCanvas;
+  const base = painting.userData.charBase;
+  const out = ctx.createImageData(c.width, c.height);
+  const od = out.data, bd = base.data;
+  // Char target: dark red-brown, modulated by luminance
+  const blend = frac * 0.95;   // 0..0.95
+  for (let i = 0; i < bd.length; i += 4) {
+    const r = bd[i], g = bd[i+1], b = bd[i+2];
+    const lum = (r + g + b) / 3 / 255;   // 0..1
+    const tR = 30 + lum * 40;
+    const tG = 14 + lum * 18;
+    const tB = 6 + lum * 8;
+    od[i]   = (r * (1 - blend) + tR * blend) | 0;
+    od[i+1] = (g * (1 - blend) + tG * blend) | 0;
+    od[i+2] = (b * (1 - blend) + tB * blend) | 0;
+    od[i+3] = bd[i+3];
+  }
+  ctx.putImageData(out, 0, 0);
+  if (painting.userData.charTex) painting.userData.charTex.needsUpdate = true;
 }
 
 function updateProjectiles(dt) {
@@ -2569,7 +2762,7 @@ function updateProjectiles(dt) {
     if (segLen > 0.001) {
       dir.normalize();
       const ray = new THREE.Raycaster(p.prevPos.clone(), dir, 0, segLen);
-      const targets = [...paintingMeshes, ...wallMeshes, ...floorMeshes];
+      const targets = [...paintingMeshes, ...wallMeshes, ...floorMeshes, ...ceilingMeshes];
       const hits = ray.intersectObjects(targets, false);
       if (hits.length > 0) {
         spawnDecal(hits[0], 'splat');
@@ -2902,6 +3095,8 @@ function animate() {
 
   // Projectile physics
   if (projectiles.length > 0) updateProjectiles(dt);
+  // Lighter held-down progressive burn
+  if (destruction.active && destruction.weapon === 'lighter') updateLighterBurn(dt);
 
   renderer.render(scene, camera);
 }
