@@ -127,7 +127,8 @@
   }
   .field input[type="text"],
   .field input[type="number"],
-  .field textarea {
+  .field textarea,
+  .field select {
     width: 100%;
     background: rgba(0,0,0,0.3);
     border: 1px solid var(--ink-faint);
@@ -138,7 +139,16 @@
     font-weight: 300;
     transition: border-color 0.2s, background 0.2s;
   }
-  .field input:focus, .field textarea:focus {
+  .field select {
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'><path fill='%238a7349' d='M0 0l7 8 7-8z'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 40px;
+  }
+  .field input:focus, .field textarea:focus, .field select:focus {
     outline: none;
     border-color: var(--gold-dim);
     background: rgba(0,0,0,0.45);
@@ -951,6 +961,16 @@
   </div>
 
   <div class="field">
+    <label>Series / room <span class="required">●</span> <span class="opt">— which gallery room this painting hangs in</span></label>
+    <select id="f-series">
+      <option value="">— Loading series from paintings.json…</option>
+    </select>
+    <div class="opt" style="margin-top: 6px; font-size: 12px;">
+      To add a new series, edit the <code>"series"</code> block in <code>paintings.json</code> directly. New series will appear in this dropdown after you reload the page.
+    </div>
+  </div>
+
+  <div class="field">
     <label>Description <span class="opt">— shown when a visitor clicks the painting</span></label>
     <textarea id="f-desc" placeholder="A short paragraph about the work — when, where, how, why."></textarea>
   </div>
@@ -998,6 +1018,8 @@
 'use strict';
 
 let CURRENT_PAINTINGS = [];
+let CURRENT_SERIES = {};
+let CURRENT_FULL_DATA = null;
 let CURRENT_FILE_DATA = null;
 let CURRENT_OUTPUT_TAB = 'snippet';
 let CURRENT_ENTRY = null;
@@ -1008,14 +1030,43 @@ async function loadExisting() {
     const res = await fetch('paintings.json', { cache: 'no-cache' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    CURRENT_FULL_DATA = data;
     CURRENT_PAINTINGS = data.paintings || [];
+    CURRENT_SERIES = data.series || {};
+    populateSeriesDropdown();
     renderExisting();
   } catch (err) {
+    populateSeriesDropdown();   // still set up the dropdown with a fallback
     if (window.location.protocol === 'file:') {
       list.innerHTML = '<div class="existing-error">Can\'t load paintings.json directly from a file:// URL. This is fine — you can still use the form below to generate new entries. (Once deployed to Netlify or GitHub Pages, this list will load.)</div>';
     } else {
       list.innerHTML = '<div class="existing-error">Couldn\'t load paintings.json: ' + err.message + '. Make sure it\'s in the same folder as this admin page.</div>';
     }
+  }
+}
+
+function populateSeriesDropdown() {
+  const sel = document.getElementById('f-series');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const keys = Object.keys(CURRENT_SERIES);
+  if (keys.length === 0) {
+    sel.innerHTML = '<option value="">— No series found in paintings.json. Add a "series" block first.</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  // Empty placeholder option, then one per series
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '— Pick a room —';
+  sel.appendChild(placeholder);
+  for (const sid of keys) {
+    const meta = CURRENT_SERIES[sid] || {};
+    const opt = document.createElement('option');
+    opt.value = sid;
+    opt.textContent = (meta.name || sid) + (meta.subtitle ? ' — ' + meta.subtitle : '');
+    sel.appendChild(opt);
   }
 }
 
@@ -1052,6 +1103,11 @@ function loadAsTemplate(p) {
   document.getElementById('f-medium').value = p.medium || '';
   document.getElementById('f-year').value = p.year || '';
   document.getElementById('f-desc').value = '';
+  // Pre-fill series dropdown if the template has one
+  const seriesSel = document.getElementById('f-series');
+  if (seriesSel && p.series && CURRENT_SERIES[p.series]) {
+    seriesSel.value = p.series;
+  }
   showToast('Loaded as template — change the title, filename, size & description');
   document.getElementById('f-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
   setTimeout(() => document.getElementById('f-title').focus(), 400);
@@ -1177,12 +1233,14 @@ function buildEntry() {
   const medium = document.getElementById('f-medium').value.trim();
   const year = document.getElementById('f-year').value.trim();
   const desc = document.getElementById('f-desc').value.trim();
+  const series = document.getElementById('f-series').value;
 
   const errors = [];
   if (!title) errors.push('Title is required.');
   if (!file) errors.push('Image filename is required.');
   if (!(w > 0)) errors.push('Width must be a positive number.');
   if (!(h > 0)) errors.push('Height must be a positive number.');
+  if (!series) errors.push('Series / room is required.');
   if (errors.length) return { errors };
 
   return {
@@ -1192,6 +1250,7 @@ function buildEntry() {
       size: `${w}x${h}${unit}`,
       medium: medium,
       year: year,
+      series: series,
       description: desc,
     }
   };
@@ -1213,6 +1272,7 @@ document.getElementById('btn-clear').addEventListener('click', () => {
     document.getElementById(id).value = '';
   });
   document.getElementById('f-unit').value = 'in';
+  document.getElementById('f-series').value = '';
   CURRENT_FILE_DATA = null;
   userEditedFile = false;
   previewBox.classList.remove('show');
@@ -1247,12 +1307,17 @@ function renderOutputContent() {
       <li>Commit both changes.</li>
     `;
   } else {
-    const fullData = {
-      _comment: "Each painting needs: file, title, size, medium, year, description. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. You can mix units across paintings.",
-      paintings: [...CURRENT_PAINTINGS, CURRENT_ENTRY].map(stripInternal),
+    // Full updated paintings.json — preserve the existing series block and
+    // any other top-level keys (e.g. _comment) so we don't drop them.
+    const fullData = CURRENT_FULL_DATA ? Object.assign({}, CURRENT_FULL_DATA) : {
+      _comment: "Each painting needs: file, title, size, medium, year, description, series. Size accepts inches (e.g. '12x16in') or centimeters (e.g. '30x40cm'). Width × height. The series field assigns the painting to a room.",
+      series: CURRENT_SERIES,
+      paintings: [],
     };
+    fullData.paintings = [...CURRENT_PAINTINGS, CURRENT_ENTRY].map(stripInternal);
     pre.textContent = JSON.stringify(fullData, null, 2);
     stepsList.innerHTML = `
+      <li><strong style="color:#c9a96e">⚠ Heads up:</strong> Pasting this whole file will overwrite any manual edits you've made to <code>paintings.json</code> since this admin page loaded — including hand-corrected painting dimensions, custom descriptions, or series tweaks. If you've made manual edits, prefer the <strong>"Just the new entry"</strong> tab instead, which only adds your new painting and leaves everything else alone.</li>
       <li>Open <code>paintings.json</code> in your GitHub repo and click the pencil icon to edit.</li>
       <li>Select all the existing content and delete it.</li>
       <li>Paste the full file above.</li>
