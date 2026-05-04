@@ -1232,19 +1232,28 @@ let lastSnappedPainting = null;
 const intro = {
   active: false,
   startTime: 0,
-  duration: 6.5,
-  // 360° helicopter descent: start high above the lobby looking nearly
-  // straight down so the whole gallery layout fits in view. Yaw values
-  // decrease monotonically from 2π → 0 to force a single rotation (lerp
-  // picks shortest path otherwise — intermediate keyframes guarantee
-  // the long way around). As we descend, pitch eases up toward level
-  // and we settle at the spawn point facing through the central arch.
+  duration: 7.5,
+  // 360° rotation that DELIBERATELY frames the entire gallery — banner,
+  // arch labels, all four walls — instead of staring at the floor.
+  // Camera holds a moderate height (4.0m, above the arches' tops at 2.8m
+  // and below the banner at 4.6m) and rotates with near-level pitch so
+  // wall content stays in view. Yaw progresses monotonically from 0 →
+  // 2π to force a single full rotation. Final keyframe descends to
+  // spawn (1.65m) facing through the central arch.
+  //
+  // Position varies slightly per direction so each wall's content has
+  // good framing distance:
+  //   North (yaw=0):   z=+4 (near south wall, looking far at the banner)
+  //   East  (yaw=π/2): z=0 (centered, looking at east wall 9m away)
+  //   South (yaw=π):   z=-2 (north of center, looking at older-work arch)
+  //   West  (yaw=3π/2):z=0 (centered, looking at west wall 9m away)
+  //   End  (yaw=2π):   z=4.5 spawn
   keyframes: [
-    { t: 0.00, pos: { x:  0.0, y: 5.8, z:  0.0 }, yaw:  Math.PI * 2,    pitch: -1.30 },
-    { t: 0.25, pos: { x:  0.0, y: 5.0, z:  1.0 }, yaw:  Math.PI * 1.5,  pitch: -1.05 },
-    { t: 0.50, pos: { x:  0.0, y: 4.0, z:  2.0 }, yaw:  Math.PI,        pitch: -0.75 },
-    { t: 0.75, pos: { x:  0.0, y: 2.9, z:  3.2 }, yaw:  Math.PI * 0.5,  pitch: -0.35 },
-    { t: 1.00, pos: { x:  0.0, y: PLAYER_HEIGHT, z: 4.5 }, yaw: 0,      pitch: 0 },
+    { t: 0.00, pos: { x: 0, y: 4.0, z:  4.0 }, yaw: 0,                pitch: -0.05 },
+    { t: 0.25, pos: { x: 0, y: 4.0, z:  0.0 }, yaw: Math.PI * 0.5,    pitch: -0.05 },
+    { t: 0.50, pos: { x: 0, y: 4.0, z: -2.0 }, yaw: Math.PI,          pitch: -0.05 },
+    { t: 0.75, pos: { x: 0, y: 4.0, z:  0.0 }, yaw: Math.PI * 1.5,    pitch: -0.05 },
+    { t: 1.00, pos: { x: 0, y: PLAYER_HEIGHT, z: 4.5 }, yaw: Math.PI * 2, pitch: 0 },
   ],
 };
 let introHasPlayed = false;
@@ -1254,31 +1263,34 @@ let hintHideTimer = 0;
 
 /* ─── 3. Theme ─── */
 const THEMES = {
+  // Default theme — warm "Mediterranean villa" gallery aesthetic.
+  // Cream plaster walls, rich wood plank floor, soft warm daylight.
+  // Inspired by IMG_8302 (warm gallery with plaster + wood).
   dark: {
-    bg: 0x0a0908,
-    wall: 0x2a221d,             // lighter warm brown — structure reads clearly
-    wallStrong: 0x352a22,       // edges/accent: lighter still, gives definition
-    trim: 0x8a5a2b,             // warm wood-tone for archway pilasters & baseboard
-    trimDark: 0x4a2e16,         // shadow side / inset of trim
-    floor: 0x1a1410,
-    ceiling: 0x0a0808,
-    ambient: { color: 0xfff6e0, intensity: 0.55 },   // was 0.32 — lifted considerably
-    hemi: { sky: 0xfff8e8, ground: 0x2a221c, intensity: 0.7 },   // was 0.5
-    spot: { color: 0xfff2d4, intensity: 1.6 },
-    glow: { color: 0xc9a96e, intensity: 0.55 },     // was 0.45
-    trackBar: 0x1a1612,
-    title: '#e6c885',
-    titleAlpha: 0.92,
-    label: '#e6c885',
+    bg: 0xb8a886,
+    wall: 0xd9c8a3,             // warm cream plaster
+    wallStrong: 0xc0a880,       // accent / shadow side of plaster
+    trim: 0x6b4824,              // rich warm walnut for arch frames
+    trimDark: 0x3a2418,
+    floor: 0x9a6e3f,            // warm wood plank base color
+    ceiling: 0xc4b28a,           // slightly off the wall, picks up warmth
+    ambient: { color: 0xfff5e0, intensity: 0.65 },
+    hemi: { sky: 0xffeec8, ground: 0x8a6232, intensity: 0.75 },
+    spot: { color: 0xfff0d0, intensity: 1.1 },
+    glow: { color: 0xfff0c0, intensity: 0.25 },
+    trackBar: 0x3a2418,
+    title: '#5a4530',            // dark warm brown for legibility on cream walls
+    titleAlpha: 0.95,
+    label: '#5a4530',
     labelAlpha: 0.95,
-    fog: { color: 0x12100e, density: 0.012 },       // was 0.02 — much less obscuring
-    rendererClear: 0x12100e,
+    fog: { color: 0xd0c0a0, density: 0.005 },
+    rendererClear: 0xc8b890,
   },
   white: {
     bg: 0xefe9dc,
     wall: 0xeae3d3,
     wallStrong: 0xd4cdbe,
-    trim: 0xc89a5e,             // honey-oak wood, picks up the IMG_8170 vibe
+    trim: 0xc89a5e,             // honey-oak wood
     trimDark: 0x8a6332,
     floor: 0x9d968a,
     ceiling: 0xece6db,
@@ -1452,10 +1464,11 @@ function buildGallery() {
 
 function buildFloorsAndCeilings(t) {
   const floorMat = new THREE.MeshStandardMaterial({
-    color: t.floor,
-    roughness: 0.78,
-    metalness: 0.0,
+    map: makeWoodFloorTexture(t.floor),
+    roughness: 0.62,
+    metalness: 0.05,
   });
+  floorMeshes._material = floorMat;   // remember so we can swap on theme change
   const ceilMat = new THREE.MeshStandardMaterial({
     color: t.ceiling,
     roughness: 1.0,
@@ -1778,6 +1791,73 @@ function makeWoodTexture(lightHex, darkHex) {
   return tex;
 }
 
+// Wood plank floor texture — warm wood base with plank seams running along
+// one axis + soft grain variation. Tiled across the floor.
+function makeWoodFloorTexture(baseHex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  // Base wood color
+  const r = (baseHex >> 16) & 0xff;
+  const g = (baseHex >> 8) & 0xff;
+  const b = baseHex & 0xff;
+  ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Five plank rows, varying widths — warm tone variation per plank
+  const plankRows = [
+    { y: 0,   h: 100 }, { y: 100, h: 110 }, { y: 210, h: 95 },
+    { y: 305, h: 105 }, { y: 410, h: 102 },
+  ];
+  for (const plank of plankRows) {
+    // Random tone variation per plank
+    const toneShift = -25 + Math.random() * 50;
+    const pr = Math.max(0, Math.min(255, r + toneShift));
+    const pg = Math.max(0, Math.min(255, g + toneShift * 0.7));
+    const pb = Math.max(0, Math.min(255, b + toneShift * 0.4));
+    ctx.fillStyle = 'rgb(' + (pr|0) + ',' + (pg|0) + ',' + (pb|0) + ')';
+    ctx.fillRect(0, plank.y, 512, plank.h);
+    // Plank seam (dark line at bottom of each plank)
+    ctx.fillStyle = 'rgba(20, 12, 6, 0.55)';
+    ctx.fillRect(0, plank.y + plank.h - 1, 512, 2);
+    // Grain — horizontal streaks within the plank
+    for (let i = 0; i < 60; i++) {
+      const ly = plank.y + Math.random() * plank.h;
+      const lw = 30 + Math.random() * 200;
+      const lx = Math.random() * 512;
+      const alpha = 0.04 + Math.random() * 0.10;
+      const dark = Math.random() > 0.5;
+      ctx.fillStyle = dark
+        ? 'rgba(' + Math.max(0, pr - 30) + ',' + Math.max(0, pg - 22) + ',' + Math.max(0, pb - 14) + ',' + alpha + ')'
+        : 'rgba(' + Math.min(255, pr + 30) + ',' + Math.min(255, pg + 22) + ',' + Math.min(255, pb + 14) + ',' + (alpha * 0.5) + ')';
+      ctx.fillRect(lx, ly, lw, 1 + Math.random() * 1.5);
+    }
+    // Occasional knot
+    if (Math.random() > 0.6) {
+      const kx = Math.random() * 512;
+      const ky = plank.y + plank.h / 2;
+      const kr = 6 + Math.random() * 14;
+      const kg = ctx.createRadialGradient(kx, ky, 0, kx, ky, kr);
+      kg.addColorStop(0, 'rgba(' + Math.max(0, pr - 50) + ',' + Math.max(0, pg - 35) + ',' + Math.max(0, pb - 22) + ',0.6)');
+      kg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = kg;
+      ctx.fillRect(0, plank.y, 512, plank.h);
+    }
+  }
+  // Vertical seams (where adjacent planks meet end-to-end) — random offsets
+  ctx.fillStyle = 'rgba(20, 12, 6, 0.45)';
+  for (const plank of plankRows) {
+    const seamX = Math.floor(Math.random() * 4) * 128 + 30 + Math.random() * 60;
+    ctx.fillRect(seamX, plank.y + 2, 1.5, plank.h - 4);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 4);   // tile across the lobby
+  tex.anisotropy = 8;
+  return tex;
+}
+
 /* ─── Lobby title (C.Barnickel banner) ─── */
 function buildLobbyTitle() {
   const lobby = ROOMS.lobby;
@@ -1822,31 +1902,30 @@ function makeLobbyTitleTexture() {
 const lobbyPlaques = [];   // tappable items: { mesh, action }
 function buildLobbyPlaques() {
   const lobby = ROOMS.lobby;
-  // Place on east and west lobby walls at standing height. The lobby's
-  // east/west walls run between z = ±lobby.d/2; we put plaques toward the
-  // south (closer to the spawn point) so they're seen on entry.
-  const yPos = 1.65;
-  const zPos = 3.5;   // forward of center, near where the visitor lands
-  const make = (label, sub, action, side) => {
+  // Place on the lobby's NORTH wall, in the gaps between arches.
+  //   Plein Air arch at x=-5 (spans x ∈ [-6.2, -3.8])
+  //   Constructed arch at x=0 (spans x ∈ [-1.2, +1.2])
+  //   Figurative arch at x=+5 (spans x ∈ [+3.8, +6.2])
+  // Wall gaps: [-3.8, -1.2] center x=-2.5  and  [+1.2, +3.8] center x=+2.5
+  // The plaques sit on the lobby-side face of the north wall, facing south
+  // (toward the spawn point so the visitor sees them on entry).
+  const yPos = 1.85;     // slightly above eye level for dignified display
+  // Lobby-side wall surface = lobby.cz - lobby.d/2 + WALL_THICKNESS/2
+  // Push slightly forward (into lobby, +z direction) by 0.012 to avoid z-fight
+  const zPos = lobby.cz - lobby.d/2 + WALL_THICKNESS/2 + 0.012;
+  const make = (label, sub, action, xPos) => {
     const tex = makePlaqueTexture(label, sub);
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.95 });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.5), mat);
-    if (side === 'east') {
-      // East wall: face -X (into lobby)
-      mesh.position.set(lobby.cx + lobby.w/2 - WALL_THICKNESS/2 - 0.012, yPos, zPos);
-      mesh.rotation.y = -Math.PI / 2;
-    } else {
-      // West wall: face +X (into lobby)
-      mesh.position.set(lobby.cx - lobby.w/2 + WALL_THICKNESS/2 + 0.012, yPos, zPos);
-      mesh.rotation.y = Math.PI / 2;
-    }
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.7), mat);
+    mesh.position.set(xPos, yPos, zPos);
+    // Default plane normal is +z which faces +z (toward the lobby/spawn). ✓
     mesh.userData.isPlaque = true;
     mesh.userData.action = action;
     scene.add(mesh);
     lobbyPlaques.push(mesh);
   };
-  make('BIO',     'about the artist', 'bio',     'west');
-  make('CONTACT', 'send a note',      'contact', 'east');
+  make('BIO',     'about the artist', 'bio',     -2.5);
+  make('CONTACT', 'send a note',      'contact', +2.5);
 }
 
 function makePlaqueTexture(label, sub) {
@@ -1878,8 +1957,11 @@ function makePlaqueTexture(label, sub) {
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   ctx.font = 'italic 38px "Cormorant Garamond", Georgia, serif';
-  ctx.fillStyle = 'rgba(228, 200, 133, 0.65)';
+  // Subtitle color: muted version of the title color so it reads on any theme
+  ctx.fillStyle = T().title;
+  ctx.globalAlpha = 0.65;
   ctx.fillText(sub, c.width / 2, c.height / 2 + 110);
+  ctx.globalAlpha = 1;
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
@@ -2692,9 +2774,15 @@ function applyTheme() {
   for (const w of wallMeshes) {
     w.material.color.setHex(t.wall);
   }
-  // Floors
-  for (const f of floorMeshes) {
-    f.material.color.setHex(t.floor);
+  // Floors — regenerate wood plank texture for the theme's floor color
+  if (floorMeshes._material) {
+    if (floorMeshes._material.map) floorMeshes._material.map.dispose();
+    floorMeshes._material.map = makeWoodFloorTexture(t.floor);
+    floorMeshes._material.needsUpdate = true;
+  } else {
+    for (const f of floorMeshes) {
+      f.material.color.setHex(t.floor);
+    }
   }
   // Ceilings
   for (const c of ceilingMeshes) {
@@ -3725,7 +3813,13 @@ function wireUI() {
   document.getElementById('view-bio').addEventListener('click', () => setView('bio'));
   document.getElementById('view-contact').addEventListener('click', () => setView('contact'));
 
-  // Contact form: submit via fetch so we don't navigate away from the SPA.
+  // Contact form: try AJAX first (cleaner UX, stays on page). If that fails,
+  // fall back to native form submission which is more reliable but causes a
+  // redirect to formsubmit.co's confirmation page, then back here.
+  // IMPORTANT: formsubmit.co requires the recipient (cjbarnickel@gmail.com)
+  // to confirm the address on the FIRST submission — Chris will get an
+  // activation email; clicking the link in it activates the form. After
+  // activation, all subsequent submissions deliver normally.
   const contactForm = document.getElementById('contact-form');
   if (contactForm) {
     contactForm.addEventListener('submit', async (e) => {
@@ -3735,10 +3829,11 @@ function wireUI() {
       status.classList.remove('error');
       status.textContent = 'Sending…';
       submitBtn.disabled = true;
+
+      // Try AJAX path first
+      let ajaxSucceeded = false;
       try {
         const formData = new FormData(contactForm);
-        // formsubmit.co supports an AJAX endpoint that returns JSON instead
-        // of redirecting. Build that URL from the form's action attribute.
         const ajaxUrl = contactForm.action.replace(
           'formsubmit.co/', 'formsubmit.co/ajax/'
         );
@@ -3751,16 +3846,46 @@ function wireUI() {
         if (res.ok && (data.success === true || data.success === 'true')) {
           status.textContent = 'Message sent — thank you. Chris will be in touch.';
           contactForm.reset();
-        } else {
-          throw new Error(data.message || 'Submission failed');
+          ajaxSucceeded = true;
         }
       } catch (err) {
-        status.classList.add('error');
-        status.textContent = 'Couldn\'t send the message. Please email cjbarnickel@gmail.com directly.';
-      } finally {
-        submitBtn.disabled = false;
+        // AJAX failed; fall through to native submit
       }
+
+      if (!ajaxSucceeded) {
+        // Fallback: native form submit. The browser will navigate to
+        // formsubmit.co's response page (showing activation prompt on first
+        // send, or success on subsequent sends) and then redirect back via
+        // the _next field. Tell the user what's happening so they don't
+        // think it's broken.
+        status.classList.remove('error');
+        status.textContent = 'Sending… (you\'ll be redirected briefly)';
+        // Make sure _next points back to the gallery contact view
+        const nextField = document.getElementById('contact-next');
+        if (nextField) {
+          nextField.value = location.origin + location.pathname + '#contact-sent';
+        }
+        // Submit natively (bypasses the listener since we're submitting via
+        // .submit() which doesn't fire the 'submit' event)
+        contactForm.submit();
+        return;
+      }
+      submitBtn.disabled = false;
     });
+  }
+
+  // On page load, check if we're returning from a successful form submission
+  if (location.hash === '#contact-sent') {
+    setView('contact');
+    setTimeout(() => {
+      const status = document.getElementById('contact-status');
+      if (status) {
+        status.classList.remove('error');
+        status.textContent = 'Message sent — thank you. Chris will be in touch.';
+      }
+      // Clean up the hash
+      history.replaceState(null, '', location.pathname);
+    }, 100);
   }
 
   // Modal
