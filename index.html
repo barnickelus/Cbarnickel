@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -32,921 +33,922 @@ body { overscroll-behavior: none; }
 
 /* ─── 3D canvas ─── */
 #stage {
-  position: fixed; inset: 0; z-index: 1;
-  touch-action: none;
+position: fixed; inset: 0; z-index: 1;
+touch-action: none;
 }
 
 /* ─── Entry overlay ─── */
 #entry {
-  position: fixed; inset: 0; z-index: 100;
-  background: linear-gradient(180deg, #0a0908 0%, #15110d 100%);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  padding: 24px;
-  transition: opacity 0.8s ease;
+position: fixed; inset: 0; z-index: 100;
+background: linear-gradient(180deg, #0a0908 0%, #15110d 100%);
+display: flex; flex-direction: column; align-items: center; justify-content: center;
+padding: 24px;
+transition: opacity 0.8s ease;
 }
 #entry.fade { opacity: 0; pointer-events: none; }
 #entry .ornament {
-  width: 60px; height: 1px; background: var(--gold-dim);
-  margin: 0 auto 24px;
+width: 60px; height: 1px; background: var(–gold-dim);
+margin: 0 auto 24px;
 }
 #entry h1 {
-  font-family: var(--serif);
-  font-weight: 300;
-  font-size: clamp(40px, 7vw, 76px);
-  letter-spacing: 0.12em;
-  text-align: center;
-  color: var(--ink);
-  line-height: 1.1;
+font-family: var(–serif);
+font-weight: 300;
+font-size: clamp(40px, 7vw, 76px);
+letter-spacing: 0.12em;
+text-align: center;
+color: var(–ink);
+line-height: 1.1;
 }
-#entry h1 .dot { color: var(--gold); }
+#entry h1 .dot { color: var(–gold); }
 #entry .sub {
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: clamp(14px, 1.6vw, 18px);
-  color: var(--ink-dim);
-  margin-top: 14px;
-  letter-spacing: 0.04em;
-  text-align: center;
+font-family: var(–serif);
+font-style: italic;
+font-size: clamp(14px, 1.6vw, 18px);
+color: var(–ink-dim);
+margin-top: 14px;
+letter-spacing: 0.04em;
+text-align: center;
 }
 #entry .enter-btn {
-  margin-top: 60px;
-  background: transparent;
-  border: 1px solid var(--gold-dim);
-  color: var(--gold);
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.32em;
-  text-transform: uppercase;
-  padding: 16px 40px;
-  cursor: pointer;
-  transition: all 0.3s ease;
+margin-top: 60px;
+background: transparent;
+border: 1px solid var(–gold-dim);
+color: var(–gold);
+font-family: var(–sans);
+font-size: 11px;
+letter-spacing: 0.32em;
+text-transform: uppercase;
+padding: 16px 40px;
+cursor: pointer;
+transition: all 0.3s ease;
 }
 #entry .enter-btn:hover:not(:disabled) {
-  background: rgba(201, 169, 110, 0.1);
-  color: var(--ink);
-  border-color: var(--gold);
+background: rgba(201, 169, 110, 0.1);
+color: var(–ink);
+border-color: var(–gold);
 }
 #entry .enter-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+opacity: 0.4;
+cursor: default;
 }
 #entry .loading-bar {
-  margin-top: 24px;
-  width: 200px; height: 1px;
-  background: rgba(201, 169, 110, 0.15);
-  position: relative;
-  overflow: hidden;
+margin-top: 24px;
+width: 200px; height: 1px;
+background: rgba(201, 169, 110, 0.15);
+position: relative;
+overflow: hidden;
 }
 #entry .loading-bar::after {
-  content: '';
-  position: absolute; inset: 0;
-  background: var(--gold-dim);
-  transform-origin: left;
-  animation: load-pulse 1.4s ease-in-out infinite;
+content: ‘’;
+position: absolute; inset: 0;
+background: var(–gold-dim);
+transform-origin: left;
+animation: load-pulse 1.4s ease-in-out infinite;
 }
 @keyframes load-pulse {
-  0% { transform: scaleX(0); }
-  50% { transform: scaleX(1); }
-  100% { transform: scaleX(0); transform-origin: right; }
+0% { transform: scaleX(0); }
+50% { transform: scaleX(1); }
+100% { transform: scaleX(0); transform-origin: right; }
 }
 #entry.loaded .loading-bar { display: none; }
 
 /* ─── Top bar ─── */
 .top-bar {
-  position: fixed; top: 0; left: 0; right: 0;
-  z-index: 50;
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 18px 28px;
-  pointer-events: none;
+position: fixed; top: 0; left: 0; right: 0;
+z-index: 50;
+display: flex; justify-content: space-between; align-items: center;
+padding: 18px 28px;
+pointer-events: none;
 }
 .top-bar > * { pointer-events: auto; }
 .brand {
-  font-family: var(--serif);
-  font-size: 14px;
-  letter-spacing: 0.28em;
-  color: var(--ink);
-  text-transform: uppercase;
-  user-select: none;
+font-family: var(–serif);
+font-size: 14px;
+letter-spacing: 0.28em;
+color: var(–ink);
+text-transform: uppercase;
+user-select: none;
 }
-.brand .dot { color: var(--gold); }
+.brand .dot { color: var(–gold); }
 .brand .suffix { opacity: 0.65; margin-left: 4px; }
 
 .right-group { display: flex; align-items: center; gap: 12px; }
 .view-toggle {
-  display: flex;
-  border: 1px solid var(--ink-faint);
-  background: rgba(10, 9, 8, 0.5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+display: flex;
+border: 1px solid var(–ink-faint);
+background: rgba(10, 9, 8, 0.5);
+backdrop-filter: blur(10px);
+-webkit-backdrop-filter: blur(10px);
 }
 .view-toggle button {
-  background: transparent;
-  border: none;
-  color: var(--ink-dim);
-  font-family: var(--sans);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  padding: 9px 14px;
-  cursor: pointer;
-  transition: all 0.2s;
+background: transparent;
+border: none;
+color: var(–ink-dim);
+font-family: var(–sans);
+font-size: 10px;
+letter-spacing: 0.18em;
+text-transform: uppercase;
+padding: 9px 14px;
+cursor: pointer;
+transition: all 0.2s;
 }
-.view-toggle button:hover { color: var(--ink); }
-.view-toggle button.active { color: var(--gold); background: rgba(201, 169, 110, 0.12); }
+.view-toggle button:hover { color: var(–ink); }
+.view-toggle button.active { color: var(–gold); background: rgba(201, 169, 110, 0.12); }
 
 .icon-btn {
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--ink-faint);
-  background: rgba(10, 9, 8, 0.5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: var(--ink);
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px;
-  transition: all 0.2s;
-  padding: 0;
+width: 36px; height: 36px;
+border-radius: 50%;
+border: 1px solid var(–ink-faint);
+background: rgba(10, 9, 8, 0.5);
+backdrop-filter: blur(10px);
+-webkit-backdrop-filter: blur(10px);
+color: var(–ink);
+cursor: pointer;
+display: flex; align-items: center; justify-content: center;
+font-size: 16px;
+transition: all 0.2s;
+padding: 0;
 }
-.icon-btn:hover { color: var(--gold); border-color: var(--gold-dim); }
+.icon-btn:hover { color: var(–gold); border-color: var(–gold-dim); }
 .icon-btn.active {
-  color: var(--gold);
-  border-color: var(--gold);
-  background: rgba(201, 169, 110, 0.18);
+color: var(–gold);
+border-color: var(–gold);
+background: rgba(201, 169, 110, 0.18);
 }
 
 /* ─── Bait button (do not click here) ─── */
 .bait {
-  position: fixed;
-  top: 70px;
-  right: 28px;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  pointer-events: auto;
+position: fixed;
+top: 70px;
+right: 28px;
+z-index: 50;
+display: flex;
+align-items: center;
+gap: 14px;
+pointer-events: auto;
 }
 .bait-btn {
-  width: 46px; height: 46px;
-  border-radius: 50%;
-  border: 1px solid var(--ink-faint);
-  background: rgba(10, 9, 8, 0.5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: var(--ink);
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: all 0.25s;
-  padding: 0;
-  animation: bait-pulse 2.6s ease-in-out infinite;
+width: 46px; height: 46px;
+border-radius: 50%;
+border: 1px solid var(–ink-faint);
+background: rgba(10, 9, 8, 0.5);
+backdrop-filter: blur(10px);
+-webkit-backdrop-filter: blur(10px);
+color: var(–ink);
+cursor: pointer;
+display: flex; align-items: center; justify-content: center;
+transition: all 0.25s;
+padding: 0;
+animation: bait-pulse 2.6s ease-in-out infinite;
 }
 .bait-btn svg { width: 22px; height: 22px; transition: transform 0.3s; }
-.bait-btn:hover { color: var(--gold); border-color: var(--gold-dim); transform: scale(1.06); }
+.bait-btn:hover { color: var(–gold); border-color: var(–gold-dim); transform: scale(1.06); }
 .bait-btn.active {
-  color: var(--gold);
-  border-color: var(--gold);
-  background: rgba(201, 169, 110, 0.2);
-  animation: none;
+color: var(–gold);
+border-color: var(–gold);
+background: rgba(201, 169, 110, 0.2);
+animation: none;
 }
 .bait-btn.active svg { transform: rotate(180deg); }
 @keyframes bait-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(201, 169, 110, 0); }
-  50%      { box-shadow: 0 0 14px 3px rgba(201, 169, 110, 0.22); }
+0%, 100% { box-shadow: 0 0 0 0 rgba(201, 169, 110, 0); }
+50%      { box-shadow: 0 0 14px 3px rgba(201, 169, 110, 0.22); }
 }
 .bait-label {
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 13px;
-  color: var(--ink-faint);
-  letter-spacing: 0.04em;
-  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
-  user-select: none;
-  white-space: nowrap;
+font-family: var(–serif);
+font-style: italic;
+font-size: 13px;
+color: var(–ink-faint);
+letter-spacing: 0.04em;
+text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+user-select: none;
+white-space: nowrap;
 }
 
 /* ─── Weapon toolbar ─── */
 .weapon-toolbar {
-  position: fixed;
-  top: 130px;
-  right: 28px;
-  z-index: 50;
-  display: none;
-  flex-direction: column;
-  gap: 8px;
+position: fixed;
+top: 130px;
+right: 28px;
+z-index: 50;
+display: none;
+flex-direction: column;
+gap: 8px;
 }
 .weapon-toolbar.show { display: flex; }
 .weapon-btn {
-  width: 42px; height: 42px;
-  border-radius: 50%;
-  border: 1px solid var(--ink-faint);
-  background: rgba(10, 9, 8, 0.5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px;
-  color: var(--ink);
-  transition: all 0.2s;
-  padding: 0;
+width: 42px; height: 42px;
+border-radius: 50%;
+border: 1px solid var(–ink-faint);
+background: rgba(10, 9, 8, 0.5);
+backdrop-filter: blur(10px);
+-webkit-backdrop-filter: blur(10px);
+cursor: pointer;
+display: flex; align-items: center; justify-content: center;
+font-size: 18px;
+color: var(–ink);
+transition: all 0.2s;
+padding: 0;
 }
-.weapon-btn:hover { border-color: var(--gold-dim); }
+.weapon-btn:hover { border-color: var(–gold-dim); }
 .weapon-btn.active {
-  border-color: var(--gold);
-  background: rgba(201, 169, 110, 0.18);
+border-color: var(–gold);
+background: rgba(201, 169, 110, 0.18);
 }
 .weapon-btn svg { width: 20px; height: 20px; }
 .weapon-divider {
-  height: 1px;
-  background: rgba(239, 231, 215, 0.12);
-  margin: 4px 6px;
+height: 1px;
+background: rgba(239, 231, 215, 0.12);
+margin: 4px 6px;
 }
-.weapon-btn.clear { color: var(--ink-dim); }
-.weapon-btn.clear:not(:disabled):hover { color: var(--rust); border-color: var(--rust); }
+.weapon-btn.clear { color: var(–ink-dim); }
+.weapon-btn.clear:not(:disabled):hover { color: var(–rust); border-color: var(–rust); }
 .weapon-btn.clear:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ─── Settings panel ─── */
 .settings-panel {
-  position: fixed;
-  top: 70px; right: 28px;
-  z-index: 60;
-  width: 280px;
-  background: rgba(15, 12, 10, 0.96);
-  border: 1px solid var(--ink-faint);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  padding: 22px 22px 18px;
-  opacity: 0;
-  transform: translateY(-10px);
-  pointer-events: none;
-  transition: opacity 0.25s, transform 0.25s;
+position: fixed;
+top: 70px; right: 28px;
+z-index: 60;
+width: 280px;
+background: rgba(15, 12, 10, 0.96);
+border: 1px solid var(–ink-faint);
+backdrop-filter: blur(12px);
+-webkit-backdrop-filter: blur(12px);
+padding: 22px 22px 18px;
+opacity: 0;
+transform: translateY(-10px);
+pointer-events: none;
+transition: opacity 0.25s, transform 0.25s;
 }
 .settings-panel.show {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
+opacity: 1;
+transform: translateY(0);
+pointer-events: auto;
 }
 .settings-panel h3 {
-  font-family: var(--serif);
-  font-weight: 400;
-  font-size: 16px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--gold);
-  margin-bottom: 18px;
+font-family: var(–serif);
+font-weight: 400;
+font-size: 16px;
+letter-spacing: 0.18em;
+text-transform: uppercase;
+color: var(–gold);
+margin-bottom: 18px;
 }
 .settings-panel .row { margin-bottom: 16px; }
 .settings-panel .row label {
-  display: block;
-  font-size: 9px;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-  margin-bottom: 8px;
+display: block;
+font-size: 9px;
+letter-spacing: 0.24em;
+text-transform: uppercase;
+color: var(–ink-dim);
+margin-bottom: 8px;
 }
 .settings-panel .row .val {
-  float: right;
-  color: var(--gold);
-  font-variant-numeric: tabular-nums;
+float: right;
+color: var(–gold);
+font-variant-numeric: tabular-nums;
 }
-.settings-panel input[type="range"] {
-  width: 100%; height: 2px;
-  -webkit-appearance: none; appearance: none;
-  background: rgba(239, 231, 215, 0.12);
-  cursor: pointer;
-  outline: none;
+.settings-panel input[type=“range”] {
+width: 100%; height: 2px;
+-webkit-appearance: none; appearance: none;
+background: rgba(239, 231, 215, 0.12);
+cursor: pointer;
+outline: none;
 }
-.settings-panel input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  background: var(--gold);
-  cursor: pointer;
-  border: none;
+.settings-panel input[type=“range”]::-webkit-slider-thumb {
+-webkit-appearance: none;
+width: 12px; height: 12px;
+border-radius: 50%;
+background: var(–gold);
+cursor: pointer;
+border: none;
 }
-.settings-panel input[type="range"]::-moz-range-thumb {
-  width: 12px; height: 12px; border-radius: 50%;
-  background: var(--gold); cursor: pointer; border: none;
+.settings-panel input[type=“range”]::-moz-range-thumb {
+width: 12px; height: 12px; border-radius: 50%;
+background: var(–gold); cursor: pointer; border: none;
 }
 .toggle-switch {
-  width: 38px; height: 20px;
-  background: rgba(239, 231, 215, 0.12);
-  border-radius: 10px;
-  position: relative;
-  cursor: pointer;
-  transition: background 0.2s;
+width: 38px; height: 20px;
+background: rgba(239, 231, 215, 0.12);
+border-radius: 10px;
+position: relative;
+cursor: pointer;
+transition: background 0.2s;
 }
 .toggle-switch::after {
-  content: '';
-  position: absolute;
-  top: 2px; left: 2px;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  background: var(--ink-dim);
-  transition: all 0.2s;
+content: ‘’;
+position: absolute;
+top: 2px; left: 2px;
+width: 16px; height: 16px;
+border-radius: 50%;
+background: var(–ink-dim);
+transition: all 0.2s;
 }
 .toggle-switch.on { background: rgba(201, 169, 110, 0.4); }
-.toggle-switch.on::after { transform: translateX(18px); background: var(--gold); }
+.toggle-switch.on::after { transform: translateX(18px); background: var(–gold); }
 
 .nav-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+display: grid;
+grid-template-columns: 1fr 1fr;
+gap: 6px;
 }
 .nav-grid button {
-  background: transparent;
-  border: 1px solid var(--ink-faint);
-  color: var(--ink-dim);
-  padding: 8px 10px;
-  font-family: var(--sans);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: all 0.2s;
+background: transparent;
+border: 1px solid var(–ink-faint);
+color: var(–ink-dim);
+padding: 8px 10px;
+font-family: var(–sans);
+font-size: 10px;
+letter-spacing: 0.14em;
+text-transform: uppercase;
+cursor: pointer;
+transition: all 0.2s;
 }
-.nav-grid button:hover { color: var(--ink); border-color: var(--gold-dim); }
+.nav-grid button:hover { color: var(–ink); border-color: var(–gold-dim); }
 .nav-grid button.active {
-  background: rgba(201, 169, 110, 0.15);
-  color: var(--gold);
-  border-color: var(--gold);
+background: rgba(201, 169, 110, 0.15);
+color: var(–gold);
+border-color: var(–gold);
 }
 .divider {
-  border-top: 1px solid rgba(239, 231, 215, 0.08);
-  padding-top: 16px;
-  margin-top: 4px;
+border-top: 1px solid rgba(239, 231, 215, 0.08);
+padding-top: 16px;
+margin-top: 4px;
 }
 
 .ghost-btn {
-  background: transparent;
-  border: 1px solid var(--ink-faint);
-  color: var(--ink-dim);
-  padding: 9px 12px;
-  font-family: var(--sans);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  cursor: pointer;
-  width: 100%;
-  transition: all 0.2s;
+background: transparent;
+border: 1px solid var(–ink-faint);
+color: var(–ink-dim);
+padding: 9px 12px;
+font-family: var(–sans);
+font-size: 10px;
+letter-spacing: 0.18em;
+text-transform: uppercase;
+cursor: pointer;
+width: 100%;
+transition: all 0.2s;
 }
-.ghost-btn:hover { color: var(--ink); border-color: var(--gold-dim); }
+.ghost-btn:hover { color: var(–ink); border-color: var(–gold-dim); }
 
 /* ─── Bottom hint ─── */
 .bottom-hint {
-  position: fixed;
-  bottom: 32px; left: 50%;
-  transform: translateX(-50%);
-  z-index: 40;
-  pointer-events: none;
-  font-family: var(--sans);
-  font-size: 10px;
-  letter-spacing: 0.26em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-  text-shadow: 0 1px 6px rgba(0,0,0,0.6);
-  text-align: center;
-  background: rgba(10, 9, 8, 0.4);
-  padding: 10px 18px;
-  border: 1px solid rgba(201, 169, 110, 0.18);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  opacity: 0;
-  transition: opacity 0.7s ease;
-  white-space: nowrap;
+position: fixed;
+bottom: 32px; left: 50%;
+transform: translateX(-50%);
+z-index: 40;
+pointer-events: none;
+font-family: var(–sans);
+font-size: 10px;
+letter-spacing: 0.26em;
+text-transform: uppercase;
+color: var(–ink-dim);
+text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+text-align: center;
+background: rgba(10, 9, 8, 0.4);
+padding: 10px 18px;
+border: 1px solid rgba(201, 169, 110, 0.18);
+backdrop-filter: blur(6px);
+-webkit-backdrop-filter: blur(6px);
+opacity: 0;
+transition: opacity 0.7s ease;
+white-space: nowrap;
 }
 .bottom-hint.show { opacity: 1; }
 
 /* ─── Tiny joystick (only when nav mode requires it) ─── */
 .joy {
-  position: fixed;
-  bottom: 28px; left: 28px;
-  z-index: 40;
-  display: none;
-  width: 100px; height: 100px;
-  border-radius: 50%;
-  background: rgba(10, 9, 8, 0.4);
-  border: 1px solid rgba(201, 169, 110, 0.2);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  pointer-events: auto;
-  touch-action: none;
+position: fixed;
+bottom: 28px; left: 28px;
+z-index: 40;
+display: none;
+width: 100px; height: 100px;
+border-radius: 50%;
+background: rgba(10, 9, 8, 0.4);
+border: 1px solid rgba(201, 169, 110, 0.2);
+backdrop-filter: blur(6px);
+-webkit-backdrop-filter: blur(6px);
+pointer-events: auto;
+touch-action: none;
 }
 .joy.show { display: block; }
 .joy .stick {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  background: var(--ink-dim);
-  pointer-events: none;
-  transition: transform 0.05s;
+position: absolute;
+top: 50%; left: 50%;
+transform: translate(-50%, -50%);
+width: 36px; height: 36px;
+border-radius: 50%;
+background: var(–ink-dim);
+pointer-events: none;
+transition: transform 0.05s;
 }
 .joy::before {
-  content: 'WALK';
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, calc(-50% + 32px));
-  font-size: 8px;
-  letter-spacing: 0.24em;
-  color: var(--ink-faint);
-  pointer-events: none;
+content: ‘WALK’;
+position: absolute;
+top: 50%; left: 50%;
+transform: translate(-50%, calc(-50% + 32px));
+font-size: 8px;
+letter-spacing: 0.24em;
+color: var(–ink-faint);
+pointer-events: none;
 }
 
 /* ─── Skip intro button ─── */
 .skip-intro {
-  position: fixed;
-  bottom: 28px; right: 28px;
-  z-index: 80;
-  background: rgba(10, 9, 8, 0.6);
-  border: 1px solid var(--gold-dim);
-  color: var(--gold);
-  padding: 10px 18px;
-  font-family: var(--sans);
-  font-size: 10px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.6s ease 1s;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+position: fixed;
+bottom: 28px; right: 28px;
+z-index: 80;
+background: rgba(10, 9, 8, 0.6);
+border: 1px solid var(–gold-dim);
+color: var(–gold);
+padding: 10px 18px;
+font-family: var(–sans);
+font-size: 10px;
+letter-spacing: 0.22em;
+text-transform: uppercase;
+cursor: pointer;
+opacity: 0;
+pointer-events: none;
+transition: opacity 0.6s ease 1s;
+backdrop-filter: blur(6px);
+-webkit-backdrop-filter: blur(6px);
 }
 .skip-intro.show { opacity: 0.85; pointer-events: auto; }
 .skip-intro:hover { opacity: 1; }
 
 /* ─── Tutorial overlay ─── */
 .tutorial-overlay {
-  position: fixed; inset: 0; z-index: 200;
-  background: rgba(10, 9, 8, 0.82);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  display: none;
-  align-items: center; justify-content: center;
-  padding: 20px;
+position: fixed; inset: 0; z-index: 200;
+background: rgba(10, 9, 8, 0.82);
+backdrop-filter: blur(4px);
+-webkit-backdrop-filter: blur(4px);
+display: none;
+align-items: center; justify-content: center;
+padding: 20px;
 }
 .tutorial-overlay.show { display: flex; }
 .tutorial-card {
-  max-width: 460px;
-  background: rgba(15, 12, 10, 0.97);
-  border: 1px solid var(--gold-dim);
-  padding: 36px 32px 28px;
+max-width: 460px;
+background: rgba(15, 12, 10, 0.97);
+border: 1px solid var(–gold-dim);
+padding: 36px 32px 28px;
 }
 .tutorial-card h3 {
-  font-family: var(--serif);
-  font-weight: 300;
-  font-size: 22px;
-  color: var(--gold);
-  margin: 0 0 18px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  text-align: center;
+font-family: var(–serif);
+font-weight: 300;
+font-size: 22px;
+color: var(–gold);
+margin: 0 0 18px;
+letter-spacing: 0.16em;
+text-transform: uppercase;
+text-align: center;
 }
 .tutorial-step {
-  display: flex; gap: 14px;
-  margin-bottom: 14px;
+display: flex; gap: 14px;
+margin-bottom: 14px;
 }
 .tutorial-step .step-icon {
-  flex-shrink: 0;
-  width: 36px; height: 36px;
-  border: 1px solid var(--gold-dim);
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--gold);
-  font-size: 16px;
+flex-shrink: 0;
+width: 36px; height: 36px;
+border: 1px solid var(–gold-dim);
+border-radius: 50%;
+display: flex; align-items: center; justify-content: center;
+color: var(–gold);
+font-size: 16px;
 }
-.tutorial-step .step-text { color: var(--ink-dim); line-height: 1.5; }
-.tutorial-step strong { color: var(--ink); font-weight: 500; }
+.tutorial-step .step-text { color: var(–ink-dim); line-height: 1.5; }
+.tutorial-step strong { color: var(–ink); font-weight: 500; }
 .tutorial-card .ghost-btn { margin-top: 18px; }
 
 /* ─── Modal (painting detail) ─── */
 .modal {
-  position: fixed; inset: 0; z-index: 150;
-  background: rgba(10, 9, 8, 0.94);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  display: none;
-  align-items: center; justify-content: center;
-  padding: 60px 24px;
+position: fixed; inset: 0; z-index: 150;
+background: rgba(10, 9, 8, 0.94);
+backdrop-filter: blur(8px);
+-webkit-backdrop-filter: blur(8px);
+display: none;
+align-items: center; justify-content: center;
+padding: 60px 24px;
 }
 .modal.show { display: flex; }
 .modal-content {
-  max-width: 1100px;
-  width: 100%; height: 100%;
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 40px;
+max-width: 1100px;
+width: 100%; height: 100%;
+display: grid;
+grid-template-columns: 1fr 320px;
+gap: 40px;
 }
 .modal-img-wrap {
-  display: flex; align-items: center; justify-content: center;
-  overflow: hidden;
+display: flex; align-items: center; justify-content: center;
+overflow: hidden;
 }
 .modal-img-wrap img {
-  max-width: 100%; max-height: 100%;
-  object-fit: contain;
-  box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+max-width: 100%; max-height: 100%;
+object-fit: contain;
+box-shadow: 0 30px 80px rgba(0,0,0,0.6);
 }
 .modal-info {
-  display: flex; flex-direction: column; justify-content: center;
-  color: var(--ink);
+display: flex; flex-direction: column; justify-content: center;
+color: var(–ink);
 }
 .modal-info .num {
-  font-size: 9px; letter-spacing: 0.3em;
-  color: var(--ink-faint); text-transform: uppercase;
-  margin-bottom: 10px;
+font-size: 9px; letter-spacing: 0.3em;
+color: var(–ink-faint); text-transform: uppercase;
+margin-bottom: 10px;
 }
 .modal-info h2 {
-  font-family: var(--serif); font-weight: 400;
-  font-size: 32px; letter-spacing: 0.04em;
-  margin-bottom: 8px;
+font-family: var(–serif); font-weight: 400;
+font-size: 32px; letter-spacing: 0.04em;
+margin-bottom: 8px;
 }
 .modal-info .meta {
-  font-style: italic;
-  color: var(--ink-dim);
-  margin-bottom: 4px;
+font-style: italic;
+color: var(–ink-dim);
+margin-bottom: 4px;
 }
 .modal-info .size {
-  font-size: 10px; letter-spacing: 0.18em;
-  color: var(--ink-faint); text-transform: uppercase;
-  margin-bottom: 22px;
+font-size: 10px; letter-spacing: 0.18em;
+color: var(–ink-faint); text-transform: uppercase;
+margin-bottom: 22px;
 }
 .modal-info .desc {
-  color: var(--ink-dim); line-height: 1.7;
-  font-size: 14px;
+color: var(–ink-dim); line-height: 1.7;
+font-size: 14px;
 }
 .modal-close {
-  position: absolute;
-  top: 24px; right: 24px;
-  width: 38px; height: 38px;
-  border: 1px solid var(--ink-faint);
-  border-radius: 50%;
-  background: transparent;
-  color: var(--ink); cursor: pointer;
-  font-size: 18px;
-  display: flex; align-items: center; justify-content: center;
+position: absolute;
+top: 24px; right: 24px;
+width: 38px; height: 38px;
+border: 1px solid var(–ink-faint);
+border-radius: 50%;
+background: transparent;
+color: var(–ink); cursor: pointer;
+font-size: 18px;
+display: flex; align-items: center; justify-content: center;
 }
-.modal-close:hover { color: var(--gold); border-color: var(--gold); }
+.modal-close:hover { color: var(–gold); border-color: var(–gold); }
 .modal-nav {
-  position: absolute;
-  top: 50%; transform: translateY(-50%);
-  width: 44px; height: 44px;
-  border: 1px solid var(--ink-faint);
-  border-radius: 50%;
-  background: rgba(10, 9, 8, 0.6);
-  color: var(--ink); cursor: pointer;
-  font-size: 20px;
-  display: flex; align-items: center; justify-content: center;
+position: absolute;
+top: 50%; transform: translateY(-50%);
+width: 44px; height: 44px;
+border: 1px solid var(–ink-faint);
+border-radius: 50%;
+background: rgba(10, 9, 8, 0.6);
+color: var(–ink); cursor: pointer;
+font-size: 20px;
+display: flex; align-items: center; justify-content: center;
 }
-.modal-nav:hover { color: var(--gold); border-color: var(--gold); }
+.modal-nav:hover { color: var(–gold); border-color: var(–gold); }
 .modal-nav.prev { left: 24px; }
 .modal-nav.next { right: 24px; }
 
 /* ─── Slideshow view ─── */
 .slideshow {
-  position: fixed; inset: 0; z-index: 30;
-  display: none;
-  align-items: center; justify-content: center;
-  padding: 90px 24px 80px;
-  background: var(--bg);
+position: fixed; inset: 0; z-index: 30;
+display: none;
+align-items: center; justify-content: center;
+padding: 90px 24px 80px;
+background: var(–bg);
 }
 .slideshow.show { display: flex; flex-direction: column; }
 .slide-img-wrap {
-  flex: 1;
-  display: flex; align-items: center; justify-content: center;
-  width: 100%;
-  overflow: hidden;
+flex: 1;
+display: flex; align-items: center; justify-content: center;
+width: 100%;
+overflow: hidden;
 }
 .slide-img-wrap img {
-  max-width: 95%; max-height: 100%;
-  object-fit: contain;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+max-width: 95%; max-height: 100%;
+object-fit: contain;
+box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
 }
 .slide-info {
-  text-align: center;
-  margin-top: 24px;
-  max-width: 720px;
+text-align: center;
+margin-top: 24px;
+max-width: 720px;
 }
 .slide-info .num {
-  font-size: 9px; letter-spacing: 0.32em; text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 6px;
+font-size: 9px; letter-spacing: 0.32em; text-transform: uppercase;
+color: var(–ink-faint);
+margin-bottom: 6px;
 }
 .slide-info h2 {
-  font-family: var(--serif); font-weight: 400;
-  font-size: 26px; letter-spacing: 0.04em;
-  color: var(--ink);
+font-family: var(–serif); font-weight: 400;
+font-size: 26px; letter-spacing: 0.04em;
+color: var(–ink);
 }
 .slide-info .meta {
-  font-style: italic; color: var(--ink-dim);
-  margin-top: 4px;
+font-style: italic; color: var(–ink-dim);
+margin-top: 4px;
 }
 .slide-nav {
-  position: absolute;
-  top: 50%; transform: translateY(-50%);
-  width: 48px; height: 48px;
-  border: 1px solid var(--ink-faint);
-  border-radius: 50%;
-  background: rgba(10, 9, 8, 0.5);
-  color: var(--ink); cursor: pointer;
-  font-size: 22px;
-  display: flex; align-items: center; justify-content: center;
+position: absolute;
+top: 50%; transform: translateY(-50%);
+width: 48px; height: 48px;
+border: 1px solid var(–ink-faint);
+border-radius: 50%;
+background: rgba(10, 9, 8, 0.5);
+color: var(–ink); cursor: pointer;
+font-size: 22px;
+display: flex; align-items: center; justify-content: center;
 }
 .slide-nav.prev { left: 28px; }
 .slide-nav.next { right: 28px; }
-.slide-nav:hover { color: var(--gold); border-color: var(--gold); }
+.slide-nav:hover { color: var(–gold); border-color: var(–gold); }
 
 /* ─── Index view ─── */
 .index-view {
-  position: fixed; inset: 0; z-index: 30;
-  display: none;
-  background: var(--bg);
-  overflow-y: auto;
-  padding: 110px 32px 80px;
+position: fixed; inset: 0; z-index: 30;
+display: none;
+background: var(–bg);
+overflow-y: auto;
+padding: 110px 32px 80px;
 }
 .index-view.show { display: block; }
 .index-intro {
-  text-align: center;
-  margin-bottom: 60px;
+text-align: center;
+margin-bottom: 60px;
 }
 .index-intro h2 {
-  font-family: var(--serif); font-weight: 300;
-  font-size: 36px; letter-spacing: 0.06em;
-  color: var(--ink);
-  margin-bottom: 8px;
+font-family: var(–serif); font-weight: 300;
+font-size: 36px; letter-spacing: 0.06em;
+color: var(–ink);
+margin-bottom: 8px;
 }
 .index-intro p {
-  font-size: 13px; color: var(--ink-dim);
-  letter-spacing: 0.04em;
+font-size: 13px; color: var(–ink-dim);
+letter-spacing: 0.04em;
 }
 .index-section {
-  max-width: 1280px; margin: 0 auto 80px;
+max-width: 1280px; margin: 0 auto 80px;
 }
 .index-section-header {
-  text-align: center;
-  margin-bottom: 48px;
+text-align: center;
+margin-bottom: 48px;
 }
 .index-section-header .ornament {
-  width: 40px; height: 1px; background: var(--gold-dim);
-  margin: 0 auto 14px;
+width: 40px; height: 1px; background: var(–gold-dim);
+margin: 0 auto 14px;
 }
 .index-section-header h3 {
-  font-family: var(--serif); font-weight: 300;
-  font-size: 28px; letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink);
+font-family: var(–serif); font-weight: 300;
+font-size: 28px; letter-spacing: 0.16em;
+text-transform: uppercase;
+color: var(–ink);
 }
 .index-section-header .sub {
-  font-style: italic; color: var(--ink-dim);
-  font-size: 14px; margin-top: 4px;
+font-style: italic; color: var(–ink-dim);
+font-size: 14px; margin-top: 4px;
 }
 .index-section-header .count {
-  font-size: 9px; letter-spacing: 0.32em; text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-top: 12px;
+font-size: 9px; letter-spacing: 0.32em; text-transform: uppercase;
+color: var(–ink-faint);
+margin-top: 12px;
 }
 .index-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 48px 32px;
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+gap: 48px 32px;
 }
 .index-card {
-  cursor: pointer;
+cursor: pointer;
 }
 .index-card .img-wrap {
-  background: #111;
-  overflow: hidden;
-  aspect-ratio: 4 / 3;
-  display: flex; align-items: center; justify-content: center;
-  margin-bottom: 14px;
+background: #111;
+overflow: hidden;
+aspect-ratio: 4 / 3;
+display: flex; align-items: center; justify-content: center;
+margin-bottom: 14px;
 }
 .index-card .img-wrap img {
-  max-width: 100%; max-height: 100%;
-  object-fit: contain;
-  transition: transform 0.5s;
+max-width: 100%; max-height: 100%;
+object-fit: contain;
+transition: transform 0.5s;
 }
 .index-card:hover .img-wrap img { transform: scale(1.04); }
 .index-card .num {
-  font-size: 9px; letter-spacing: 0.28em; text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 4px;
+font-size: 9px; letter-spacing: 0.28em; text-transform: uppercase;
+color: var(–ink-faint);
+margin-bottom: 4px;
 }
 .index-card h4 {
-  font-family: var(--serif); font-weight: 400;
-  font-size: 17px; letter-spacing: 0.02em;
-  color: var(--ink);
-  margin-bottom: 2px;
+font-family: var(–serif); font-weight: 400;
+font-size: 17px; letter-spacing: 0.02em;
+color: var(–ink);
+margin-bottom: 2px;
 }
 .index-card .meta {
-  font-style: italic; color: var(--ink-dim);
-  font-size: 12px;
+font-style: italic; color: var(–ink-dim);
+font-size: 12px;
 }
 
 /* ─── Bio page ─── */
 .bio-view {
-  position: fixed; inset: 0; z-index: 30;
-  display: none;
-  background: var(--bg);
-  overflow-y: auto;
-  padding: 110px 32px 80px;
+position: fixed; inset: 0; z-index: 30;
+display: none;
+background: var(–bg);
+overflow-y: auto;
+padding: 110px 32px 80px;
 }
 .bio-view.show { display: block; }
 .bio-content {
-  max-width: 720px;
-  margin: 0 auto;
+max-width: 720px;
+margin: 0 auto;
 }
 .bio-content .ornament {
-  width: 60px; height: 1px; background: var(--gold-dim);
-  margin: 0 auto 28px;
+width: 60px; height: 1px; background: var(–gold-dim);
+margin: 0 auto 28px;
 }
 .bio-content h2 {
-  font-family: var(--serif); font-weight: 300;
-  font-size: 38px; letter-spacing: 0.06em;
-  color: var(--ink);
-  text-align: center;
-  margin-bottom: 8px;
+font-family: var(–serif); font-weight: 300;
+font-size: 38px; letter-spacing: 0.06em;
+color: var(–ink);
+text-align: center;
+margin-bottom: 8px;
 }
 .bio-content .bio-eyebrow {
-  font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase;
-  color: var(--ink-faint);
-  text-align: center;
-  margin-bottom: 48px;
+font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase;
+color: var(–ink-faint);
+text-align: center;
+margin-bottom: 48px;
 }
 .bio-content p {
-  font-family: var(--serif);
-  font-size: 17px;
-  line-height: 1.75;
-  color: var(--ink);
-  margin-bottom: 22px;
-  font-weight: 300;
+font-family: var(–serif);
+font-size: 17px;
+line-height: 1.75;
+color: var(–ink);
+margin-bottom: 22px;
+font-weight: 300;
 }
 .bio-content p:first-of-type::first-letter {
-  font-size: 56px;
-  line-height: 0.92;
-  float: left;
-  padding: 6px 12px 0 0;
-  color: var(--gold);
-  font-weight: 400;
+font-size: 56px;
+line-height: 0.92;
+float: left;
+padding: 6px 12px 0 0;
+color: var(–gold);
+font-weight: 400;
 }
 
 /* ─── Contact page ─── */
 .contact-view {
-  position: fixed; inset: 0; z-index: 30;
-  display: none;
-  background: var(--bg);
-  overflow-y: auto;
-  padding: 110px 32px 80px;
+position: fixed; inset: 0; z-index: 30;
+display: none;
+background: var(–bg);
+overflow-y: auto;
+padding: 110px 32px 80px;
 }
 .contact-view.show { display: block; }
 .contact-content {
-  max-width: 560px;
-  margin: 0 auto;
+max-width: 560px;
+margin: 0 auto;
 }
 .contact-content .ornament {
-  width: 60px; height: 1px; background: var(--gold-dim);
-  margin: 0 auto 28px;
+width: 60px; height: 1px; background: var(–gold-dim);
+margin: 0 auto 28px;
 }
 .contact-content h2 {
-  font-family: var(--serif); font-weight: 300;
-  font-size: 38px; letter-spacing: 0.06em;
-  color: var(--ink);
-  text-align: center;
-  margin-bottom: 8px;
+font-family: var(–serif); font-weight: 300;
+font-size: 38px; letter-spacing: 0.06em;
+color: var(–ink);
+text-align: center;
+margin-bottom: 8px;
 }
 .contact-content .contact-eyebrow {
-  font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase;
-  color: var(--ink-faint);
-  text-align: center;
-  margin-bottom: 14px;
+font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase;
+color: var(–ink-faint);
+text-align: center;
+margin-bottom: 14px;
 }
 .contact-content .lede {
-  font-family: var(--serif);
-  font-size: 16px;
-  line-height: 1.6;
-  font-weight: 300;
-  font-style: italic;
-  color: var(--ink-dim);
-  text-align: center;
-  margin-bottom: 42px;
+font-family: var(–serif);
+font-size: 16px;
+line-height: 1.6;
+font-weight: 300;
+font-style: italic;
+color: var(–ink-dim);
+text-align: center;
+margin-bottom: 42px;
 }
 .contact-form {
-  display: flex; flex-direction: column; gap: 18px;
+display: flex; flex-direction: column; gap: 18px;
 }
 .contact-form .field-row {
-  display: flex; flex-direction: column; gap: 6px;
+display: flex; flex-direction: column; gap: 6px;
 }
 .contact-form label {
-  font-size: 10px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  font-family: var(--sans);
+font-size: 10px;
+letter-spacing: 0.22em;
+text-transform: uppercase;
+color: var(–ink-faint);
+font-family: var(–sans);
 }
 .contact-form input,
 .contact-form textarea {
-  background: rgba(0,0,0,0.3);
-  border: 1px solid var(--ink-faint);
-  color: var(--ink);
-  padding: 12px 14px;
-  font-family: var(--serif);
-  font-size: 16px;
-  font-weight: 300;
-  transition: border-color 0.2s, background 0.2s;
+background: rgba(0,0,0,0.3);
+border: 1px solid var(–ink-faint);
+color: var(–ink);
+padding: 12px 14px;
+font-family: var(–serif);
+font-size: 16px;
+font-weight: 300;
+transition: border-color 0.2s, background 0.2s;
 }
 .contact-form input:focus,
 .contact-form textarea:focus {
-  outline: none;
-  border-color: var(--gold-dim);
-  background: rgba(0,0,0,0.45);
+outline: none;
+border-color: var(–gold-dim);
+background: rgba(0,0,0,0.45);
 }
 .contact-form textarea {
-  resize: vertical;
-  min-height: 140px;
-  line-height: 1.55;
+resize: vertical;
+min-height: 140px;
+line-height: 1.55;
 }
 .contact-form button.submit {
-  margin-top: 8px;
-  padding: 14px 28px;
-  background: transparent;
-  border: 1px solid var(--gold-dim);
-  color: var(--gold);
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  cursor: pointer;
-  align-self: center;
-  min-width: 200px;
-  transition: all 0.2s;
+margin-top: 8px;
+padding: 14px 28px;
+background: transparent;
+border: 1px solid var(–gold-dim);
+color: var(–gold);
+font-family: var(–sans);
+font-size: 11px;
+letter-spacing: 0.22em;
+text-transform: uppercase;
+cursor: pointer;
+align-self: center;
+min-width: 200px;
+transition: all 0.2s;
 }
 .contact-form button.submit:hover {
-  background: rgba(201, 169, 110, 0.12);
-  color: var(--gold);
+background: rgba(201, 169, 110, 0.12);
+color: var(–gold);
 }
 .contact-form button.submit:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+opacity: 0.4;
+cursor: not-allowed;
 }
 .contact-status {
-  margin-top: 18px;
-  text-align: center;
-  font-size: 13px;
-  font-style: italic;
-  font-family: var(--serif);
-  min-height: 22px;
-  color: var(--gold);
+margin-top: 18px;
+text-align: center;
+font-size: 13px;
+font-style: italic;
+font-family: var(–serif);
+min-height: 22px;
+color: var(–gold);
 }
 .contact-status.error { color: #c66; }
 .contact-fallback {
-  margin-top: 36px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--ink-faint);
-  font-family: var(--serif);
+margin-top: 36px;
+text-align: center;
+font-size: 13px;
+color: var(–ink-faint);
+font-family: var(–serif);
 }
 .contact-fallback a {
-  color: var(--gold-dim);
-  text-decoration: none;
-  border-bottom: 1px solid rgba(201, 169, 110, 0.3);
-  padding-bottom: 1px;
+color: var(–gold-dim);
+text-decoration: none;
+border-bottom: 1px solid rgba(201, 169, 110, 0.3);
+padding-bottom: 1px;
 }
-.contact-fallback a:hover { color: var(--gold); border-bottom-color: var(--gold-dim); }
+.contact-fallback a:hover { color: var(–gold); border-bottom-color: var(–gold-dim); }
 
 /* ─── Mobile ─── */
 @media (max-width: 720px) {
-  .top-bar { padding: 14px 14px; }
-  .brand { font-size: 11px; letter-spacing: 0.18em; }
-  .brand .suffix { display: none; }
-  .view-toggle button { padding: 7px 9px; font-size: 9px; letter-spacing: 0.1em; }
-  .icon-btn { width: 32px; height: 32px; font-size: 14px; }
-  .right-group { gap: 6px; }
-  .bait { top: 60px; right: 14px; }
-  .bait-btn { width: 42px; height: 42px; }
-  .bait-label { font-size: 12px; }
-  .weapon-toolbar { top: 116px; right: 14px; }
-  .settings-panel { top: 60px; right: 14px; width: calc(100vw - 28px); max-width: 320px; }
-  .modal-content { grid-template-columns: 1fr; }
-  .modal-info { padding: 0 8px; }
-  .modal-info h2 { font-size: 24px; }
-  .modal-nav { width: 38px; height: 38px; font-size: 16px; }
-  .modal-nav.prev { left: 8px; }
-  .modal-nav.next { right: 8px; }
-  .slide-nav { width: 38px; height: 38px; font-size: 16px; }
-  .slide-nav.prev { left: 8px; }
-  .slide-nav.next { right: 8px; }
-  .index-view { padding: 80px 18px 60px; }
-  .bio-view { padding: 80px 22px 60px; }
-  .bio-content h2 { font-size: 30px; }
-  .bio-content p { font-size: 16px; }
-  .contact-view { padding: 80px 22px 60px; }
-  .contact-content h2 { font-size: 30px; }
+.top-bar { padding: 14px 14px; }
+.brand { font-size: 11px; letter-spacing: 0.18em; }
+.brand .suffix { display: none; }
+.view-toggle button { padding: 7px 9px; font-size: 9px; letter-spacing: 0.1em; }
+.icon-btn { width: 32px; height: 32px; font-size: 14px; }
+.right-group { gap: 6px; }
+.bait { top: 60px; right: 14px; }
+.bait-btn { width: 42px; height: 42px; }
+.bait-label { font-size: 12px; }
+.weapon-toolbar { top: 116px; right: 14px; }
+.settings-panel { top: 60px; right: 14px; width: calc(100vw - 28px); max-width: 320px; }
+.modal-content { grid-template-columns: 1fr; }
+.modal-info { padding: 0 8px; }
+.modal-info h2 { font-size: 24px; }
+.modal-nav { width: 38px; height: 38px; font-size: 16px; }
+.modal-nav.prev { left: 8px; }
+.modal-nav.next { right: 8px; }
+.slide-nav { width: 38px; height: 38px; font-size: 16px; }
+.slide-nav.prev { left: 8px; }
+.slide-nav.next { right: 8px; }
+.index-view { padding: 80px 18px 60px; }
+.bio-view { padding: 80px 22px 60px; }
+.bio-content h2 { font-size: 30px; }
+.bio-content p { font-size: 16px; }
+.contact-view { padding: 80px 22px 60px; }
+.contact-content h2 { font-size: 30px; }
 }
 @media (max-width: 380px) {
-  .brand { display: none; }
-  .top-bar { justify-content: flex-end; }
-  .bait-label { display: none; }
+.brand { display: none; }
+.top-bar { justify-content: flex-end; }
+.bait-label { display: none; }
 }
 </style>
+
 </head>
 <body>
 
@@ -1132,32 +1134,36 @@ body { overscroll-behavior: none; }
            Using the same page with #contact-sent so we can show our own thanks -->
       <input type="hidden" name="_next" id="contact-next" value="">
 
-      <div class="field-row">
-        <label for="contact-name">Name</label>
-        <input type="text" id="contact-name" name="name" required autocomplete="name">
-      </div>
-      <div class="field-row">
-        <label for="contact-email">Email</label>
-        <input type="email" id="contact-email" name="email" required autocomplete="email">
-      </div>
-      <div class="field-row">
-        <label for="contact-subject">Subject <span style="text-transform:none;letter-spacing:normal;font-style:italic;color:var(--ink-faint)">— optional</span></label>
-        <input type="text" id="contact-subject" name="subject" autocomplete="off">
-      </div>
-      <div class="field-row">
-        <label for="contact-message">Message</label>
-        <textarea id="contact-message" name="message" required></textarea>
-      </div>
-      <button type="submit" class="submit" id="contact-submit">Send</button>
-    </form>
-    <div class="contact-status" id="contact-status"></div>
-    <div class="contact-fallback">
-      Or email directly: <a href="mailto:cjbarnickel@gmail.com">cjbarnickel@gmail.com</a>
-    </div>
+```
+  <div class="field-row">
+    <label for="contact-name">Name</label>
+    <input type="text" id="contact-name" name="name" required autocomplete="name">
+  </div>
+  <div class="field-row">
+    <label for="contact-email">Email</label>
+    <input type="email" id="contact-email" name="email" required autocomplete="email">
+  </div>
+  <div class="field-row">
+    <label for="contact-subject">Subject <span style="text-transform:none;letter-spacing:normal;font-style:italic;color:var(--ink-faint)">— optional</span></label>
+    <input type="text" id="contact-subject" name="subject" autocomplete="off">
+  </div>
+  <div class="field-row">
+    <label for="contact-message">Message</label>
+    <textarea id="contact-message" name="message" required></textarea>
+  </div>
+  <button type="submit" class="submit" id="contact-submit">Send</button>
+</form>
+<div class="contact-status" id="contact-status"></div>
+<div class="contact-fallback">
+  Or email directly: <a href="mailto:cjbarnickel@gmail.com">cjbarnickel@gmail.com</a>
+</div>
+```
+
   </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
@@ -1263,62 +1269,75 @@ let hintHideTimer = 0;
 
 /* ─── 3. Theme ─── */
 const THEMES = {
-  // Default theme — warm "Mediterranean villa" gallery aesthetic.
-  // Lobby has cream plaster walls + rich wood plank floor + soft warm
-  // daylight (matching IMG_8302's main hall). The interior series rooms
-  // (Plein Air, Constructed Landscape, Figurative, Older Work) are
-  // DELIBERATELY DARK — almost black walls and floor — so paintings glow
-  // under their individual spotlights, like an intimate viewing room.
-  // The dark/light contrast is most dramatic at archway thresholds.
+  // Dark mode — IMG_8312 inspiration. Lobby walls covered in a tone-on-tone
+  // damask/baroque wallpaper (cream-on-tan), warm dark wood plank floor,
+  // soft amber lighting, and dark wood door frames. Series rooms beyond
+  // the doorways stay near-black for intimate viewing.
   dark: {
-    bg: 0xb8a886,
+    bg: 0x2a1f15,
     // LOBBY surfaces
-    wall: 0xd9c8a3,             // warm cream plaster
-    wallStrong: 0xc0a880,       // accent / shadow side of plaster
-    floor: 0x9a6e3f,            // warm wood plank base color
-    ceiling: 0xc4b28a,          // slightly off the wall, picks up warmth
-    // SERIES ROOM surfaces (dark interior)
-    wallSeries: 0x14100c,       // very dark warm brown — appears near-black under ambient
-    floorSeries: 0x1a1208,      // very dark wood
-    ceilingSeries: 0x080608,    // near-black ceiling
-    // Trim (wood pillars + baseboards) — same warm walnut everywhere
-    trim: 0x6b4824,
-    trimDark: 0x3a2418,
-    ambient: { color: 0xfff5e0, intensity: 0.65 },
-    hemi: { sky: 0xffeec8, ground: 0x8a6232, intensity: 0.75 },
-    spot: { color: 0xfff0d0, intensity: 1.4 },     // bumped slightly for series rooms
-    glow: { color: 0xfff0c0, intensity: 0.25 },
-    trackBar: 0x3a2418,
-    title: '#5a4530',            // dark warm brown for legibility on cream walls
+    wall: 0xc4a880,             // warm tan base — wallpaper texture overlays this
+    wallStrong: 0xa68a64,
+    floor: 0x6b4520,            // rich warm wood (deeper than before)
+    ceiling: 0x5a4836,          // warm muted brown ceiling (matches IMG_8312)
+    // Series rooms — DELIBERATELY DARK so paintings glow
+    wallSeries: 0x0e0a07,
+    floorSeries: 0x150e07,
+    ceilingSeries: 0x070504,
+    // Trim — dark walnut for arch frames + baseboards
+    trim: 0x4a2f18,
+    trimDark: 0x2a1a0c,
+    // Wallpaper colors (damask pattern)
+    wallpaperBase: 0xb89d76,    // tan plaster ground
+    wallpaperPattern: 0xd6c39e, // light cream baroque motif
+    wallpaperDark: 0x8e7654,    // shadow within pattern for depth
+    ambient: { color: 0xffeac8, intensity: 0.55 },
+    hemi: { sky: 0xffe0a8, ground: 0x6a4824, intensity: 0.6 },
+    spot: { color: 0xfff0d0, intensity: 1.5 },
+    glow: { color: 0xffe0a0, intensity: 0.30 },
+    trackBar: 0x2a1a0c,
+    title: '#3a2a1c',           // dark warm brown — embossed feel against tan wallpaper
     titleAlpha: 0.95,
-    label: '#5a4530',
-    labelAlpha: 0.95,
-    fog: { color: 0xd0c0a0, density: 0.005 },
-    rendererClear: 0xc8b890,
+    label: '#3a2a1c',
+    labelAlpha: 0.9,
+    fog: { color: 0x2a1f15, density: 0.008 },
+    rendererClear: 0x1a120c,
+    plants: true,                // place ficus/fern silhouettes in lobby corners
   },
+  // White mode — IMG_8299 inspiration. Crisp white walls, polished concrete
+  // floor, visible black ceiling track lighting, thin black metal door
+  // frames, geometric color-block accent on the west wall. Series rooms
+  // stay equally bright (white-cube uniform feel).
   white: {
-    bg: 0xefe9dc,
-    wall: 0xeae3d3,
-    wallStrong: 0xd4cdbe,
-    // White-cube mode: uniform brightness, no series-room darkening
-    wallSeries: 0xeae3d3,
-    floorSeries: 0x9d968a,
-    ceilingSeries: 0xece6db,
-    trim: 0xc89a5e,             // honey-oak wood
-    trimDark: 0x8a6332,
-    floor: 0x9d968a,
-    ceiling: 0xece6db,
-    ambient: { color: 0xffffff, intensity: 0.55 },
-    hemi: { sky: 0xffffff, ground: 0x8a847a, intensity: 0.5 },
-    spot: { color: 0xfffaef, intensity: 0.45 },
+    bg: 0xf4f3f0,
+    wall: 0xfafaf6,             // bright near-white plaster
+    wallStrong: 0xe8e6e0,
+    // White cube: series rooms also bright
+    wallSeries: 0xf4f2ec,
+    floorSeries: 0xb8b4ad,
+    ceilingSeries: 0xfafaf5,
+    trim: 0x252525,             // black metal door frames (IMG_8299)
+    trimDark: 0x101010,
+    floor: 0xb8b4ad,            // polished concrete
+    ceiling: 0xf6f6f4,
+    // No wallpaper in white mode — flat pure walls
+    wallpaperBase: null,
+    ambient: { color: 0xffffff, intensity: 0.65 },
+    hemi: { sky: 0xffffff, ground: 0x9c9890, intensity: 0.55 },
+    spot: { color: 0xffffff, intensity: 0.55 },
     glow: { color: 0xffffff, intensity: 0.0 },
-    trackBar: 0x2a2624,
-    title: '#3a3128',
-    titleAlpha: 0.92,
-    label: '#2a221a',
-    labelAlpha: 0.85,
-    fog: { color: 0xefe9dc, density: 0.0035 },
-    rendererClear: 0xefe9dc,
+    trackBar: 0x111111,         // visible black track bars
+    title: '#1a1a1a',           // pure dark on white walls (IMG_8299 lettering)
+    titleAlpha: 0.95,
+    label: '#1a1a1a',
+    labelAlpha: 0.9,
+    fog: { color: 0xf4f3f0, density: 0.0025 },
+    rendererClear: 0xf4f3f0,
+    plants: false,
+    // Geometric color-block accent on west wall (purple/pink palette from photo)
+    accentBlock: {
+      colors: [0x4a2885, 0x7d2bbb, 0xc54aa6, 0xec74a3, 0xf5b6c8],
+    },
   },
 };
 function T() { return THEMES[theme]; }
@@ -1456,6 +1475,9 @@ function buildGallery() {
   // Tappable Bio / Contact plaques on the lobby's east and west walls
   buildLobbyPlaques();
 
+  // Decorative plants in the lobby corners (visible only in dark mode)
+  buildLobbyPlants();
+
   // Track lighting bars (visual ceiling track)
   buildTrackLighting(t);
 
@@ -1479,21 +1501,27 @@ function buildGallery() {
 }
 
 function buildFloorsAndCeilings(t) {
-  // Lobby gets the warm wood plank floor + warm cream ceiling
+  // Lobby floor texture depends on theme:
+  //   - dark mode: warm wood plank
+  //   - white mode: polished concrete (high-gloss minimalist gallery)
   const lobbyFloorMat = new THREE.MeshStandardMaterial({
-    map: makeWoodFloorTexture(t.floor),
-    roughness: 0.62,
-    metalness: 0.05,
+    map: theme === 'white'
+      ? makePolishedConcreteTexture(t.floor)
+      : makeWoodFloorTexture(t.floor),
+    roughness: theme === 'white' ? 0.35 : 0.62,
+    metalness: theme === 'white' ? 0.15 : 0.05,
   });
   const lobbyCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceiling,
     roughness: 1.0,
   });
-  // Series rooms get a dark, slightly textured floor + near-black ceiling
+  // Series rooms — dark wood floor in dark mode, lighter concrete in white mode
   const seriesFloorMat = new THREE.MeshStandardMaterial({
-    map: makeWoodFloorTexture(t.floorSeries),
-    roughness: 0.85,
-    metalness: 0.0,
+    map: theme === 'white'
+      ? makePolishedConcreteTexture(t.floorSeries)
+      : makeWoodFloorTexture(t.floorSeries),
+    roughness: theme === 'white' ? 0.35 : 0.85,
+    metalness: theme === 'white' ? 0.15 : 0.0,
   });
   const seriesCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceilingSeries,
@@ -1537,8 +1565,11 @@ function buildAllWalls(t) {
   // We build BoxGeometry walls with multi-material face arrays so that one
   // wall can present cream on the lobby face and dark on the series face.
   // Materials are stored on a global so applyTheme can update them in place.
+  // Lobby wall material — gets the damask wallpaper texture in dark mode,
+  // flat color in white mode.
   const lobbyWallMat = new THREE.MeshStandardMaterial({
     color: t.wall,
+    map: t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null,
     roughness: 0.92,
     metalness: 0.0,
   });
@@ -1959,6 +1990,174 @@ function makeWoodFloorTexture(baseHex) {
   return tex;
 }
 
+// Damask wallpaper — a tone-on-tone baroque botanical motif. Each "tile" is
+// a vertically-mirrored fleur/scroll pattern that repeats seamlessly.
+// (Inspired by IMG_8312 — Victorian/baroque wallpaper.)
+function makeDamaskWallpaperTexture(t) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 384;
+  const ctx = c.getContext('2d');
+
+  // Base tan ground
+  const baseR = (t.wallpaperBase >> 16) & 0xff;
+  const baseG = (t.wallpaperBase >> 8) & 0xff;
+  const baseB = t.wallpaperBase & 0xff;
+  ctx.fillStyle = `rgb(${baseR}, ${baseG}, ${baseB})`;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  // Subtle paper grain — soft noise
+  for (let i = 0; i < 1800; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const a = 0.02 + Math.random() * 0.04;
+    const tone = Math.random() > 0.5 ? -8 : 8;
+    ctx.fillStyle = `rgba(${baseR + tone}, ${baseG + tone}, ${baseB + tone}, ${a})`;
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  // Helper: draw a baroque fleur/scroll motif at (cx, cy) at given scale.
+  // Built from a stack of curves that suggest a stylized botanical form.
+  const patternR = (t.wallpaperPattern >> 16) & 0xff;
+  const patternG = (t.wallpaperPattern >> 8) & 0xff;
+  const patternB = t.wallpaperPattern & 0xff;
+  const darkR = (t.wallpaperDark >> 16) & 0xff;
+  const darkG = (t.wallpaperDark >> 8) & 0xff;
+  const darkB = t.wallpaperDark & 0xff;
+
+  function drawMotif(cx, cy, scale, opacity) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    // Light side of motif
+    ctx.fillStyle = `rgba(${patternR}, ${patternG}, ${patternB}, ${opacity})`;
+    ctx.strokeStyle = `rgba(${patternR}, ${patternG}, ${patternB}, ${opacity * 0.85})`;
+    ctx.lineWidth = 1.2;
+    // Central vertical leaf/fleur
+    ctx.beginPath();
+    ctx.moveTo(0, -34);
+    ctx.bezierCurveTo(-9, -28, -13, -16, -8, -4);
+    ctx.bezierCurveTo(-12, 4, -10, 14, -3, 20);
+    ctx.bezierCurveTo(-2, 24, -1, 26, 0, 28);
+    ctx.bezierCurveTo(1, 26, 2, 24, 3, 20);
+    ctx.bezierCurveTo(10, 14, 12, 4, 8, -4);
+    ctx.bezierCurveTo(13, -16, 9, -28, 0, -34);
+    ctx.closePath();
+    ctx.fill();
+    // Side curls — left
+    ctx.beginPath();
+    ctx.moveTo(-4, -8);
+    ctx.bezierCurveTo(-18, -4, -26, 6, -22, 18);
+    ctx.bezierCurveTo(-26, 14, -20, 6, -10, 4);
+    ctx.bezierCurveTo(-16, 10, -14, 18, -8, 16);
+    ctx.bezierCurveTo(-12, 12, -8, 8, -4, 4);
+    ctx.closePath();
+    ctx.fill();
+    // Side curls — right (mirror)
+    ctx.beginPath();
+    ctx.moveTo(4, -8);
+    ctx.bezierCurveTo(18, -4, 26, 6, 22, 18);
+    ctx.bezierCurveTo(26, 14, 20, 6, 10, 4);
+    ctx.bezierCurveTo(16, 10, 14, 18, 8, 16);
+    ctx.bezierCurveTo(12, 12, 8, 8, 4, 4);
+    ctx.closePath();
+    ctx.fill();
+    // Top leaf
+    ctx.beginPath();
+    ctx.moveTo(0, -34);
+    ctx.bezierCurveTo(-6, -42, -3, -50, 0, -54);
+    ctx.bezierCurveTo(3, -50, 6, -42, 0, -34);
+    ctx.closePath();
+    ctx.fill();
+    // Inner shadow detail (darker)
+    ctx.fillStyle = `rgba(${darkR}, ${darkG}, ${darkB}, ${opacity * 0.6})`;
+    ctx.beginPath();
+    ctx.ellipse(0, -2, 3, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Tile the motif in a half-drop diamond pattern (typical for damask):
+  // - Main motifs at (cx, cy) for each cell
+  // - Half-drop column shifted vertically by half a row
+  const tileW = 128, tileH = 192;   // each motif occupies one tile
+  for (let row = -1; row < c.height / tileH + 1; row++) {
+    for (let col = -1; col < c.width / tileW + 1; col++) {
+      const offsetY = (col % 2 === 0) ? 0 : tileH / 2;
+      const cx = col * tileW + tileW / 2;
+      const cy = row * tileH + tileH / 2 + offsetY;
+      drawMotif(cx, cy, 1.4, 0.85);
+    }
+  }
+
+  // Slight overall vignette so wallpaper feels like real paper, not flat
+  const vignette = ctx.createRadialGradient(c.width/2, c.height/2, 50, c.width/2, c.height/2, 250);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(1, 'rgba(0,0,0,0.06)');
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(8, 4);    // tile across each wall — small enough to look like real wallpaper
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Polished concrete floor — for white mode. Slightly mottled gray with a
+// soft glossy sheen variation. (Inspired by IMG_8299.)
+function makePolishedConcreteTexture(baseHex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  const r = (baseHex >> 16) & 0xff;
+  const g = (baseHex >> 8) & 0xff;
+  const b = baseHex & 0xff;
+  ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+  ctx.fillRect(0, 0, c.width, c.height);
+  // Mottled tone variation
+  for (let i = 0; i < 600; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const radius = 8 + Math.random() * 40;
+    const tone = (Math.random() - 0.5) * 16;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    grad.addColorStop(0, `rgba(${r + tone}, ${g + tone}, ${b + tone}, 0.18)`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, c.width, c.height);
+  }
+  // A few darker streaks for "polish marks"
+  ctx.strokeStyle = `rgba(${r - 16}, ${g - 16}, ${b - 16}, 0.08)`;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 12; i++) {
+    ctx.beginPath();
+    const sx = Math.random() * c.width, sy = Math.random() * c.height;
+    const ex = sx + (Math.random() - 0.5) * 200;
+    const ey = sy + (Math.random() - 0.5) * 200;
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+  }
+  // Subtle bright highlight here and there for sheen
+  for (let i = 0; i < 30; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const radius = 30 + Math.random() * 60;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    grad.addColorStop(0, 'rgba(255,255,255,0.04)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, c.width, c.height);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.anisotropy = 8;
+  return tex;
+}
+
 /* ─── Lobby title (C.Barnickel banner) ─── */
 function buildLobbyTitle() {
   const lobby = ROOMS.lobby;
@@ -2066,6 +2265,193 @@ function makePlaqueTexture(label, sub) {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
+  return tex;
+}
+
+/* ─── Decorative plants in the lobby ───
+   A small set of stylized potted plants placed in lobby corners. Visible
+   only in dark mode (per IMG_8312 vibe — Victorian-warm gallery with houseplants).
+   Each plant is a planter pot + a few crossed leaf planes that catch light. */
+const lobbyPlants = [];   // { group, mesh references for show/hide }
+function buildLobbyPlants() {
+  const lobby = ROOMS.lobby;
+  // Plant positions — set in from each corner so they don't block sightlines
+  // through arches. Lobby spans x ∈ [-9, 9], z ∈ [-6, 6]; arches are at
+  // x = -5, 0, +5 (north) and x = 0 (south, leading to Older Work).
+  // Place four plants near the four CORNERS of the lobby — well clear of
+  // both the BIO/CONTACT plaques and the arches themselves.
+  const corners = [
+    { x: -7.8, z: -4.6 },   // NW
+    { x: +7.8, z: -4.6 },   // NE
+    { x: -7.8, z: +4.6 },   // SW
+    { x: +7.8, z: +4.6 },   // SE
+  ];
+  for (const pos of corners) {
+    const group = makePlant();
+    group.position.set(pos.x, 0, pos.z);
+    // Slight rotation for variety
+    group.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(group);
+    lobbyPlants.push(group);
+  }
+  // Initial visibility based on current theme
+  setPlantsVisible(!!T().plants);
+}
+
+function setPlantsVisible(visible) {
+  for (const p of lobbyPlants) p.visible = visible;
+}
+
+// Build a stylized potted plant:
+//   - terracotta pot (cylinder)
+//   - cluster of palm/fern fronds: each frond is a long PlaneGeometry
+//     with a procedural leaf-silhouette texture (alpha-tested)
+function makePlant() {
+  const group = new THREE.Group();
+  // Pot — terracotta-toned cylinder
+  const potGeo = new THREE.CylinderGeometry(0.32, 0.26, 0.42, 16);
+  const potMat = new THREE.MeshStandardMaterial({
+    color: 0x4a2418,            // dark warm terracotta
+    roughness: 0.85,
+    metalness: 0.0,
+  });
+  const pot = new THREE.Mesh(potGeo, potMat);
+  pot.position.y = 0.21;
+  group.add(pot);
+  // Pot rim — slightly wider top edge
+  const rimGeo = new THREE.TorusGeometry(0.32, 0.03, 8, 24);
+  const rim = new THREE.Mesh(rimGeo, potMat);
+  rim.position.y = 0.42;
+  rim.rotation.x = Math.PI / 2;
+  group.add(rim);
+  // Soil cap (small dark disc on top of pot)
+  const soilGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.02, 16);
+  const soilMat = new THREE.MeshStandardMaterial({ color: 0x1a0f08, roughness: 1 });
+  const soil = new THREE.Mesh(soilGeo, soilMat);
+  soil.position.y = 0.43;
+  group.add(soil);
+
+  // Fronds — 7 leaf planes radiating outward and upward from the pot
+  const leafTex = makeLeafTexture();
+  const leafMat = new THREE.MeshStandardMaterial({
+    map: leafTex,
+    transparent: true,
+    alphaTest: 0.35,
+    side: THREE.DoubleSide,
+    roughness: 0.6,
+  });
+  const FROND_COUNT = 9;
+  for (let i = 0; i < FROND_COUNT; i++) {
+    const angle = (i / FROND_COUNT) * Math.PI * 2;
+    const fLen = 0.95 + Math.random() * 0.25;
+    const fWid = 0.30 + Math.random() * 0.10;
+    const frond = new THREE.Mesh(new THREE.PlaneGeometry(fWid, fLen), leafMat);
+    // Position the frond's base at the pot's rim; tilt it outward + upward
+    const tilt = 0.3 + Math.random() * 0.4;     // radians from vertical
+    const liftRadius = 0.18;
+    frond.position.set(
+      Math.cos(angle) * liftRadius * Math.sin(tilt),
+      0.45 + Math.cos(tilt) * fLen / 2,
+      Math.sin(angle) * liftRadius * Math.sin(tilt)
+    );
+    // Orient: rotate to face outward from center, then tilt away from vertical
+    frond.rotation.y = -angle;
+    frond.rotation.z = tilt * (Math.random() > 0.5 ? 1 : -1) * 0.5;
+    frond.rotation.x = -tilt * 0.6;
+    group.add(frond);
+  }
+  // A few smaller "fill" fronds near the center, more vertical
+  for (let i = 0; i < 4; i++) {
+    const fLen = 0.55 + Math.random() * 0.20;
+    const fWid = 0.22 + Math.random() * 0.06;
+    const frond = new THREE.Mesh(new THREE.PlaneGeometry(fWid, fLen), leafMat);
+    const angle = Math.random() * Math.PI * 2;
+    frond.position.set(
+      Math.cos(angle) * 0.05,
+      0.45 + fLen / 2 - 0.05,
+      Math.sin(angle) * 0.05
+    );
+    frond.rotation.y = -angle + Math.random() * 0.5;
+    frond.rotation.z = (Math.random() - 0.5) * 0.3;
+    group.add(frond);
+  }
+  return group;
+}
+
+// Procedural leaf texture — silhouette of a long palm-like frond with small
+// leaflets along a central spine. Alpha channel cuts away background.
+function makeLeafTexture() {
+  const c = document.createElement('canvas');
+  c.width = 96; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  // Main leaf body — a long pointed shape with darker spine
+  const greenDark = '#1f3015';
+  const greenMid = '#2f4520';
+  const greenLight = '#4e6a30';
+  // Background: transparent
+
+  // Draw central frond shape with leaflets via small ellipses paired off the spine
+  const cx = c.width / 2;
+  const tipY = 8;
+  const baseY = c.height - 12;
+  const spineCurve = 12;   // slight S-curve
+
+  // Helper to compute spine X at a given Y (slight curve)
+  const spineX = (y) => cx + Math.sin((y - tipY) / (baseY - tipY) * Math.PI) * spineCurve * 0.3;
+
+  // Leaflets — pairs of small ellipses along the spine, getting longer toward
+  // the middle and shorter near the tip and base
+  const numLeaflets = 18;
+  for (let i = 0; i < numLeaflets; i++) {
+    const t = i / (numLeaflets - 1);   // 0 at tip, 1 at base
+    const y = tipY + t * (baseY - tipY);
+    const sx = spineX(y);
+    // Leaflet length peaks near t=0.45 (middle of the frond)
+    const lenFactor = Math.sin(t * Math.PI) * 0.85 + 0.15;
+    const leafLen = 14 + lenFactor * 26;
+    const leafW = 4 + lenFactor * 5;
+    const leafAngle = -0.55;   // angle from spine
+    // Color shifts slightly per leaflet
+    ctx.fillStyle = (i % 2 === 0) ? greenMid : greenLight;
+    // Left leaflet
+    ctx.save();
+    ctx.translate(sx, y);
+    ctx.rotate(leafAngle);
+    ctx.beginPath();
+    ctx.ellipse(-leafLen / 2, 0, leafLen / 2, leafW, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // Right leaflet
+    ctx.save();
+    ctx.translate(sx, y);
+    ctx.rotate(-leafAngle);
+    ctx.beginPath();
+    ctx.ellipse(leafLen / 2, 0, leafLen / 2, leafW, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  // Central spine — slightly darker line down the middle
+  ctx.strokeStyle = greenDark;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(spineX(tipY), tipY);
+  for (let y = tipY; y <= baseY; y += 8) {
+    ctx.lineTo(spineX(y), y);
+  }
+  ctx.stroke();
+  // Tip — a tapered triangle
+  ctx.fillStyle = greenDark;
+  ctx.beginPath();
+  ctx.moveTo(cx - 3, tipY + 12);
+  ctx.lineTo(cx + 3, tipY + 12);
+  ctx.lineTo(spineX(tipY), tipY - 4);
+  ctx.closePath();
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
   return tex;
 }
 
@@ -2871,26 +3257,40 @@ function applyTheme() {
   scene.fog.color.setHex(t.fog.color);
   scene.fog.density = t.fog.density;
 
-  // Walls — update both lobby-side and series-side materials in place
-  if (wallMeshes._lobbyMat) wallMeshes._lobbyMat.color.setHex(t.wall);
+  // Walls — update both lobby-side and series-side materials in place.
+  // Lobby wall: also swap between damask wallpaper (dark) and flat (white).
+  if (wallMeshes._lobbyMat) {
+    wallMeshes._lobbyMat.color.setHex(t.wall);
+    if (wallMeshes._lobbyMat.map) wallMeshes._lobbyMat.map.dispose();
+    wallMeshes._lobbyMat.map = t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null;
+    wallMeshes._lobbyMat.needsUpdate = true;
+  }
   if (wallMeshes._seriesMat) wallMeshes._seriesMat.color.setHex(t.wallSeries);
-  // (Per-mesh material assignments were set at build time and don't change
-  // on theme swap — only the colors of the two shared materials change.)
 
-  // Floors — regenerate wood plank textures for both lobby and series rooms
+  // Floors — regenerate textures based on theme. White mode uses polished
+  // concrete; dark mode uses warm wood plank.
+  const floorTexFn = (theme === 'white') ? makePolishedConcreteTexture : makeWoodFloorTexture;
+  const floorRoughness = (theme === 'white') ? 0.35 : 0.62;
+  const floorMetalness = (theme === 'white') ? 0.15 : 0.05;
   if (floorMeshes._lobbyMat) {
     if (floorMeshes._lobbyMat.map) floorMeshes._lobbyMat.map.dispose();
-    floorMeshes._lobbyMat.map = makeWoodFloorTexture(t.floor);
+    floorMeshes._lobbyMat.map = floorTexFn(t.floor);
+    floorMeshes._lobbyMat.roughness = floorRoughness;
+    floorMeshes._lobbyMat.metalness = floorMetalness;
     floorMeshes._lobbyMat.needsUpdate = true;
   }
   if (floorMeshes._seriesMat) {
     if (floorMeshes._seriesMat.map) floorMeshes._seriesMat.map.dispose();
-    floorMeshes._seriesMat.map = makeWoodFloorTexture(t.floorSeries);
+    floorMeshes._seriesMat.map = floorTexFn(t.floorSeries);
+    floorMeshes._seriesMat.roughness = (theme === 'white') ? 0.35 : 0.85;
+    floorMeshes._seriesMat.metalness = floorMetalness;
     floorMeshes._seriesMat.needsUpdate = true;
   }
   // Ceilings
   if (ceilingMeshes._lobbyMat) ceilingMeshes._lobbyMat.color.setHex(t.ceiling);
   if (ceilingMeshes._seriesMat) ceilingMeshes._seriesMat.color.setHex(t.ceilingSeries);
+  // Plants — show only in dark mode
+  setPlantsVisible(!!t.plants);
   // Architectural trim — regenerate wood texture for new theme
   for (const trimMat of trimMeshes) {
     if (trimMat.map) trimMat.map.dispose();
@@ -3293,19 +3693,24 @@ function fireWeapon(w) {
 }
 
 function fireSoup() {
-  // Spawn a small can in front of camera, give it forward velocity + slight gravity
-  const fx = -Math.sin(yaw) * Math.cos(pitch);
-  const fy = -Math.sin(pitch);
-  const fz = -Math.cos(yaw) * Math.cos(pitch);
-  const start = camera.position.clone().add(new THREE.Vector3(fx, fy, fz).multiplyScalar(0.4));
+  // Spawn a small can in front of camera. Use camera.getWorldDirection so the
+  // launch direction always matches what the user is aiming at — independent
+  // of the yaw/pitch sign convention (which has bitten us before).
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);   // unit vector pointing where camera looks
+  const start = camera.position.clone().add(dir.clone().multiplyScalar(0.4));
   const canMat = new THREE.MeshStandardMaterial({ color: 0xc14a2a, roughness: 0.5, metalness: 0.4 });
   const can = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.10, 12), canMat);
   can.position.copy(start);
   can.rotation.x = Math.PI / 2;
   scene.add(can);
+  // Initial velocity: 13 m/s in the camera's forward direction, plus a small
+  // upward lob (1.4 m/s) so it arcs naturally under gravity. The lob is in
+  // WORLD up — not camera up — so aiming straight ahead still produces an
+  // arc, but aiming straight up doesn't get a downward push.
   projectiles.push({
     mesh: can,
-    vel: new THREE.Vector3(fx * 13, fy * 13 + 1.4, fz * 13),
+    vel: new THREE.Vector3(dir.x * 13, dir.y * 13 + 1.4, dir.z * 13),
     spin: 8,
     age: 0,
     prevPos: start.clone(),
