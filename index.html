@@ -1264,19 +1264,29 @@ let hintHideTimer = 0;
 /* ─── 3. Theme ─── */
 const THEMES = {
   // Default theme — warm "Mediterranean villa" gallery aesthetic.
-  // Cream plaster walls, rich wood plank floor, soft warm daylight.
-  // Inspired by IMG_8302 (warm gallery with plaster + wood).
+  // Lobby has cream plaster walls + rich wood plank floor + soft warm
+  // daylight (matching IMG_8302's main hall). The interior series rooms
+  // (Plein Air, Constructed Landscape, Figurative, Older Work) are
+  // DELIBERATELY DARK — almost black walls and floor — so paintings glow
+  // under their individual spotlights, like an intimate viewing room.
+  // The dark/light contrast is most dramatic at archway thresholds.
   dark: {
     bg: 0xb8a886,
+    // LOBBY surfaces
     wall: 0xd9c8a3,             // warm cream plaster
     wallStrong: 0xc0a880,       // accent / shadow side of plaster
-    trim: 0x6b4824,              // rich warm walnut for arch frames
-    trimDark: 0x3a2418,
     floor: 0x9a6e3f,            // warm wood plank base color
-    ceiling: 0xc4b28a,           // slightly off the wall, picks up warmth
+    ceiling: 0xc4b28a,          // slightly off the wall, picks up warmth
+    // SERIES ROOM surfaces (dark interior)
+    wallSeries: 0x14100c,       // very dark warm brown — appears near-black under ambient
+    floorSeries: 0x1a1208,      // very dark wood
+    ceilingSeries: 0x080608,    // near-black ceiling
+    // Trim (wood pillars + baseboards) — same warm walnut everywhere
+    trim: 0x6b4824,
+    trimDark: 0x3a2418,
     ambient: { color: 0xfff5e0, intensity: 0.65 },
     hemi: { sky: 0xffeec8, ground: 0x8a6232, intensity: 0.75 },
-    spot: { color: 0xfff0d0, intensity: 1.1 },
+    spot: { color: 0xfff0d0, intensity: 1.4 },     // bumped slightly for series rooms
     glow: { color: 0xfff0c0, intensity: 0.25 },
     trackBar: 0x3a2418,
     title: '#5a4530',            // dark warm brown for legibility on cream walls
@@ -1290,6 +1300,10 @@ const THEMES = {
     bg: 0xefe9dc,
     wall: 0xeae3d3,
     wallStrong: 0xd4cdbe,
+    // White-cube mode: uniform brightness, no series-room darkening
+    wallSeries: 0xeae3d3,
+    floorSeries: 0x9d968a,
+    ceilingSeries: 0xece6db,
     trim: 0xc89a5e,             // honey-oak wood
     trimDark: 0x8a6332,
     floor: 0x9d968a,
@@ -1451,9 +1465,11 @@ function buildGallery() {
   lightingRefs.hemi = new THREE.HemisphereLight(t.hemi.sky, t.hemi.ground, t.hemi.intensity);
   scene.add(lightingRefs.hemi);
 
-  // Soft center glow per room
+  // Soft center glow per room — only for the lobby (series rooms stay dark
+  // and rely on per-painting spotlights for illumination)
   lightingRefs.centerGlows = [];
   for (const id of Object.keys(ROOMS)) {
+    if (id !== 'lobby') continue;
     const r = ROOMS[id];
     const g = new THREE.PointLight(t.glow.color, t.glow.intensity, Math.max(r.w, r.d), 2);
     g.position.set(r.cx, r.h - 0.4, r.cz);
@@ -1463,21 +1479,40 @@ function buildGallery() {
 }
 
 function buildFloorsAndCeilings(t) {
-  const floorMat = new THREE.MeshStandardMaterial({
+  // Lobby gets the warm wood plank floor + warm cream ceiling
+  const lobbyFloorMat = new THREE.MeshStandardMaterial({
     map: makeWoodFloorTexture(t.floor),
     roughness: 0.62,
     metalness: 0.05,
   });
-  floorMeshes._material = floorMat;   // remember so we can swap on theme change
-  const ceilMat = new THREE.MeshStandardMaterial({
+  const lobbyCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceiling,
     roughness: 1.0,
   });
+  // Series rooms get a dark, slightly textured floor + near-black ceiling
+  const seriesFloorMat = new THREE.MeshStandardMaterial({
+    map: makeWoodFloorTexture(t.floorSeries),
+    roughness: 0.85,
+    metalness: 0.0,
+  });
+  const seriesCeilMat = new THREE.MeshStandardMaterial({
+    color: t.ceilingSeries,
+    roughness: 1.0,
+  });
+  // Stash on the floor/ceiling arrays so applyTheme can update them
+  floorMeshes._lobbyMat = lobbyFloorMat;
+  floorMeshes._seriesMat = seriesFloorMat;
+  ceilingMeshes._lobbyMat = lobbyCeilMat;
+  ceilingMeshes._seriesMat = seriesCeilMat;
+
   for (const id of Object.keys(ROOMS)) {
     const r = ROOMS[id];
+    const isLobby = (id === 'lobby');
+    const fMat = isLobby ? lobbyFloorMat : seriesFloorMat;
+    const cMat = isLobby ? lobbyCeilMat : seriesCeilMat;
     // Floor
     const fGeo = new THREE.PlaneGeometry(r.w, r.d);
-    const f = new THREE.Mesh(fGeo, floorMat);
+    const f = new THREE.Mesh(fGeo, fMat);
     f.rotation.x = -Math.PI / 2;
     f.position.set(r.cx, 0, r.cz);
     f.userData.isFloor = true;
@@ -1486,9 +1521,10 @@ function buildFloorsAndCeilings(t) {
     floorMeshes.push(f);
     // Ceiling
     const cGeo = new THREE.PlaneGeometry(r.w, r.d);
-    const c = new THREE.Mesh(cGeo, ceilMat);
+    const c = new THREE.Mesh(cGeo, cMat);
     c.rotation.x = Math.PI / 2;
     c.position.set(r.cx, r.h, r.cz);
+    c.userData.roomId = id;
     scene.add(c);
     ceilingMeshes.push(c);
   }
@@ -1497,11 +1533,22 @@ function buildFloorsAndCeilings(t) {
 /* Build all walls. Each unique wall plane (in world coords) is built ONCE,
    even if it borders two rooms. Walls are 3D boxes (have thickness, no z-fight). */
 function buildAllWalls(t) {
-  const wallMat = new THREE.MeshStandardMaterial({
+  // Two materials: lobby-facing (cream) and series-room-facing (dark).
+  // We build BoxGeometry walls with multi-material face arrays so that one
+  // wall can present cream on the lobby face and dark on the series face.
+  // Materials are stored on a global so applyTheme can update them in place.
+  const lobbyWallMat = new THREE.MeshStandardMaterial({
     color: t.wall,
     roughness: 0.92,
     metalness: 0.0,
   });
+  const seriesWallMat = new THREE.MeshStandardMaterial({
+    color: t.wallSeries,
+    roughness: 0.95,
+    metalness: 0.0,
+  });
+  wallMeshes._lobbyMat = lobbyWallMat;
+  wallMeshes._seriesMat = seriesWallMat;
 
   // Compute all unique wall segments. Each wall is described by:
   //   - axis: 'x' (vertical wall, runs along z) or 'z' (horizontal, runs along x)
@@ -1562,15 +1609,45 @@ function buildAllWalls(t) {
     addWall('x', xMax, zMin, zMax, eArches);
   }
 
-  // Build geometry for each unique wall
+  // Build geometry for each unique wall — pass both lobby and series materials
+  // so each segment can determine which face uses which (based on which room
+  // borders the segment on each side of the wall plane).
   for (const w of walls) {
-    buildWallSegments(w, wallMat);
+    buildWallSegments(w, lobbyWallMat, seriesWallMat);
   }
 }
 
+// Determine which room is bordering a wall at a given along-axis position,
+// on a given side of the wall ('+': along axis positive direction,
+// '-': along axis negative direction). Returns the room object or null.
+function roomBorderingWall(axis, at, alongCoord, side) {
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    const xMin = r.cx - r.w/2, xMax = r.cx + r.w/2;
+    const zMin = r.cz - r.d/2, zMax = r.cz + r.d/2;
+    if (axis === 'z') {
+      // Wall plane is xy at z=at; alongCoord is x. Room's interior touches
+      // this plane if its zMin === at (room is on +z side) or zMax === at
+      // (room is on -z side). Room must overlap in x at the alongCoord.
+      if (alongCoord < xMin - 0.05 || alongCoord > xMax + 0.05) continue;
+      if (side === '+' && Math.abs(zMin - at) < 0.05) return r;
+      if (side === '-' && Math.abs(zMax - at) < 0.05) return r;
+    } else {
+      // axis === 'x'. Wall plane is yz at x=at; alongCoord is z.
+      if (alongCoord < zMin - 0.05 || alongCoord > zMax + 0.05) continue;
+      if (side === '+' && Math.abs(xMin - at) < 0.05) return r;
+      if (side === '-' && Math.abs(xMax - at) < 0.05) return r;
+    }
+  }
+  return null;
+}
+
 // For a wall with possibly multiple archway cuts, build the wall as a series
-// of box-shaped segments around the cuts (left, right, top lintels, etc.)
-function buildWallSegments(wall, mat) {
+// of box-shaped segments around the cuts (left, right, top lintels, etc.).
+// Each segment determines its OWN materials based on which rooms border
+// each face — so a shared wall can have cream on the lobby side and dark
+// on the series-room side simultaneously.
+function buildWallSegments(wall, lobbyMat, seriesMat) {
   const { axis, at, from, to, archways } = wall;
   const length = to - from;
   if (length < 0.01) return;
@@ -1584,25 +1661,43 @@ function buildWallSegments(wall, mat) {
     }))
     .sort((x, y) => x.from - y.from);
 
+  // For a given segment range, look up which room (if any) is on each side
+  // of the wall plane and pick the corresponding material. Default to
+  // lobbyMat for outside-the-gallery surfaces (they're never visible anyway).
+  function matsForSegment(segFrom, segTo) {
+    const mid = (segFrom + segTo) / 2;
+    const roomPos = roomBorderingWall(axis, at, mid, '+');
+    const roomNeg = roomBorderingWall(axis, at, mid, '-');
+    const matPos = (roomPos && roomPos.id !== 'lobby') ? seriesMat : lobbyMat;
+    const matNeg = (roomNeg && roomNeg.id !== 'lobby') ? seriesMat : lobbyMat;
+    return [matPos, matNeg];
+  }
+
   // Build solid wall segments (between cuts)
   let cursor = from;
   for (const cut of cuts) {
     if (cut.from > cursor + 0.01) {
-      // Solid segment from cursor to cut.from
-      addWallBox(axis, at, cursor, cut.from, 0, LOBBY_H, mat);
+      const [matPos, matNeg] = matsForSegment(cursor, cut.from);
+      addWallBox(axis, at, cursor, cut.from, 0, LOBBY_H, matPos, matNeg);
     }
     // Lintel above the cut (from cut.from to cut.to, from ARCH_HEIGHT to LOBBY_H)
-    addWallBox(axis, at, cut.from, cut.to, ARCH_HEIGHT, LOBBY_H, mat);
+    const [lintMatPos, lintMatNeg] = matsForSegment(cut.from, cut.to);
+    addWallBox(axis, at, cut.from, cut.to, ARCH_HEIGHT, LOBBY_H, lintMatPos, lintMatNeg);
     cursor = cut.to;
   }
   if (cursor < to - 0.01) {
-    addWallBox(axis, at, cursor, to, 0, LOBBY_H, mat);
+    const [matPos, matNeg] = matsForSegment(cursor, to);
+    addWallBox(axis, at, cursor, to, 0, LOBBY_H, matPos, matNeg);
   }
 }
 
-// Add a single box-shaped wall segment. axis='z' = wall runs along x (horizontal),
-// axis='x' = wall runs along z (vertical from above).
-function addWallBox(axis, at, alongFrom, alongTo, yFrom, yTo, mat) {
+// Add a single box-shaped wall segment using multi-material BoxGeometry.
+// matPos = material for the +axis-direction face (e.g., +z for axis='z' walls).
+// matNeg = material for the -axis-direction face.
+// Other 4 faces (edges) use matPos as a sensible default — they're rarely
+// visible (covered by adjacent walls or hidden in archway openings, where
+// the wood casing pilasters mostly cover them).
+function addWallBox(axis, at, alongFrom, alongTo, yFrom, yTo, matPos, matNeg) {
   const alongLength = alongTo - alongFrom;
   if (alongLength < 0.005) return;
   const yLength = yTo - yFrom;
@@ -1610,14 +1705,20 @@ function addWallBox(axis, at, alongFrom, alongTo, yFrom, yTo, mat) {
 
   let geo, pos;
   if (axis === 'z') {
-    // Wall runs along x; box dims: alongLength × yLength × WALL_THICKNESS
+    // Wall runs along x; box dims: alongLength × yLength × WALL_THICKNESS.
+    // BoxGeometry face indices: 0=+x, 1=-x, 2=+y, 3=-y, 4=+z, 5=-z.
+    // Visible faces are +z (face 4) and -z (face 5).
     geo = new THREE.BoxGeometry(alongLength, yLength, WALL_THICKNESS);
     pos = [(alongFrom + alongTo) / 2, (yFrom + yTo) / 2, at];
+    var materials = [matPos, matPos, matPos, matPos, matPos, matNeg];
   } else {
+    // axis === 'x'. Wall runs along z; box dims: WALL_THICKNESS × yLength × alongLength.
+    // Visible faces are +x (face 0) and -x (face 1).
     geo = new THREE.BoxGeometry(WALL_THICKNESS, yLength, alongLength);
     pos = [at, (yFrom + yTo) / 2, (alongFrom + alongTo) / 2];
+    var materials = [matPos, matNeg, matPos, matPos, matPos, matPos];
   }
-  const m = new THREE.Mesh(geo, mat);
+  const m = new THREE.Mesh(geo, materials);
   m.position.set(...pos);
   m.userData.isWall = true;
   m.userData.axis = axis;
@@ -2770,24 +2871,26 @@ function applyTheme() {
   scene.fog.color.setHex(t.fog.color);
   scene.fog.density = t.fog.density;
 
-  // Walls
-  for (const w of wallMeshes) {
-    w.material.color.setHex(t.wall);
+  // Walls — update both lobby-side and series-side materials in place
+  if (wallMeshes._lobbyMat) wallMeshes._lobbyMat.color.setHex(t.wall);
+  if (wallMeshes._seriesMat) wallMeshes._seriesMat.color.setHex(t.wallSeries);
+  // (Per-mesh material assignments were set at build time and don't change
+  // on theme swap — only the colors of the two shared materials change.)
+
+  // Floors — regenerate wood plank textures for both lobby and series rooms
+  if (floorMeshes._lobbyMat) {
+    if (floorMeshes._lobbyMat.map) floorMeshes._lobbyMat.map.dispose();
+    floorMeshes._lobbyMat.map = makeWoodFloorTexture(t.floor);
+    floorMeshes._lobbyMat.needsUpdate = true;
   }
-  // Floors — regenerate wood plank texture for the theme's floor color
-  if (floorMeshes._material) {
-    if (floorMeshes._material.map) floorMeshes._material.map.dispose();
-    floorMeshes._material.map = makeWoodFloorTexture(t.floor);
-    floorMeshes._material.needsUpdate = true;
-  } else {
-    for (const f of floorMeshes) {
-      f.material.color.setHex(t.floor);
-    }
+  if (floorMeshes._seriesMat) {
+    if (floorMeshes._seriesMat.map) floorMeshes._seriesMat.map.dispose();
+    floorMeshes._seriesMat.map = makeWoodFloorTexture(t.floorSeries);
+    floorMeshes._seriesMat.needsUpdate = true;
   }
   // Ceilings
-  for (const c of ceilingMeshes) {
-    c.material.color.setHex(t.ceiling);
-  }
+  if (ceilingMeshes._lobbyMat) ceilingMeshes._lobbyMat.color.setHex(t.ceiling);
+  if (ceilingMeshes._seriesMat) ceilingMeshes._seriesMat.color.setHex(t.ceilingSeries);
   // Architectural trim — regenerate wood texture for new theme
   for (const trimMat of trimMeshes) {
     if (trimMat.map) trimMat.map.dispose();
