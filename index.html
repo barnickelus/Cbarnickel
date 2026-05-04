@@ -811,12 +811,24 @@ body { overscroll-behavior: none; }
   <button class="weapon-btn active" data-weapon="soup" title="Soup can">🥫</button>
   <button class="weapon-btn" data-weapon="gun" title="Golden gun">🔫</button>
   <button class="weapon-btn" data-weapon="lighter" title="Lighter">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="7" y="11" width="10" height="10" rx="1" fill="rgba(255,255,255,0.05)"/>
-      <line x1="7" y1="13.5" x2="17" y2="13.5"/>
-      <path d="M9 11 L9 7 L15 7 L15 11"/>
-      <line x1="12" y1="11" x2="12" y2="9.5"/>
-      <path d="M12 8 C 10 6, 11 4, 12 2 C 13 4, 14 6, 12 8 Z" fill="rgba(255,180,80,0.55)"/>
+    <!-- Colorful lighter: yellow body, silver fork, orange-yellow flame -->
+    <svg viewBox="0 0 24 24" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Body: rounded yellow rectangle -->
+      <rect x="6.5" y="11.5" width="11" height="10" rx="1.2" fill="#e8b423" stroke="#7a5f10"/>
+      <!-- Subtle inner highlight on body -->
+      <rect x="7.4" y="12.2" width="2.2" height="8.4" rx="0.6" fill="#fbe07a" stroke="none"/>
+      <!-- Top metal band -->
+      <rect x="6.5" y="11" width="11" height="1.7" rx="0.4" fill="#cfcdc7" stroke="#5a564f"/>
+      <!-- Fork -->
+      <path d="M9 11 L9 7.5 L11 7.5 L11 11 M13 11 L13 7.5 L15 7.5 L15 11" fill="#a8a39a" stroke="#4a463f"/>
+      <!-- Wick -->
+      <line x1="12" y1="11" x2="12" y2="8.5" stroke="#3a2818" stroke-width="0.6"/>
+      <!-- Flame: orange-yellow teardrop with red base -->
+      <path d="M12 8.5 C 10.4 7, 11 4.8, 12 2.2 C 13 4.8, 13.6 7, 12 8.5 Z"
+            fill="#ffb347" stroke="#d96a1a" stroke-width="0.5"/>
+      <!-- Inner flame highlight -->
+      <path d="M12 7 C 11.4 6, 11.7 4.7, 12 3.4 C 12.3 4.7, 12.6 6, 12 7 Z"
+            fill="#fff3b0" stroke="none"/>
     </svg>
   </button>
   <div class="weapon-divider"></div>
@@ -1006,6 +1018,8 @@ const THEMES = {
     bg: 0x0a0908,
     wall: 0x2a221d,             // lighter warm brown — structure reads clearly
     wallStrong: 0x352a22,       // edges/accent: lighter still, gives definition
+    trim: 0x8a5a2b,             // warm wood-tone for archway pilasters & baseboard
+    trimDark: 0x4a2e16,         // shadow side / inset of trim
     floor: 0x1a1410,
     ceiling: 0x0a0808,
     ambient: { color: 0xfff6e0, intensity: 0.55 },   // was 0.32 — lifted considerably
@@ -1024,6 +1038,8 @@ const THEMES = {
     bg: 0xefe9dc,
     wall: 0xeae3d3,
     wallStrong: 0xd4cdbe,
+    trim: 0xc89a5e,             // honey-oak wood, picks up the IMG_8170 vibe
+    trimDark: 0x8a6332,
     floor: 0x9d968a,
     ceiling: 0xece6db,
     ambient: { color: 0xffffff, intensity: 0.55 },
@@ -1161,6 +1177,9 @@ function buildGallery() {
 
   // Build walls — adjacent rooms share walls (only one mesh per shared boundary)
   buildAllWalls(t);
+
+  // Wood-tone pilasters around archways + baseboards (IMG_8170 inspiration)
+  buildArchitecturalTrim(t);
 
   // Add the C.Barnickel banner above the central arch
   buildLobbyTitle();
@@ -1349,6 +1368,171 @@ function addWallBox(axis, at, alongFrom, alongTo, yFrom, yTo, mat) {
   m.userData.at = at;
   scene.add(m);
   wallMeshes.push(m);
+}
+
+/* ─── Architectural trim ─── */
+// IMG_8170-inspired wood-tone accents:
+//   - Vertical pilasters on each side of every archway (floor-to-ceiling) +
+//     a horizontal lintel cap above the arch
+//   - Baseboard running along the floor of every room
+//
+// All trim shares one wood-grain MeshStandardMaterial (warm, slightly glossy)
+// so theme swaps + lighting changes affect all of it uniformly.
+const trimMeshes = [];
+function buildArchitecturalTrim(t) {
+  const trimMat = new THREE.MeshStandardMaterial({
+    map: makeWoodTexture(t.trim, t.trimDark),
+    roughness: 0.55,
+    metalness: 0.05,
+  });
+  trimMeshes.push(trimMat);
+
+  const PILASTER_W = 0.18;        // width (along the wall)
+  const PILASTER_DEPTH = 0.08;    // protrusion from wall
+  const PILASTER_INSET = 0.02;    // horizontal inset from arch edge
+  const BASEBOARD_H = 0.16;       // height of baseboard
+  const BASEBOARD_DEPTH = 0.04;   // protrusion from wall
+  const LINTEL_THK = 0.22;        // thickness of horizontal cap above arch
+
+  // Track which (axis,at) wall planes already have pilasters/baseboards on
+  // a given side, so we only build trim ONCE per arch (not duplicate where
+  // two rooms share a wall — both lobby and series room contribute the same
+  // arch).
+  const seenArches = new Set();
+
+  // Pilasters around each archway (lobby owns all arches, but series rooms
+  // also describe the same opening — use the lobby's arches and the room
+  // they connect to to position trim on BOTH sides of the wall plane).
+  const lobby = ROOMS.lobby;
+  for (const arch of lobby.archways) {
+    const targetRoom = ROOMS[arch.sid];
+    if (!targetRoom) continue;
+    // Determine wall plane in world coords
+    let axis, at, normalDir;
+    if (arch.dir === 'north') { axis = 'z'; at = lobby.cz - lobby.d/2; normalDir = -1; }
+    else if (arch.dir === 'south') { axis = 'z'; at = lobby.cz + lobby.d/2; normalDir = 1; }
+    else if (arch.dir === 'east')  { axis = 'x'; at = lobby.cx + lobby.w/2; normalDir = 1; }
+    else { axis = 'x'; at = lobby.cx - lobby.w/2; normalDir = -1; }
+    const key = axis + ':' + at.toFixed(2) + ':' + arch.worldX.toFixed(2);
+    if (seenArches.has(key)) continue;
+    seenArches.add(key);
+
+    const halfArch = ARCH_WIDTH / 2;
+    const innerEdge = halfArch + PILASTER_INSET;
+    // Pilasters stop at arch top so they don't overlap the lintel above.
+    const pilasterTop = ARCH_HEIGHT;
+    const pilasterY = pilasterTop / 2;
+    const pilasterH = pilasterTop;
+
+    const alongCenter = (axis === 'z') ? arch.worldX : arch.worldZ;
+
+    // Two pilasters per side, on each face of the wall (4 total per arch)
+    for (const sideSign of [-1, 1]) {
+      const along = alongCenter + sideSign * (innerEdge + PILASTER_W / 2);
+      for (const protrudeDir of [-normalDir, normalDir]) {
+        let pos, geo;
+        if (axis === 'z') {
+          geo = new THREE.BoxGeometry(PILASTER_W, pilasterH, PILASTER_DEPTH);
+          pos = [along, pilasterY,
+                 at + protrudeDir * (PILASTER_DEPTH/2 + WALL_THICKNESS/2)];
+        } else {
+          geo = new THREE.BoxGeometry(PILASTER_DEPTH, pilasterH, PILASTER_W);
+          pos = [at + protrudeDir * (PILASTER_DEPTH/2 + WALL_THICKNESS/2),
+                 pilasterY, along];
+        }
+        const m = new THREE.Mesh(geo, trimMat);
+        m.position.set(...pos);
+        scene.add(m);
+      }
+    }
+
+    // Lintel cap above the arch — sits ON TOP of the pilasters, spanning
+    // between their inner edges (no overlap with pilaster column geometry).
+    for (const protrudeDir of [-normalDir, normalDir]) {
+      const lintelLen = ARCH_WIDTH + 2 * (PILASTER_INSET + PILASTER_W);
+      const lintelY = ARCH_HEIGHT + LINTEL_THK / 2;
+      let pos, geo;
+      if (axis === 'z') {
+        geo = new THREE.BoxGeometry(lintelLen, LINTEL_THK, PILASTER_DEPTH);
+        pos = [alongCenter, lintelY,
+               at + protrudeDir * (PILASTER_DEPTH/2 + WALL_THICKNESS/2)];
+      } else {
+        geo = new THREE.BoxGeometry(PILASTER_DEPTH, LINTEL_THK, lintelLen);
+        pos = [at + protrudeDir * (PILASTER_DEPTH/2 + WALL_THICKNESS/2),
+               lintelY, alongCenter];
+      }
+      const m = new THREE.Mesh(geo, trimMat);
+      m.position.set(...pos);
+      scene.add(m);
+    }
+  }
+
+  // Baseboards along the floor of every room (lobby + series rooms)
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    const xMin = r.cx - r.w/2, xMax = r.cx + r.w/2;
+    const zMin = r.cz - r.d/2, zMax = r.cz + r.d/2;
+    // North/south baseboards (run along x)
+    for (const zPos of [zMin, zMax]) {
+      const sign = (zPos === zMin) ? 1 : -1;   // protrudes INTO the room
+      const geo = new THREE.BoxGeometry(r.w, BASEBOARD_H, BASEBOARD_DEPTH);
+      const m = new THREE.Mesh(geo, trimMat);
+      m.position.set(r.cx, BASEBOARD_H / 2, zPos + sign * BASEBOARD_DEPTH / 2);
+      scene.add(m);
+    }
+    // East/west baseboards (run along z)
+    for (const xPos of [xMin, xMax]) {
+      const sign = (xPos === xMin) ? 1 : -1;
+      const geo = new THREE.BoxGeometry(BASEBOARD_DEPTH, BASEBOARD_H, r.d);
+      const m = new THREE.Mesh(geo, trimMat);
+      m.position.set(xPos + sign * BASEBOARD_DEPTH / 2, BASEBOARD_H / 2, r.cz);
+      scene.add(m);
+    }
+  }
+}
+
+// Vertical wood-grain texture for trim. Procedurally drawn — bands of warm
+// tone with slight horizontal variation for grain feel.
+function makeWoodTexture(lightHex, darkHex) {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 256;
+  const ctx = c.getContext('2d');
+  // Convert hex colors to RGB so we can shade
+  const lr = (lightHex >> 16) & 0xff, lg = (lightHex >> 8) & 0xff, lb = lightHex & 0xff;
+  const dr = (darkHex >> 16) & 0xff,  dg = (darkHex >> 8) & 0xff,  db = darkHex & 0xff;
+  // Base fill — gradient from dark left edge to light right edge for slight depth
+  const grad = ctx.createLinearGradient(0, 0, 64, 0);
+  grad.addColorStop(0,    'rgb(' + dr + ',' + dg + ',' + db + ')');
+  grad.addColorStop(0.5,  'rgb(' + lr + ',' + lg + ',' + lb + ')');
+  grad.addColorStop(1,    'rgb(' + dr + ',' + dg + ',' + db + ')');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 256);
+  // Vertical grain streaks
+  for (let i = 0; i < 36; i++) {
+    const x = Math.random() * 64;
+    const w = 0.4 + Math.random() * 1.2;
+    const a = 0.04 + Math.random() * 0.13;
+    ctx.fillStyle = (Math.random() > 0.5)
+      ? 'rgba(' + Math.max(0, dr - 18) + ',' + Math.max(0, dg - 14) + ',' + Math.max(0, db - 10) + ',' + a + ')'
+      : 'rgba(' + Math.min(255, lr + 18) + ',' + Math.min(255, lg + 14) + ',' + Math.min(255, lb + 8) + ',' + (a * 0.6) + ')';
+    ctx.fillRect(x, 0, w, 256);
+  }
+  // Subtle horizontal nodes (knots / variations)
+  for (let i = 0; i < 6; i++) {
+    const y = Math.random() * 256;
+    const r = 6 + Math.random() * 14;
+    const cx = Math.random() * 64;
+    const g2 = ctx.createRadialGradient(cx, y, 0, cx, y, r);
+    g2.addColorStop(0, 'rgba(' + Math.max(0, dr - 10) + ',' + Math.max(0, dg - 8) + ',' + Math.max(0, db - 6) + ',0.45)');
+    g2.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g2;
+    ctx.fillRect(0, 0, 64, 256);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, 3);   // tile the grain vertically
+  return tex;
 }
 
 /* ─── Lobby title (C.Barnickel banner) ─── */
@@ -2195,6 +2379,12 @@ function applyTheme() {
   for (const c of ceilingMeshes) {
     c.material.color.setHex(t.ceiling);
   }
+  // Architectural trim — regenerate wood texture for new theme
+  for (const trimMat of trimMeshes) {
+    if (trimMat.map) trimMat.map.dispose();
+    trimMat.map = makeWoodTexture(t.trim, t.trimDark);
+    trimMat.needsUpdate = true;
+  }
   // Track bars
   for (const b of lightingRefs.trackBars) {
     b.material.color.setHex(t.trackBar);
@@ -2246,13 +2436,29 @@ function setLightingMul(mul) {
 /* ─── 11. Destruction mode ─── */
 // Audio context — must be created/resumed during a user gesture for iOS Safari
 let _audioCtx = null;
+let _audioUnlocked = false;
 function ensureAudio() {
   if (!_audioCtx) {
     try {
       _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     } catch (e) { return null; }
   }
-  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  if (_audioCtx.state === 'suspended') {
+    _audioCtx.resume().catch(() => {});
+  }
+  // iOS Safari trick: play a silent buffer the first time we have a gesture,
+  // which "unlocks" subsequent audio playback. Without this, the AudioContext
+  // can be in 'running' state but still output silence.
+  if (!_audioUnlocked) {
+    try {
+      const buf = _audioCtx.createBuffer(1, 1, 22050);
+      const src = _audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(_audioCtx.destination);
+      if (src.start) src.start(0); else src.noteOn(0);
+      _audioUnlocked = true;
+    } catch (e) { /* ignore */ }
+  }
   return _audioCtx;
 }
 
