@@ -271,6 +271,8 @@ position: fixed;
 top: 70px; right: 28px;
 z-index: 60;
 width: 280px;
+max-height: calc(100vh - 100px);
+overflow-y: auto;
 background: rgba(15, 12, 10, 0.96);
 border: 1px solid var(–ink-faint);
 backdrop-filter: blur(12px);
@@ -1096,6 +1098,23 @@ padding-bottom: 1px;
       <button class="nav-btn" data-nav="classic">Classic</button>
     </div>
   </div>
+  <div class="row divider">
+    <label>Frame style</label>
+    <div class="nav-grid">
+      <button class="nav-btn active" data-frame-style="minimal">Minimal</button>
+      <button class="nav-btn" data-frame-style="ornate">Ornate</button>
+      <button class="nav-btn" data-frame-style="gothic">Gothic</button>
+    </div>
+  </div>
+  <div class="row">
+    <label>Frame color</label>
+    <div class="nav-grid">
+      <button class="nav-btn active" data-frame-color="auto">Auto</button>
+      <button class="nav-btn" data-frame-color="black">Black</button>
+      <button class="nav-btn" data-frame-color="white">White</button>
+      <button class="nav-btn" data-frame-color="gilt">Gilt</button>
+    </div>
+  </div>
   <div class="row" style="margin-top: 14px;">
     <button class="ghost-btn" id="show-tutorial">How to navigate ↗</button>
   </div>
@@ -1263,6 +1282,7 @@ const ROOMS = {};
 let currentRoomId = 'lobby';
 
 const paintingMeshes = [];
+const paintingFrames = [];   // Group per painting; rebuilt when frame style/color changes
 const wallMeshes = [];
 const floorMeshes = [];
 const ceilingMeshes = [];
@@ -1271,6 +1291,12 @@ const seriesLabels = [];
 
 let theme = 'dark';
 let lightingMul = 1.0;
+// Frame settings — persisted to localStorage. Style: minimal | ornate | gothic.
+// Color: auto (theme-aware) | black | white | gilt.
+const frameSettings = {
+  style: localStorage.getItem('frameStyle') || 'minimal',
+  color: localStorage.getItem('frameColor') || 'auto',
+};
 
 const lightingRefs = {
   ambient: null,
@@ -1449,6 +1475,9 @@ function initScene() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(T().rendererClear, 1);
+  // Subtle shadows — frames will cast soft shadows on the wall behind them
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(T().fog.color, T().fog.density);
@@ -1821,6 +1850,7 @@ function addWallBox(axis, at, alongFrom, alongTo, yFrom, yTo, matPos, matNeg) {
   m.userData.isWall = true;
   m.userData.axis = axis;
   m.userData.at = at;
+  m.receiveShadow = true;
   scene.add(m);
   wallMeshes.push(m);
 }
@@ -2671,6 +2701,270 @@ function placeOnWall(room, dir, list) {
   }
 }
 
+/* ─── Frame factory ─── */
+// Returns the active frame's color hex based on theme + room + user override.
+// User override always wins; otherwise we pick a theme-appropriate default.
+function getFrameColor(isSeriesRoom) {
+  switch (frameSettings.color) {
+    case 'black': return 0x141210;
+    case 'white': return 0xf2efe6;
+    case 'gilt':  return 0x8a6438;
+    case 'auto':
+    default:
+      if (theme === 'dark') {
+        // Warm gilt for dark series rooms, dark walnut for the lobby
+        return isSeriesRoom ? 0x8a6438 : 0x2a1810;
+      } else {
+        // Crisp black on white walls
+        return 0x141210;
+      }
+  }
+}
+
+function getFrameMaterial(isSeriesRoom) {
+  const color = getFrameColor(isSeriesRoom);
+  // Gilt finish gets some metalness; black/white are matte.
+  const isGilt = (frameSettings.color === 'gilt' ||
+    (frameSettings.color === 'auto' && theme === 'dark' && isSeriesRoom));
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: isGilt ? 0.45 : 0.7,
+    metalness: isGilt ? 0.4 : 0.05,
+  });
+}
+
+// Master frame builder — returns a Group whose origin is at the painting
+// CENTER on the wall surface. The painting plane will be added by the
+// caller, positioned at z = frameDepth + small offset along the local +Z
+// (which becomes the outward normal after rotation). The group's local +Z
+// always faces OUT of the wall.
+function buildFrame(pW, pH, isSeriesRoom) {
+  const group = new THREE.Group();
+  const mat = getFrameMaterial(isSeriesRoom);
+  group.userData.frameMat = mat;
+
+  if (frameSettings.style === 'gothic') {
+    buildGothicFrame(group, pW, pH, mat);
+    group.userData.frameDepth = 0.06;
+  } else if (frameSettings.style === 'ornate') {
+    buildOrnateFrame(group, pW, pH, mat);
+    group.userData.frameDepth = 0.05;
+  } else {
+    buildMinimalFrame(group, pW, pH, mat);
+    group.userData.frameDepth = 0.045;
+  }
+  // Enable shadow casting on every mesh in the frame
+  group.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = false;
+    }
+  });
+  return group;
+}
+
+// Style 1: MINIMAL — a clean rectangular box, no ornaments.
+function buildMinimalFrame(group, pW, pH, mat) {
+  const frameThk = Math.max(0.07, Math.min(0.13, pH * 0.08));
+  const frameDepth = 0.045;
+  const geo = new THREE.BoxGeometry(pW + frameThk * 2, pH + frameThk * 2, frameDepth);
+  const mesh = new THREE.Mesh(geo, mat);
+  // Push out so the back face sits flush with the wall surface
+  mesh.position.z = frameDepth / 2;
+  group.add(mesh);
+}
+
+// Style 2: ORNATE — rectangular base + 4 fleur ornaments at midpoints of
+// top, bottom, left, right edges (matching IMG_8337/IMG_8336 references).
+function buildOrnateFrame(group, pW, pH, mat) {
+  const frameThk = Math.max(0.08, Math.min(0.15, pH * 0.09));
+  const frameDepth = 0.05;
+  const baseW = pW + frameThk * 2;
+  const baseH = pH + frameThk * 2;
+  // Base rectangle
+  const baseGeo = new THREE.BoxGeometry(baseW, baseH, frameDepth);
+  const base = new THREE.Mesh(baseGeo, mat);
+  base.position.z = frameDepth / 2;
+  group.add(base);
+  // Ornament size scales with painting size
+  const ornSize = Math.min(pW, pH) * 0.22;
+  // Top ornament — points UP, beyond the frame's top edge
+  const topOrn = makeFleurOrnament(ornSize, ornSize * 1.05, frameDepth, mat);
+  topOrn.position.set(0, baseH / 2 + ornSize * 0.45, frameDepth / 2);
+  group.add(topOrn);
+  // Bottom ornament — points DOWN, mirrored
+  const botOrn = makeFleurOrnament(ornSize, ornSize * 1.05, frameDepth, mat);
+  botOrn.position.set(0, -baseH / 2 - ornSize * 0.45, frameDepth / 2);
+  botOrn.rotation.z = Math.PI;
+  group.add(botOrn);
+  // Left ornament — points LEFT
+  const leftOrn = makeFleurOrnament(ornSize * 0.9, ornSize * 0.95, frameDepth, mat);
+  leftOrn.position.set(-baseW / 2 - ornSize * 0.4, 0, frameDepth / 2);
+  leftOrn.rotation.z = Math.PI / 2;
+  group.add(leftOrn);
+  // Right ornament — points RIGHT
+  const rightOrn = makeFleurOrnament(ornSize * 0.9, ornSize * 0.95, frameDepth, mat);
+  rightOrn.position.set(baseW / 2 + ornSize * 0.4, 0, frameDepth / 2);
+  rightOrn.rotation.z = -Math.PI / 2;
+  group.add(rightOrn);
+}
+
+// A stylized fleur ornament — symmetric outline with central spear and
+// curling side scrolls. Built as an ExtrudeGeometry from a 2D shape.
+function makeFleurOrnament(width, height, depth, mat) {
+  const shape = new THREE.Shape();
+  const w = width, h = height;
+  // Build the fleur as a single closed shape, traversing counterclockwise:
+  //   bottom-center → left-arc out → up to top-center spear → down right-arc → close
+  shape.moveTo(0, -h * 0.45);
+  // Left side curl
+  shape.bezierCurveTo(
+    -w * 0.2, -h * 0.35,
+    -w * 0.55, -h * 0.18,
+    -w * 0.5, h * 0.0
+  );
+  shape.bezierCurveTo(
+    -w * 0.45, h * 0.18,
+    -w * 0.18, h * 0.05,
+    -w * 0.12, h * 0.18
+  );
+  // Up to spear tip
+  shape.bezierCurveTo(
+    -w * 0.15, h * 0.3,
+    -w * 0.05, h * 0.42,
+    0, h * 0.5
+  );
+  // Mirror — down right side
+  shape.bezierCurveTo(
+    w * 0.05, h * 0.42,
+    w * 0.15, h * 0.3,
+    w * 0.12, h * 0.18
+  );
+  shape.bezierCurveTo(
+    w * 0.18, h * 0.05,
+    w * 0.45, h * 0.18,
+    w * 0.5, 0
+  );
+  shape.bezierCurveTo(
+    w * 0.55, -h * 0.18,
+    w * 0.2, -h * 0.35,
+    0, -h * 0.45
+  );
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: depth * 1.1,
+    bevelEnabled: true,
+    bevelThickness: depth * 0.15,
+    bevelSize: depth * 0.1,
+    bevelSegments: 2,
+  });
+  // Center the extrusion in z
+  geo.translate(0, 0, -depth * 0.55);
+  return new THREE.Mesh(geo, mat);
+}
+
+// Style 3: GOTHIC — pointed-arch top instead of rectangular, with a
+// triangular peak rising above the painting opening, plus a slim finial
+// at the apex. Inspired by IMG_8340.
+function buildGothicFrame(group, pW, pH, mat) {
+  const frameThk = Math.max(0.08, Math.min(0.14, pH * 0.085));
+  const frameDepth = 0.06;
+  const baseW = pW + frameThk * 2;
+  const baseH = pH + frameThk * 2;
+  // Bottom rail and side rails (skip the top — it's replaced by the arch)
+  // Bottom rail
+  const bottomRail = new THREE.Mesh(
+    new THREE.BoxGeometry(baseW, frameThk, frameDepth), mat);
+  bottomRail.position.set(0, -pH / 2 - frameThk / 2, frameDepth / 2);
+  group.add(bottomRail);
+  // Side rails — full height
+  for (const sx of [-1, 1]) {
+    const sideRail = new THREE.Mesh(
+      new THREE.BoxGeometry(frameThk, baseH, frameDepth), mat);
+    sideRail.position.set(sx * (pW / 2 + frameThk / 2), 0, frameDepth / 2);
+    group.add(sideRail);
+  }
+  // Pointed arch top — built from an ExtrudeGeometry of a triangular shape
+  // that spans baseW wide and rises peakH above the painting top edge.
+  const peakH = pH * 0.42;
+  const archShape = new THREE.Shape();
+  archShape.moveTo(-baseW / 2, 0);
+  archShape.lineTo(-baseW / 2, frameThk);
+  archShape.lineTo(-pW / 2 - frameThk * 0.3, frameThk);
+  archShape.quadraticCurveTo(0, peakH * 1.2, pW / 2 + frameThk * 0.3, frameThk);
+  archShape.lineTo(baseW / 2, frameThk);
+  archShape.lineTo(baseW / 2, 0);
+  archShape.quadraticCurveTo(0, peakH, -baseW / 2, 0);
+  const archGeo = new THREE.ExtrudeGeometry(archShape, {
+    depth: frameDepth,
+    bevelEnabled: true,
+    bevelThickness: frameDepth * 0.1,
+    bevelSize: frameDepth * 0.06,
+    bevelSegments: 1,
+  });
+  archGeo.translate(0, pH / 2, 0);
+  const arch = new THREE.Mesh(archGeo, mat);
+  group.add(arch);
+  // Apex finial — a small spire on top of the arch
+  const finialH = pH * 0.18;
+  const finial = new THREE.Mesh(
+    new THREE.ConeGeometry(frameThk * 0.5, finialH, 6),
+    mat);
+  finial.position.set(0, pH / 2 + peakH * 1.05 + finialH / 2, frameDepth / 2);
+  group.add(finial);
+  // Side finials — smaller, at the upper corners
+  for (const sx of [-1, 1]) {
+    const sideFinial = new THREE.Mesh(
+      new THREE.ConeGeometry(frameThk * 0.35, finialH * 0.65, 6),
+      mat);
+    sideFinial.position.set(
+      sx * (pW / 2 + frameThk * 0.7),
+      pH / 2 + frameThk + finialH * 0.32,
+      frameDepth / 2
+    );
+    group.add(sideFinial);
+  }
+}
+
+/* Rebuild every frame in place (called when user changes style/color).
+   Disposes old meshes and replaces with new ones in the same Group. */
+function rebuildAllFrames() {
+  for (const fg of paintingFrames) {
+    // Dispose old children
+    while (fg.children.length) {
+      const c = fg.children[0];
+      if (c.geometry) c.geometry.dispose();
+      // Don't dispose material yet — we may share or just replace
+      fg.remove(c);
+    }
+    if (fg.userData.frameMat) fg.userData.frameMat.dispose();
+    // Rebuild
+    const newGroup = buildFrame(
+      fg.userData.paintingW,
+      fg.userData.paintingH,
+      fg.userData.isSeriesRoom
+    );
+    // Move children from newGroup into existing group (preserves position/rotation)
+    while (newGroup.children.length) {
+      fg.add(newGroup.children[0]);
+    }
+    fg.userData.frameMat = newGroup.userData.frameMat;
+    fg.userData.frameDepth = newGroup.userData.frameDepth;
+  }
+  // Reposition each painting plane to sit just in front of its (possibly
+  // resized) frame
+  for (const p of paintingMeshes) {
+    const u = p.userData;
+    if (u.frameGroup) {
+      const fd = u.frameGroup.userData.frameDepth;
+      p.position.set(
+        u.wallX + u.normalX * (WALL_THICKNESS / 2 + 0.012 + fd + 0.005),
+        u.yCenter,
+        u.wallZ + u.normalZ * (WALL_THICKNESS / 2 + 0.012 + fd + 0.005)
+      );
+    }
+  }
+}
+
 // Place a single painting on a specific wall of a room at a given lateral offset.
 function placePainting(art, dir, localCoord, room) {
   const xMin = room.cx - room.w/2, xMax = room.cx + room.w/2;
@@ -2710,39 +3004,31 @@ function placePainting(art, dir, localCoord, room) {
   if (yCenter + pH/2 > LOBBY_H - 0.5) yCenter = LOBBY_H - 0.5 - pH/2;
   if (yCenter - pH/2 < 0.4) yCenter = 0.4 + pH/2;
 
-  // Frame — a proper 3D box that catches light and reads against the wall.
-  // Color is theme-aware AND room-aware: in the dark series rooms we use a
-  // lighter wood/gilt tone so the frame is visible against the near-black
-  // walls; in the lobby (lit by ambient) and white mode, we use a darker
-  // tone for traditional gallery contrast.
+  // Frame — built per current frameSettings (style + color). Each painting
+  // owns a Group containing all frame parts so we can rebuild on the fly
+  // when the user changes settings without re-loading textures.
   const isSeriesRoom = (room.id !== 'lobby');
-  const frameThk = Math.max(0.07, Math.min(0.13, pH * 0.08));   // a bit beefier
-  const frameDepth = 0.045;   // 4.5cm out from the wall, gives shadows + dimension
-  let frameColor;
-  if (theme === 'dark') {
-    // Dark mode: warm gilt-bronze for series rooms (catches spotlights);
-    // dark walnut for lobby (against tan wallpaper)
-    frameColor = isSeriesRoom ? 0x8a6438 : 0x2a1810;
-  } else {
-    // White mode: thin minimalist black frame everywhere
-    frameColor = 0x1a1612;
-  }
-  const frameMat = new THREE.MeshStandardMaterial({
-    color: frameColor,
-    roughness: 0.55,
-    metalness: theme === 'dark' && isSeriesRoom ? 0.35 : 0.08,
-  });
-  const frameGeo = new THREE.BoxGeometry(pW + frameThk * 2, pH + frameThk * 2, frameDepth);
-  const frame = new THREE.Mesh(frameGeo, frameMat);
-  // Frame extends OUT from the wall (into the room) — back face flush with
-  // wall surface, front face frameDepth deep into room
-  frame.position.set(
-    px + normalX * (frameDepth / 2),
-    yCenter,
-    pz + normalZ * (frameDepth / 2)
-  );
-  frame.rotation.y = faceY;
-  scene.add(frame);
+  const frameGroup = buildFrame(pW, pH, isSeriesRoom);
+  // Position the frame group at the wall, oriented to face the room
+  frameGroup.position.set(px, yCenter, pz);
+  frameGroup.rotation.y = faceY;
+  // Tag for later rebuild
+  frameGroup.userData.isFrame = true;
+  frameGroup.userData.paintingW = pW;
+  frameGroup.userData.paintingH = pH;
+  frameGroup.userData.isSeriesRoom = isSeriesRoom;
+  frameGroup.userData.wallX = wallX;
+  frameGroup.userData.wallZ = wallZ;
+  frameGroup.userData.normalX = normalX;
+  frameGroup.userData.normalZ = normalZ;
+  frameGroup.userData.yCenter = yCenter;
+  frameGroup.userData.faceY = faceY;
+  scene.add(frameGroup);
+  paintingFrames.push(frameGroup);
+
+  // Frame DEPTH — the painting will sit just in front of the frame's outer face.
+  // The frame builder always sets userData.frameDepth on the group.
+  const frameDepth = frameGroup.userData.frameDepth;
 
   // Painting (texture loaded async)
   new THREE.TextureLoader().load(
@@ -2767,6 +3053,13 @@ function placePainting(art, dir, localCoord, room) {
       p.userData.artIndex = ARTWORKS.indexOf(art);
       p.userData.outwardNormal = { x: normalX, z: normalZ };
       p.userData.roomId = room.id;
+      // For rebuild: remember the frame group + wall position
+      p.userData.frameGroup = frameGroup;
+      p.userData.wallX = wallX;
+      p.userData.wallZ = wallZ;
+      p.userData.normalX = normalX;
+      p.userData.normalZ = normalZ;
+      p.userData.yCenter = yCenter;
       scene.add(p);
       paintingMeshes.push(p);
     },
@@ -2774,7 +3067,7 @@ function placePainting(art, dir, localCoord, room) {
     (err) => console.warn('Failed to load', art.file, err)
   );
 
-  // Spotlight per painting
+  // Spotlight per painting — also our shadow source
   const spotDist = Math.max(1.5, Math.min(2.8, room.h - HANG_HEIGHT));
   const spot = new THREE.SpotLight(
     T().spot.color,
@@ -2790,6 +3083,13 @@ function placePainting(art, dir, localCoord, room) {
     pz + normalZ * Math.min(2.0, room.d / 4),
   );
   spot.target.position.set(px, yCenter, pz);
+  // Shadow casting — keeps the visual subtle without tanking perf
+  spot.castShadow = true;
+  spot.shadow.mapSize.set(512, 512);
+  spot.shadow.camera.near = 0.5;
+  spot.shadow.camera.far = 8;
+  spot.shadow.bias = -0.0008;
+  spot.shadow.radius = 2;       // PCFSoftShadowMap blur factor
   scene.add(spot);
   scene.add(spot.target);
   lightingRefs.spots.push(spot);
@@ -2806,12 +3106,32 @@ function setNavMode(mode) {
   // Cancel any active tap-walk or pinch when switching modes
   tapWalkTarget = null;
   pinchActive = false;
-  // Update active button styling
-  document.querySelectorAll('.nav-btn').forEach(b => {
+  // Update active button styling — only the nav buttons (not frame buttons)
+  document.querySelectorAll('.nav-btn[data-nav]').forEach(b => {
     b.classList.toggle('active', b.dataset.nav === mode);
   });
   // Show a brief hint after switching
   showHintForCurrentMode(2500);
+}
+
+function setFrameStyle(style) {
+  if (!['minimal', 'ornate', 'gothic'].includes(style)) style = 'minimal';
+  frameSettings.style = style;
+  localStorage.setItem('frameStyle', style);
+  document.querySelectorAll('.nav-btn[data-frame-style]').forEach(b => {
+    b.classList.toggle('active', b.dataset.frameStyle === style);
+  });
+  rebuildAllFrames();
+}
+
+function setFrameColor(color) {
+  if (!['auto', 'black', 'white', 'gilt'].includes(color)) color = 'auto';
+  frameSettings.color = color;
+  localStorage.setItem('frameColor', color);
+  document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => {
+    b.classList.toggle('active', b.dataset.frameColor === color);
+  });
+  rebuildAllFrames();
 }
 
 // Get the appropriate "first interaction" hint for the current nav mode
@@ -3452,6 +3772,10 @@ function applyTheme() {
     lbl.mesh.material.map = tex;
     lbl.mesh.material.opacity = t.labelAlpha;
     lbl.mesh.material.needsUpdate = true;
+  }
+  // Frames may need to update color (when frameSettings.color === 'auto')
+  if (frameSettings.color === 'auto') {
+    rebuildAllFrames();
   }
 }
 
@@ -4405,9 +4729,26 @@ function wireUI() {
     setTheme(theme === 'dark' ? 'white' : 'dark');
   });
 
-  // Nav mode buttons
-  document.querySelectorAll('.nav-btn').forEach(b => {
+  // Nav mode buttons — only those with data-nav (other .nav-btn elements
+  // are repurposed for frame style + color)
+  document.querySelectorAll('.nav-btn[data-nav]').forEach(b => {
     b.addEventListener('click', () => setNavMode(b.dataset.nav));
+  });
+
+  // Frame style buttons
+  document.querySelectorAll('.nav-btn[data-frame-style]').forEach(b => {
+    b.addEventListener('click', () => setFrameStyle(b.dataset.frameStyle));
+  });
+  // Frame color buttons
+  document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => {
+    b.addEventListener('click', () => setFrameColor(b.dataset.frameColor));
+  });
+  // Apply persisted frame settings on load (visual state of buttons)
+  document.querySelectorAll('.nav-btn[data-frame-style]').forEach(b => {
+    b.classList.toggle('active', b.dataset.frameStyle === frameSettings.style);
+  });
+  document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => {
+    b.classList.toggle('active', b.dataset.frameColor === frameSettings.color);
   });
 
   // Tutorial
