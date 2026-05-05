@@ -882,33 +882,30 @@ font-family: var(–sans);
 .contact-form textarea {
 background: rgba(0, 0, 0, 0.45);
 border: 1px solid var(–ink-faint);
-color: var(–ink);
--webkit-text-fill-color: var(–ink);    /* iOS Safari needs this explicitly */
+color: #ffffff;
+-webkit-text-fill-color: #ffffff;       /* iOS Safari needs this explicitly */
 caret-color: var(–gold);
 padding: 12px 14px;
 font-family: var(–serif);
 font-size: 16px;
 font-weight: 300;
 transition: border-color 0.2s, background 0.2s;
-/* Prevent iOS from auto-styling the input with light-mode defaults */
 -webkit-appearance: none;
 appearance: none;
 border-radius: 0;
 }
 .contact-form input::placeholder,
 .contact-form textarea::placeholder {
-color: var(–ink-faint);
-opacity: 0.7;
+color: rgba(255, 255, 255, 0.45);
+opacity: 1;                             /* override Firefox default */
 }
-/* iOS / Chrome autofill — preserve dark background and light text instead of
-the browser’s default light-yellow autofill rendering */
 .contact-form input:-webkit-autofill,
 .contact-form textarea:-webkit-autofill,
 .contact-form input:-webkit-autofill:hover,
 .contact-form input:-webkit-autofill:focus,
 .contact-form textarea:-webkit-autofill:hover,
 .contact-form textarea:-webkit-autofill:focus {
--webkit-text-fill-color: var(–ink);
+-webkit-text-fill-color: #ffffff;
 caret-color: var(–gold);
 -webkit-box-shadow: 0 0 0 1000px rgba(20, 16, 12, 0.95) inset;
 transition: background-color 999999s ease-in-out 0s;
