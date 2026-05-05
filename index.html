@@ -1030,9 +1030,21 @@ padding-bottom: 1px;
       <button id="view-bio">Bio</button>
       <button id="view-contact">Contact</button>
     </div>
+    <button class="icon-btn" id="music-btn" aria-label="Toggle music" title="Toggle music">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 18V5l12-2v13"/>
+        <circle cx="6" cy="18" r="3"/>
+        <circle cx="18" cy="16" r="3"/>
+      </svg>
+    </button>
     <button class="icon-btn" id="settings-btn" aria-label="Settings">⚙</button>
   </div>
 </div>
+
+<!-- Background music — dark ambient track plays softly in lobby+series rooms.
+     Not autoplay (browsers block it); starts on first user gesture. -->
+
+<audio id="bg-music" src="dark-ambient-music-354475.mp3" loop preload="auto"></audio>
 
 <div class="bait" id="bait">
   <span class="bait-label">do not click here</span>
@@ -1475,9 +1487,11 @@ function initScene() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(T().rendererClear, 1);
-  // Subtle shadows — frames will cast soft shadows on the wall behind them
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Note: shadow maps were causing render failures on iOS Safari with 19+
+  // shadow-casting spotlights (one per painting). Disabled for stability.
+  // The frames still look great — they catch direct light from the spots
+  // and have visible self-shading from their 3D geometry.
+  renderer.shadowMap.enabled = false;
 
   scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(T().fog.color, T().fog.density);
@@ -3083,13 +3097,6 @@ function placePainting(art, dir, localCoord, room) {
     pz + normalZ * Math.min(2.0, room.d / 4),
   );
   spot.target.position.set(px, yCenter, pz);
-  // Shadow casting — keeps the visual subtle without tanking perf
-  spot.castShadow = true;
-  spot.shadow.mapSize.set(512, 512);
-  spot.shadow.camera.near = 0.5;
-  spot.shadow.camera.far = 8;
-  spot.shadow.bias = -0.0008;
-  spot.shadow.radius = 2;       // PCFSoftShadowMap blur factor
   scene.add(spot);
   scene.add(spot.target);
   lightingRefs.spots.push(spot);
@@ -4884,12 +4891,19 @@ function wireUI() {
     if (intro.active) endIntro();
   });
 
+  // Music toggle
+  const musicBtn = document.getElementById('music-btn');
+  if (musicBtn) {
+    musicBtn.addEventListener('click', toggleMusic);
+  }
+
   // Entry
   document.getElementById('enter-btn').addEventListener('click', enterGallery);
 }
 
 function enterGallery() {
   ensureAudio();   // critical: must call from user gesture for iOS
+  startBackgroundMusic();   // also a user gesture — autoplay rules require this
   const entry = document.getElementById('entry');
   entry.classList.add('fade');
   setTimeout(() => entry.style.display = 'none', 800);
@@ -4899,6 +4913,53 @@ function enterGallery() {
     document.getElementById('joy').classList.add('show');
   }
   startIntro();
+}
+
+/* ─── Background music ───
+   A soft dark-ambient track loops while the gallery is open. Browsers block
+   autoplay, so we kick it off on the first user gesture (entry click).
+   The user can toggle on/off via the music button in the top bar; choice
+   persists to localStorage. */
+let _musicStarted = false;
+function startBackgroundMusic() {
+  if (_musicStarted) return;
+  _musicStarted = true;
+  const audio = document.getElementById('bg-music');
+  if (!audio) return;
+  audio.volume = 0.35;
+  // Respect saved mute preference
+  const muted = localStorage.getItem('musicMuted') === 'true';
+  updateMusicButtonState(muted);
+  if (muted) return;
+  // Some browsers require .play() to be called inside the gesture handler;
+  // we are inside enterGallery's click-driven path so this should succeed
+  audio.play().catch(err => {
+    console.warn('Background music autoplay blocked:', err);
+  });
+}
+
+function toggleMusic() {
+  const audio = document.getElementById('bg-music');
+  if (!audio) return;
+  const willMute = !audio.paused && audio.currentTime > 0
+    ? true                          // currently playing → user wants to mute
+    : false;                        // currently paused → user wants to unmute
+  if (willMute) {
+    audio.pause();
+  } else {
+    audio.volume = 0.35;
+    audio.play().catch(() => {});
+  }
+  localStorage.setItem('musicMuted', willMute ? 'true' : 'false');
+  updateMusicButtonState(willMute);
+}
+
+function updateMusicButtonState(muted) {
+  const btn = document.getElementById('music-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', !muted);
+  btn.title = muted ? 'Music off — tap to play' : 'Music on — tap to mute';
+  btn.setAttribute('aria-label', btn.title);
 }
 
 /* ─── 13. Animate loop ─── */
