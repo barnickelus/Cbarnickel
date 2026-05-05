@@ -193,8 +193,7 @@
       "year": "",
       "series": "constructed-landscape",
       "description": "A small conceptual study — a tideline at dawn or dusk, the wet sand inlaid with glass marbles catching the last light."
-    }
-,
+    },
     {
       "file": "20-pilings.jpg",
       "title": "PIlings",
@@ -202,6 +201,15 @@
       "medium": "Oil on board",
       "year": "2015",
       "series": "constructed-landscape",
+      "description": ""
+    },
+    {
+      "file": "21-img_5047.jpg",
+      "title": "Red House",
+      "size": "8x10in",
+      "medium": "Oil on Panel",
+      "year": "2025",
+      "series": "plein-air",
       "description": ""
     }
   ]
