@@ -744,14 +744,52 @@ font-size: 12px;
 }
 
 /* ─── Bio page ─── */
-.bio-view {
+/* ─── Bio + Contact pages ───
+These overlay the gallery as modal panels. A dark scrim covers the whole
+viewport so the gallery behind doesn’t visually compete with the text.
+A floating close button (top right) dismisses back to gallery. */
+.bio-view, .contact-view {
 position: fixed; inset: 0; z-index: 30;
 display: none;
-background: var(–bg);
+/* Dark scrim — almost-opaque so the bright gallery doesn’t bleed through */
+background: rgba(8, 6, 4, 0.92);
 overflow-y: auto;
-padding: 110px 32px 80px;
+padding: 90px 32px 80px;
+-webkit-backdrop-filter: blur(6px);
+backdrop-filter: blur(6px);
 }
-.bio-view.show { display: block; }
+.bio-view.show, .contact-view.show { display: block; }
+
+/* Close button — appears on bio + contact views, fixed top-right */
+.overlay-close {
+position: fixed;
+top: 22px;
+right: 22px;
+width: 44px;
+height: 44px;
+border-radius: 50%;
+background: rgba(20, 16, 12, 0.85);
+border: 1px solid rgba(201, 169, 110, 0.35);
+color: var(–ink);
+cursor: pointer;
+z-index: 35;
+display: none;        /* shown only when bio/contact is open */
+align-items: center;
+justify-content: center;
+font-family: var(–serif);
+font-size: 22px;
+line-height: 1;
+transition: background 0.2s, border-color 0.2s, transform 0.2s;
+-webkit-tap-highlight-color: transparent;
+}
+.overlay-close.show { display: flex; }
+.overlay-close:hover {
+background: rgba(40, 32, 24, 0.95);
+border-color: var(–gold-dim);
+transform: scale(1.05);
+}
+.overlay-close svg { width: 18px; height: 18px; }
+
 .bio-content {
 max-width: 720px;
 margin: 0 auto;
@@ -790,15 +828,7 @@ color: var(–gold);
 font-weight: 400;
 }
 
-/* ─── Contact page ─── */
-.contact-view {
-position: fixed; inset: 0; z-index: 30;
-display: none;
-background: var(–bg);
-overflow-y: auto;
-padding: 110px 32px 80px;
-}
-.contact-view.show { display: block; }
+/* ─── Contact page (shared layout with bio-view defined above) ─── */
 .contact-content {
 max-width: 560px;
 margin: 0 auto;
@@ -1096,6 +1126,15 @@ padding-bottom: 1px;
   <div id="index-container"></div>
 </div>
 
+<!-- Close button — shown whenever bio-view OR contact-view is open. Shared. -->
+
+<button class="overlay-close" id="overlay-close" title="Close" aria-label="Close">
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <line x1="4" y1="4" x2="16" y2="16"/>
+    <line x1="16" y1="4" x2="4" y2="16"/>
+  </svg>
+</button>
+
 <div class="bio-view" id="bio-view">
   <div class="bio-content">
     <div class="ornament"></div>
@@ -1238,27 +1277,27 @@ let lastSnappedPainting = null;
 const intro = {
   active: false,
   startTime: 0,
-  duration: 7.5,
+  duration: 9.0,                    // longer = more deliberate, less rushed
   // 360° rotation that DELIBERATELY frames the entire gallery — banner,
   // arch labels, all four walls — instead of staring at the floor.
-  // Camera holds a moderate height (4.0m, above the arches' tops at 2.8m
-  // and below the banner at 4.6m) and rotates with near-level pitch so
-  // wall content stays in view. Yaw progresses monotonically from 0 →
-  // 2π to force a single full rotation. Final keyframe descends to
-  // spawn (1.65m) facing through the central arch.
+  // Catmull-Rom spline interpolation runs through these keyframes for
+  // C¹-continuous velocity (no jerks at boundaries). A quintic smoothstep
+  // is applied to the global time parameter so the start AND end of the
+  // entire animation feel gentle.
   //
-  // Position varies slightly per direction so each wall's content has
-  // good framing distance:
-  //   North (yaw=0):   z=+4 (near south wall, looking far at the banner)
-  //   East  (yaw=π/2): z=0 (centered, looking at east wall 9m away)
-  //   South (yaw=π):   z=-2 (north of center, looking at older-work arch)
-  //   West  (yaw=3π/2):z=0 (centered, looking at west wall 9m away)
-  //   End  (yaw=2π):   z=4.5 spawn
+  // Position varies per direction so each wall's content has good framing:
+  //   North (yaw=0):    z=+4 (near south wall, looking far at the banner)
+  //   East  (yaw=π/2):  z=0 (centered, looking at east wall)
+  //   South (yaw=π):    z=-2 (north of center, looking at older-work arch)
+  //   West  (yaw=3π/2): z=0 (centered, looking at west wall)
+  //   Pre-descent (yaw≈2π): z=+3 — tighten in toward spawn at altitude
+  //   End (yaw=2π):     z=4.5 spawn at standing height
   keyframes: [
     { t: 0.00, pos: { x: 0, y: 4.0, z:  4.0 }, yaw: 0,                pitch: -0.05 },
-    { t: 0.25, pos: { x: 0, y: 4.0, z:  0.0 }, yaw: Math.PI * 0.5,    pitch: -0.05 },
-    { t: 0.50, pos: { x: 0, y: 4.0, z: -2.0 }, yaw: Math.PI,          pitch: -0.05 },
-    { t: 0.75, pos: { x: 0, y: 4.0, z:  0.0 }, yaw: Math.PI * 1.5,    pitch: -0.05 },
+    { t: 0.22, pos: { x: 0, y: 4.0, z:  0.0 }, yaw: Math.PI * 0.5,    pitch: -0.05 },
+    { t: 0.45, pos: { x: 0, y: 4.0, z: -2.0 }, yaw: Math.PI,          pitch: -0.05 },
+    { t: 0.68, pos: { x: 0, y: 4.0, z:  0.0 }, yaw: Math.PI * 1.5,    pitch: -0.05 },
+    { t: 0.85, pos: { x: 0, y: 3.4, z:  3.0 }, yaw: Math.PI * 1.85,   pitch: -0.04 },
     { t: 1.00, pos: { x: 0, y: PLAYER_HEIGHT, z: 4.5 }, yaw: Math.PI * 2, pitch: 0 },
   ],
 };
@@ -1280,10 +1319,12 @@ const THEMES = {
     wallStrong: 0xa68a64,
     floor: 0x6b4520,            // rich warm wood (deeper than before)
     ceiling: 0x5a4836,          // warm muted brown ceiling (matches IMG_8312)
-    // Series rooms — DELIBERATELY DARK so paintings glow
-    wallSeries: 0x0e0a07,
-    floorSeries: 0x150e07,
-    ceilingSeries: 0x070504,
+    // Series rooms — DELIBERATELY DARK so paintings glow, but lifted just
+    // enough that walls are visible (frames cast subtle shadows; the gilt
+    // wood stands out)
+    wallSeries: 0x1f1812,
+    floorSeries: 0x1d150c,
+    ceilingSeries: 0x0e0a07,
     // Trim — dark walnut for arch frames + baseboards
     trim: 0x4a2f18,
     trimDark: 0x2a1a0c,
@@ -2643,18 +2684,37 @@ function placePainting(art, dir, localCoord, room) {
   if (yCenter + pH/2 > LOBBY_H - 0.5) yCenter = LOBBY_H - 0.5 - pH/2;
   if (yCenter - pH/2 < 0.4) yCenter = 0.4 + pH/2;
 
-  // Frame (slightly bigger black plane behind)
-  const frameThk = Math.max(0.05, Math.min(0.10, pH * 0.06));
+  // Frame — a proper 3D box that catches light and reads against the wall.
+  // Color is theme-aware AND room-aware: in the dark series rooms we use a
+  // lighter wood/gilt tone so the frame is visible against the near-black
+  // walls; in the lobby (lit by ambient) and white mode, we use a darker
+  // tone for traditional gallery contrast.
+  const isSeriesRoom = (room.id !== 'lobby');
+  const frameThk = Math.max(0.07, Math.min(0.13, pH * 0.08));   // a bit beefier
+  const frameDepth = 0.045;   // 4.5cm out from the wall, gives shadows + dimension
+  let frameColor;
+  if (theme === 'dark') {
+    // Dark mode: warm gilt-bronze for series rooms (catches spotlights);
+    // dark walnut for lobby (against tan wallpaper)
+    frameColor = isSeriesRoom ? 0x8a6438 : 0x2a1810;
+  } else {
+    // White mode: thin minimalist black frame everywhere
+    frameColor = 0x1a1612;
+  }
   const frameMat = new THREE.MeshStandardMaterial({
-    color: theme === 'dark' ? 0x0d0a08 : 0x1a1612,
-    roughness: 0.7,
-    metalness: 0.05,
+    color: frameColor,
+    roughness: 0.55,
+    metalness: theme === 'dark' && isSeriesRoom ? 0.35 : 0.08,
   });
-  const frame = new THREE.Mesh(
-    new THREE.PlaneGeometry(pW + frameThk * 2, pH + frameThk * 2),
-    frameMat
+  const frameGeo = new THREE.BoxGeometry(pW + frameThk * 2, pH + frameThk * 2, frameDepth);
+  const frame = new THREE.Mesh(frameGeo, frameMat);
+  // Frame extends OUT from the wall (into the room) — back face flush with
+  // wall surface, front face frameDepth deep into room
+  frame.position.set(
+    px + normalX * (frameDepth / 2),
+    yCenter,
+    pz + normalZ * (frameDepth / 2)
   );
-  frame.position.set(px, yCenter, pz);
   frame.rotation.y = faceY;
   scene.add(frame);
 
@@ -2669,7 +2729,13 @@ function placePainting(art, dir, localCoord, room) {
         roughness: 0.62,
       });
       const p = new THREE.Mesh(new THREE.PlaneGeometry(pW, pH), pMat);
-      p.position.set(px + normalX * 0.005, yCenter, pz + normalZ * 0.005);
+      // Sit the painting flush with the frame's front face (frameDepth out
+      // from the wall surface) so it reads as inset into the frame opening
+      p.position.set(
+        px + normalX * (frameDepth + 0.005),
+        yCenter,
+        pz + normalZ * (frameDepth + 0.005)
+      );
       p.rotation.y = faceY;
       p.userData.isPainting = true;
       p.userData.artIndex = ARTWORKS.indexOf(art);
@@ -3223,23 +3289,50 @@ function endIntro() {
   }
 }
 
+// Catmull-Rom spline interpolation through 4 points (p0, p1, p2, p3).
+// Returns the value at parameter t ∈ [0, 1] along the curve from p1 to p2.
+// p0 and p3 are tangent control points (not interpolated through).
+function catmullRom(p0, p1, p2, p3, t) {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * (
+    (2 * p1) +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  );
+}
+
 function updateIntro(now) {
   const elapsed = (now - intro.startTime) / 1000;
-  let t = Math.min(1, elapsed / intro.duration);
-  // Find which segment we're in
+  // Global progression: 0 to 1 over the full duration. Apply a single
+  // smooth ease so the START and END of the entire animation feel gentle,
+  // not just the midpoint of each segment.
+  const tRaw = Math.min(1, Math.max(0, elapsed / intro.duration));
+  // Smooth-step (eases in and out). Smoother than cubic-in-out at the joints.
+  const t = tRaw * tRaw * tRaw * (tRaw * (tRaw * 6 - 15) + 10);   // quintic smoothstep
+
   const kfs = intro.keyframes;
+  // Find the segment [i, i+1] that t falls into based on the keyframe t-values
   let i = 0;
   while (i < kfs.length - 1 && t > kfs[i + 1].t) i++;
-  const a = kfs[i], b = kfs[Math.min(i + 1, kfs.length - 1)];
+  const a = kfs[i];
+  const b = kfs[Math.min(i + 1, kfs.length - 1)];
   const segT = (b.t - a.t > 0) ? (t - a.t) / (b.t - a.t) : 1;
-  // Smooth ease (cubic) within each segment
-  const eased = segT < 0.5 ? 4 * segT * segT * segT : 1 - Math.pow(-2 * segT + 2, 3) / 2;
-  camera.position.x = a.pos.x + (b.pos.x - a.pos.x) * eased;
-  camera.position.y = a.pos.y + (b.pos.y - a.pos.y) * eased;
-  camera.position.z = a.pos.z + (b.pos.z - a.pos.z) * eased;
-  yaw = a.yaw + (b.yaw - a.yaw) * eased;
-  pitch = a.pitch + (b.pitch - a.pitch) * eased;
-  if (t >= 1) endIntro();
+
+  // Catmull-Rom on position: use neighbor keyframes as tangent control points
+  // for C¹-continuous velocity across keyframe boundaries (no jerks).
+  const p0 = kfs[Math.max(0, i - 1)];
+  const p1 = a;
+  const p2 = b;
+  const p3 = kfs[Math.min(kfs.length - 1, i + 2)];
+
+  camera.position.x = catmullRom(p0.pos.x, p1.pos.x, p2.pos.x, p3.pos.x, segT);
+  camera.position.y = catmullRom(p0.pos.y, p1.pos.y, p2.pos.y, p3.pos.y, segT);
+  camera.position.z = catmullRom(p0.pos.z, p1.pos.z, p2.pos.z, p3.pos.z, segT);
+  yaw   = catmullRom(p0.yaw,   p1.yaw,   p2.yaw,   p3.yaw,   segT);
+  pitch = catmullRom(p0.pitch, p1.pitch, p2.pitch, p3.pitch, segT);
+
+  if (tRaw >= 1) endIntro();
 }
 
 /* ─── 10. Theme application ─── */
@@ -4177,16 +4270,22 @@ function setView(view) {
   const slide = document.getElementById('slideshow');
   const bio = document.getElementById('bio-view');
   const contact = document.getElementById('contact-view');
+  const closeBtn = document.getElementById('overlay-close');
   // Hide all overlays first, then show the active one.
   idx.classList.remove('show');
   slide.classList.remove('show');
   bio.classList.remove('show');
   contact.classList.remove('show');
+  if (closeBtn) closeBtn.classList.remove('show');
   if (view === 'index') idx.classList.add('show');
   else if (view === 'slideshow') { slide.classList.add('show'); showSlide(0); }
-  else if (view === 'bio') bio.classList.add('show');
+  else if (view === 'bio') {
+    bio.classList.add('show');
+    if (closeBtn) closeBtn.classList.add('show');
+  }
   else if (view === 'contact') {
     contact.classList.add('show');
+    if (closeBtn) closeBtn.classList.add('show');
     // Set the formsubmit redirect target so users land back here after sending
     const next = document.getElementById('contact-next');
     if (next) next.value = location.origin + location.pathname + '#contact-sent';
@@ -4320,6 +4419,11 @@ function wireUI() {
   document.getElementById('view-index').addEventListener('click', () => setView('index'));
   document.getElementById('view-bio').addEventListener('click', () => setView('bio'));
   document.getElementById('view-contact').addEventListener('click', () => setView('contact'));
+  // Close button (shared by bio + contact overlays) — return to gallery
+  const overlayClose = document.getElementById('overlay-close');
+  if (overlayClose) {
+    overlayClose.addEventListener('click', () => setView('gallery'));
+  }
 
   // Contact form: try AJAX first (cleaner UX, stays on page). If that fails,
   // fall back to native form submission which is more reliable but causes a
