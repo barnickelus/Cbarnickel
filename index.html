@@ -3506,8 +3506,13 @@ function handleTap(clientX, clientY) {
   if (paintingHits.length > 0) {
     const p = paintingHits[0].object;
     const dist = Math.hypot(p.position.x - camera.position.x, p.position.z - camera.position.z);
-    if (dist < 1.8) {
-      // Already close — open modal
+    // The "already at viewing position" threshold depends on this painting's
+    // own snap distance (bigger paintings stand back further). If we're at
+    // or near the snap target, treat a second tap as "open detail view".
+    // We allow a generous tolerance so the user doesn't have to be pixel-
+    // precise on the snap landing point.
+    const snapBack = computeSnapBackDistance(p);
+    if (dist < snapBack + 0.6) {
       openModal(p.userData.artIndex);
       return;
     }
@@ -3528,16 +3533,21 @@ function handleTap(clientX, clientY) {
   // tap-art mode: tapping floor does nothing
 }
 
-function computeViewingPosition(painting) {
-  const p = painting.position;
-  const n = painting.userData.outwardNormal;
-  if (!n) return null;
-  // Distance scaled to painting size — bigger paintings, stand back further
+// Compute how far back the camera should stand to view this painting:
+// scaled to painting size — bigger paintings need more standoff.
+function computeSnapBackDistance(painting) {
   const geom = painting.geometry;
   if (!geom.boundingBox) geom.computeBoundingBox();
   const bb = geom.boundingBox;
   const pW = bb.max.x - bb.min.x, pH = bb.max.y - bb.min.y;
-  const back = Math.max(1.6, Math.min(Math.max(pW, pH) * 1.7, 3.6));
+  return Math.max(1.6, Math.min(Math.max(pW, pH) * 1.7, 3.6));
+}
+
+function computeViewingPosition(painting) {
+  const p = painting.position;
+  const n = painting.userData.outwardNormal;
+  if (!n) return null;
+  const back = computeSnapBackDistance(painting);
   return {
     x: p.x + n.x * back,
     z: p.z + n.z * back,
