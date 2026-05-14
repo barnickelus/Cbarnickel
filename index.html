@@ -3206,7 +3206,6 @@ function buildGothicFrame(group, pW, pH, mat) {
 // Gothic altarpiece-style picture frames.
 function buildVictorianFrame(group, pW, pH, matSet) {
   const { bodyMat, trimMat, accentMat } = matSet;
-  // Track materials for rebuild cleanup
   group.userData.victorianMats = [bodyMat, trimMat, accentMat];
 
   const frameThk = Math.max(0.08, Math.min(0.14, pH * 0.085));
@@ -3215,90 +3214,151 @@ function buildVictorianFrame(group, pW, pH, matSet) {
   const flourishH = pH * 0.18;
   const halfPaintW = pW / 2;
   const halfPaintH = pH / 2;
-  const sideExtra = frameThk * 1.4;     // outer frame extends a bit beyond colonnades
+  const sideExtra = frameThk * 1.4;
 
-  // ── MAIN BODY ── pointed-arch silhouette with painting opening cut out
-  const outer = new THREE.Shape();
-  const flourishY = -halfPaintH - frameThk - flourishH;
-  // Trace counterclockwise: bottom-left → curve through bottom flourish →
-  // bottom-right → up right → over the gothic peak → down left → close.
-  outer.moveTo(-halfPaintW - sideExtra, -halfPaintH - frameThk);
-  outer.bezierCurveTo(
-    -halfPaintW - sideExtra * 0.5, flourishY * 0.7,
-    -halfPaintW * 0.6, flourishY * 0.95,
-    0, flourishY
-  );
-  outer.bezierCurveTo(
-    halfPaintW * 0.6, flourishY * 0.95,
-    halfPaintW + sideExtra * 0.5, flourishY * 0.7,
-    halfPaintW + sideExtra, -halfPaintH - frameThk
-  );
-  outer.lineTo(halfPaintW + sideExtra, halfPaintH);
-  outer.lineTo(halfPaintW + frameThk * 0.3, halfPaintH + frameThk * 0.2);
-  outer.quadraticCurveTo(
-    halfPaintW * 0.5, halfPaintH + peakH * 0.85,
-    0, halfPaintH + peakH
-  );
-  outer.quadraticCurveTo(
-    -halfPaintW * 0.5, halfPaintH + peakH * 0.85,
-    -halfPaintW - frameThk * 0.3, halfPaintH + frameThk * 0.2
-  );
-  outer.lineTo(-halfPaintW - sideExtra, halfPaintH);
-  outer.lineTo(-halfPaintW - sideExtra, -halfPaintH - frameThk);
-  // Inner hole — painting opening (CW for proper subtraction)
-  const hole = new THREE.Path();
-  hole.moveTo(-halfPaintW, -halfPaintH);
-  hole.lineTo(-halfPaintW, halfPaintH);
-  hole.lineTo(halfPaintW, halfPaintH);
-  hole.lineTo(halfPaintW, -halfPaintH);
-  hole.lineTo(-halfPaintW, -halfPaintH);
-  outer.holes.push(hole);
-  const bodyGeo = new THREE.ExtrudeGeometry(outer, {
-    depth: frameDepth,
+  // ── MAIN BODY ── built as THREE NESTED LAYERS to mimic the reference's
+  // concentric color stripes (outer accent band → mid trim band → inner
+  // body color, each at slightly different depths so they read as raised
+  // banding when light hits the bevel).
+  //
+  // The bottom is a FLAT SILL (rectangular base) — the reference has a
+  // strong horizontal sill below the painting opening, not a curved
+  // flourish. The decorative scrollwork hangs below that sill separately.
+  function makeOuterShape(inset) {
+    const s = new THREE.Shape();
+    const sExtra = sideExtra - inset;
+    const fThk = frameThk - inset * 0.5;
+    // Flat sill height — a clean horizontal base below the painting
+    const sillH = frameThk * 1.4;
+    // Bottom edge of the sill
+    const baseY = -halfPaintH - sillH;
+    s.moveTo(-halfPaintW - sExtra, baseY);
+    s.lineTo(halfPaintW + sExtra, baseY);
+    // Up the right side to the top of the painting opening
+    s.lineTo(halfPaintW + sExtra, halfPaintH);
+    // Shoulder of the peak — slope in slightly
+    s.lineTo(halfPaintW + fThk * 0.3, halfPaintH + fThk * 0.2);
+    // Curve up to apex
+    s.quadraticCurveTo(
+      halfPaintW * 0.5, halfPaintH + peakH * 0.85 - inset,
+      0, halfPaintH + peakH - inset
+    );
+    s.quadraticCurveTo(
+      -halfPaintW * 0.5, halfPaintH + peakH * 0.85 - inset,
+      -halfPaintW - fThk * 0.3, halfPaintH + fThk * 0.2
+    );
+    s.lineTo(-halfPaintW - sExtra, halfPaintH);
+    s.lineTo(-halfPaintW - sExtra, baseY);
+    // Painting opening hole — rectangular
+    const h = new THREE.Path();
+    const innerW = halfPaintW + Math.max(0, inset * 0.15);
+    const innerH = halfPaintH + Math.max(0, inset * 0.15);
+    h.moveTo(-innerW, -innerH);
+    h.lineTo(-innerW, innerH);
+    h.lineTo(innerW, innerH);
+    h.lineTo(innerW, -innerH);
+    h.lineTo(-innerW, -innerH);
+    s.holes.push(h);
+    return s;
+  }
+
+  // Outer band — accent color (mint-green in pastel-blue palette)
+  const outerShape = makeOuterShape(0);
+  const outerGeo = new THREE.ExtrudeGeometry(outerShape, {
+    depth: frameDepth * 0.85,
     bevelEnabled: true,
-    bevelThickness: frameDepth * 0.10,
-    bevelSize: frameDepth * 0.08,
+    bevelThickness: frameDepth * 0.06,
+    bevelSize: frameDepth * 0.05,
     bevelSegments: 1,
     curveSegments: 14,
   });
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  group.add(body);
+  const outerBand = new THREE.Mesh(outerGeo, accentMat);
+  group.add(outerBand);
 
-  // ── SIDE COLONNADES ── two slim ribbed pillars flanking the painting,
-  // in trimMat for visual contrast against the body
-  const colW = frameThk * 0.45;
-  const colH = pH * 0.95;
+  // Middle band — trim color (white in pastel-blue palette), slightly inset + deeper
+  const midShape = makeOuterShape(frameThk * 0.18);
+  const midGeo = new THREE.ExtrudeGeometry(midShape, {
+    depth: frameDepth * 0.9,
+    bevelEnabled: true,
+    bevelThickness: frameDepth * 0.06,
+    bevelSize: frameDepth * 0.05,
+    bevelSegments: 1,
+    curveSegments: 14,
+  });
+  const midBand = new THREE.Mesh(midGeo, trimMat);
+  midBand.position.z = 0.003;
+  group.add(midBand);
+
+  // Inner body — main body color (blue in pastel-blue palette), more inset + deepest
+  const innerShape = makeOuterShape(frameThk * 0.36);
+  const innerGeo = new THREE.ExtrudeGeometry(innerShape, {
+    depth: frameDepth,
+    bevelEnabled: true,
+    bevelThickness: frameDepth * 0.08,
+    bevelSize: frameDepth * 0.06,
+    bevelSegments: 1,
+    curveSegments: 14,
+  });
+  const innerBody = new THREE.Mesh(innerGeo, bodyMat);
+  innerBody.position.z = 0.006;
+  group.add(innerBody);
+
+  // ── CUSP ARCH INTERIOR ── three white scalloped curves inside the peak,
+  // mimicking the trefoil-cusped gothic arch decoration in the reference.
+  // Built as an alpha-masked plane (procedural canvas drawing).
+  const cuspTex = getVictorianCuspTexture(matSet);
+  const cuspW = pW * 0.85;
+  const cuspH = peakH * 0.55;
+  const cusp = new THREE.Mesh(
+    new THREE.PlaneGeometry(cuspW, cuspH),
+    new THREE.MeshBasicMaterial({
+      map: cuspTex,
+      transparent: true,
+      alphaTest: 0.35,
+      depthWrite: false,
+    })
+  );
+  cusp.position.set(0, halfPaintH + peakH * 0.22, frameDepth + 0.008);
+  group.add(cusp);
+  group.userData.victorianCuspMat = cusp.material;
+
+  // ── PAIRED COLONNADES ── two slim columns per side, like the twinned
+  // pillars in the reference. Each pair sits at slightly different x
+  // offsets to create the doubled-column appearance.
+  const colW = frameThk * 0.28;
+  const colH = pH * 0.88;
+  const colInner = halfPaintW + frameThk * 0.35;
+  const colOuter = halfPaintW + frameThk * 0.75;
   for (const sx of [-1, 1]) {
-    const col = new THREE.Mesh(
-      new THREE.CylinderGeometry(colW, colW, colH, 10),
-      trimMat
-    );
-    col.position.set(
-      sx * (halfPaintW + frameThk * 0.55),
-      -halfPaintH * 0.05,
-      frameDepth * 0.82
-    );
-    group.add(col);
-    // Tiny capital at top + base at bottom (accent color)
-    const capR = colW * 1.7;
-    const cap = new THREE.Mesh(
-      new THREE.CylinderGeometry(capR, capR * 0.85, colW * 1.2, 10),
-      accentMat
-    );
-    cap.position.set(sx * (halfPaintW + frameThk * 0.55), colH * 0.5 - halfPaintH * 0.05, frameDepth * 0.82);
-    group.add(cap);
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(capR * 0.85, capR, colW * 1.2, 10),
-      accentMat
-    );
-    base.position.set(sx * (halfPaintW + frameThk * 0.55), -colH * 0.5 - halfPaintH * 0.05, frameDepth * 0.82);
-    group.add(base);
+    for (const xOffset of [colInner, colOuter]) {
+      const col = new THREE.Mesh(
+        new THREE.CylinderGeometry(colW, colW, colH, 10),
+        trimMat
+      );
+      col.position.set(sx * xOffset, -halfPaintH * 0.05, frameDepth * 0.9);
+      group.add(col);
+      // Capital at top (accent color) — flared
+      const capR = colW * 1.9;
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(capR, capR * 0.7, colW * 1.5, 10),
+        accentMat
+      );
+      cap.position.set(sx * xOffset, colH * 0.5 - halfPaintH * 0.05 + colW * 0.6, frameDepth * 0.9);
+      group.add(cap);
+      // Base at bottom (accent color) — mirrored capital
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(capR * 0.7, capR, colW * 1.5, 10),
+        accentMat
+      );
+      base.position.set(sx * xOffset, -colH * 0.5 - halfPaintH * 0.05 - colW * 0.6, frameDepth * 0.9);
+      group.add(base);
+    }
   }
 
-  // ── TREFOIL ROSE WINDOW at peak ── alpha-masked plane sitting on top of
-  // the upper portion of the body. Procedural texture draws the rose detail.
+  // ── TREFOIL ROSE WINDOW at peak ── alpha-masked plane (improved drawing
+  // with cleaner trefoil cusps; see getVictorianTrefoilTexture).
   const trefoilTex = getVictorianTrefoilTexture(matSet);
-  const trefoilSize = pH * 0.22;
+  const trefoilSize = pH * 0.20;
   const trefoil = new THREE.Mesh(
     new THREE.PlaneGeometry(trefoilSize, trefoilSize),
     new THREE.MeshBasicMaterial({
@@ -3308,14 +3368,14 @@ function buildVictorianFrame(group, pW, pH, matSet) {
       depthWrite: false,
     })
   );
-  trefoil.position.set(0, halfPaintH + peakH * 0.55, frameDepth + 0.002);
+  trefoil.position.set(0, halfPaintH + peakH * 0.62, frameDepth + 0.010);
   group.add(trefoil);
   group.userData.victorianTrefoilMat = trefoil.material;
 
-  // ── BOTTOM SCROLLWORK ── alpha-masked plane below the painting opening
+  // ── BOTTOM SCROLLWORK ── alpha-masked plane with elaborate Victorian apron
   const scrollTex = getVictorianScrollworkTexture(matSet);
-  const scrollW = pW * 1.2;
-  const scrollH = flourishH * 1.6;
+  const scrollW = pW * 1.35;
+  const scrollH = flourishH * 1.9;
   const scroll = new THREE.Mesh(
     new THREE.PlaneGeometry(scrollW, scrollH),
     new THREE.MeshBasicMaterial({
@@ -3325,55 +3385,153 @@ function buildVictorianFrame(group, pW, pH, matSet) {
       depthWrite: false,
     })
   );
-  scroll.position.set(0, -halfPaintH - frameThk - flourishH * 0.5, frameDepth + 0.002);
+  const flourishYPos = -halfPaintH - frameThk * 1.4 - flourishH * 0.4;
+  scroll.position.set(0, flourishYPos, frameDepth + 0.008);
   group.add(scroll);
   group.userData.victorianScrollMat = scroll.material;
 
-  // ── SPIRES ── three vertical spires: 2 tall flanking the peak, 1 shorter at apex
-  // Each spire is a slim trim-colored cylinder + accent-colored cone cap.
+  // ── SPIRES ── three pinnacle spires (2 side, 1 apex), each with small
+  // foliage cresting at the cone base (mimicking the Gothic "crockets" in
+  // the reference) and a tiny finial nub at the top.
   function makeSpire(sx, baseY, h) {
-    const cylR = frameThk * 0.28;
+    const cylR = frameThk * 0.26;
+    // Main slim shaft — body color (so it blends with the frame)
     const cyl = new THREE.Mesh(
       new THREE.CylinderGeometry(cylR * 0.7, cylR, h, 8),
-      trimMat
+      bodyMat
     );
     cyl.position.set(sx, baseY + h / 2, frameDepth * 0.7);
     group.add(cyl);
+    // Cone cap — trim color (lighter, matches reference white tips)
     const coneH = cylR * 5;
     const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(cylR * 0.9, coneH, 8),
-      accentMat
+      new THREE.ConeGeometry(cylR * 0.85, coneH, 8),
+      trimMat
     );
     cone.position.set(sx, baseY + h + coneH / 2, frameDepth * 0.7);
     group.add(cone);
-  }
-  const sideSpireH = pH * 0.65;
-  const apexSpireH = pH * 0.35;
-  // Side spires sit at the outer edges of the peaked top
-  const spireX = halfPaintW + sideExtra * 0.5;
-  makeSpire(-spireX, halfPaintH + frameThk * 0.5, sideSpireH);
-  makeSpire( spireX, halfPaintH + frameThk * 0.5, sideSpireH);
-  // Apex spire — at the peak
-  makeSpire(0, halfPaintH + peakH * 0.95, apexSpireH);
-
-  // ── BOTTOM PENDANT FINIALS ── three small downward-pointing teardrops
-  // hanging below the scrollwork
-  const pendantR = frameThk * 0.3;
-  const pendantH = flourishH * 0.6;
-  for (const px of [-pW * 0.30, 0, pW * 0.30]) {
-    const pendant = new THREE.Mesh(
-      new THREE.ConeGeometry(pendantR, pendantH, 8),
+    // Foliage cresting — 4 small accent-colored "crockets" around the
+    // cone base, suggesting carved leaves. Tiny spheres at quarter points.
+    const crocketY = baseY + h - cylR * 0.3;
+    const crocketR = cylR * 0.5;
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      const cx = sx + Math.cos(angle) * cylR * 1.4;
+      const cz = frameDepth * 0.7 + Math.sin(angle) * cylR * 1.4;
+      const crocket = new THREE.Mesh(
+        new THREE.SphereGeometry(crocketR, 6, 5),
+        accentMat
+      );
+      crocket.position.set(cx, crocketY, cz);
+      group.add(crocket);
+    }
+    // Tiny tip finial — small accent sphere at very top of the cone
+    const tipBall = new THREE.Mesh(
+      new THREE.SphereGeometry(cylR * 0.35, 6, 5),
       accentMat
     );
-    pendant.position.set(px, flourishY - pendantH * 0.3, frameDepth * 0.7);
-    pendant.rotation.x = Math.PI;   // point downward
-    group.add(pendant);
+    tipBall.position.set(sx, baseY + h + coneH + cylR * 0.2, frameDepth * 0.7);
+    group.add(tipBall);
   }
+  const sideSpireH = pH * 0.55;
+  const apexSpireH = pH * 0.32;
+  // Side spires sit at the OUTER EDGES of the peak shoulders, not way out on
+  // the body sides. In the reference these spires are at the widest point
+  // of the gothic peak, around halfPaintW + frameThk*0.4.
+  const spireX = halfPaintW + frameThk * 0.4;
+  const spireBaseY = halfPaintH + frameThk * 0.3;
+  makeSpire(-spireX, spireBaseY, sideSpireH);
+  makeSpire( spireX, spireBaseY, sideSpireH);
+  // Apex spire — at the peak point, slightly above the body apex
+  makeSpire(0, halfPaintH + peakH * 0.98, apexSpireH);
+
+  // ── BOTTOM TURNED FINIALS ── replace the simple downward cones with
+  // bulbous "turned-wood" pendant shapes: stacked sphere + cone + small
+  // sphere to approximate a lathed pendant. Two side pendants only (the
+  // center is occupied by the scrollwork's central ornament now).
+  function makeTurnedFinial(px, totalH) {
+    const fGroup = new THREE.Group();
+    const r = frameThk * 0.32;
+    // Upper sphere (the "ball")
+    const upperBall = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 10, 8),
+      bodyMat
+    );
+    upperBall.position.y = totalH * 0.35;
+    fGroup.add(upperBall);
+    // Mid cone (the tapered shaft)
+    const shaft = new THREE.Mesh(
+      new THREE.ConeGeometry(r * 0.55, totalH * 0.55, 10),
+      bodyMat
+    );
+    shaft.position.y = 0;
+    shaft.rotation.x = Math.PI;
+    fGroup.add(shaft);
+    // Tip — small accent-colored sphere at the bottom
+    const tip = new THREE.Mesh(
+      new THREE.SphereGeometry(r * 0.42, 8, 6),
+      accentMat
+    );
+    tip.position.y = -totalH * 0.42;
+    fGroup.add(tip);
+    fGroup.position.set(px, flourishYPos - flourishH * 0.4, frameDepth * 0.7);
+    group.add(fGroup);
+  }
+  makeTurnedFinial(-pW * 0.38, flourishH * 1.4);
+  makeTurnedFinial( pW * 0.38, flourishH * 1.4);
+}
+
+// Cusp arch interior texture — three downward-pointing scalloped curves
+// (the trefoil-cusped gothic arch ornament). Drawn in trim color.
+const _victorianCuspCache = new Map();
+function getVictorianCuspTexture(matSet) {
+  const key = matSet.bodyMat.color.getHex() + '|' + matSet.trimMat.color.getHex();
+  if (_victorianCuspCache.has(key)) return _victorianCuspCache.get(key);
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 512, 256);
+  const trim = '#' + matSet.trimMat.color.getHexString();
+  ctx.strokeStyle = trim;
+  ctx.fillStyle = trim;
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // Three cusps — left, center, right. Each cusp is a downward-pointing
+  // scalloped curve like ⌒. Outer cusps are smaller; center is larger.
+  function drawCusp(cx, cy, radius) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI, false);  // upper semicircle
+    ctx.stroke();
+    // Small filled drop at the bottom of each cusp tip
+    ctx.beginPath();
+    ctx.arc(cx - radius, cy, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + radius, cy, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  drawCusp(140, 110, 55);
+  drawCusp(256, 110, 70);
+  drawCusp(372, 110, 55);
+  // Small dropping tendrils between cusps
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(196, 110);
+  ctx.bezierCurveTo(200, 150, 210, 180, 220, 170);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(316, 110);
+  ctx.bezierCurveTo(312, 150, 302, 180, 292, 170);
+  ctx.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  _victorianCuspCache.set(key, tex);
+  return tex;
 }
 
 // Trefoil rose window texture (procedural canvas).
-// matSet is needed to color the trefoil according to the current palette.
-// Cached per palette so we don't redraw 25 times when only colors change.
+// Drawn as a Gothic rose window: outer ring + 6 surrounding petals + a small
+// central 6-pointed star. Cached per palette.
 const _victorianTrefoilCache = new Map();
 function getVictorianTrefoilTexture(matSet) {
   const key = matSet.bodyMat.color.getHex() + '|' + matSet.trimMat.color.getHex() + '|' + matSet.accentMat.color.getHex();
@@ -3383,37 +3541,59 @@ function getVictorianTrefoilTexture(matSet) {
   c.width = 256; c.height = 256;
   const ctx = c.getContext('2d');
   const cx = 128, cy = 128;
-  const r = 80;
-  // Outer ring — trim color
+  const R = 90;       // outer ring radius
   const trim = '#' + matSet.trimMat.color.getHexString();
   const accent = '#' + matSet.accentMat.color.getHexString();
+
+  // Outer ring (double — thicker outline)
   ctx.strokeStyle = trim;
-  ctx.lineWidth = 8;
+  ctx.lineWidth = 10;
   ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
   ctx.stroke();
-  // Three petals arranged in a trefoil
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R - 7, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Six radial spokes from center to outer ring
+  ctx.lineWidth = 4;
   for (let i = 0; i < 6; i++) {
     const angle = (i / 6) * Math.PI * 2;
-    const px = cx + Math.cos(angle) * r * 0.5;
-    const py = cy + Math.sin(angle) * r * 0.5;
     ctx.beginPath();
-    ctx.arc(px, py, r * 0.32, 0, Math.PI * 2);
+    ctx.moveTo(cx + Math.cos(angle) * 16, cy + Math.sin(angle) * 16);
+    ctx.lineTo(cx + Math.cos(angle) * (R - 7), cy + Math.sin(angle) * (R - 7));
     ctx.stroke();
   }
-  // Central dot — accent color
+
+  // Six circular petals between the spokes (one petal per gap)
+  ctx.lineWidth = 4;
+  for (let i = 0; i < 6; i++) {
+    const angle = ((i + 0.5) / 6) * Math.PI * 2;
+    const px = cx + Math.cos(angle) * R * 0.55;
+    const py = cy + Math.sin(angle) * R * 0.55;
+    ctx.beginPath();
+    ctx.arc(px, py, R * 0.20, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Central 6-pointed star — accent color filled
   ctx.fillStyle = accent;
   ctx.beginPath();
-  ctx.arc(cx, cy, 10, 0, Math.PI * 2);
-  ctx.fill();
-  // Outer petal endpoints — small dots at 0°, 120°, 240°
-  for (let i = 0; i < 3; i++) {
-    const angle = (i / 3) * Math.PI * 2 - Math.PI / 2;
-    ctx.beginPath();
-    ctx.arc(cx + Math.cos(angle) * r * 0.95, cy + Math.sin(angle) * r * 0.95, 8, 0, Math.PI * 2);
-    ctx.fill();
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
+    const radius = (i % 2 === 0) ? 16 : 7;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
+  ctx.closePath();
+  ctx.fill();
+  // Star outline in trim
+  ctx.strokeStyle = trim;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   _victorianTrefoilCache.set(key, tex);
@@ -3432,70 +3612,134 @@ function getVictorianScrollworkTexture(matSet) {
   ctx.clearRect(0, 0, 512, 192);
   const trim = '#' + matSet.trimMat.color.getHexString();
   const accent = '#' + matSet.accentMat.color.getHexString();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
-  // Symmetric scrolls — draw one side, mirror to the other
-  function drawScroll(startX, dir) {
+  // ── ELABORATE VICTORIAN APRON — multiple curls per side + central fleur
+  //     + small leaf accents, mimicking the pierced lacework in the reference.
+  function drawApron(startX, dir) {
     ctx.strokeStyle = trim;
-    ctx.lineWidth = 5;
-    ctx.lineCap = 'round';
-    // Outer sweeping curl
+    // Large outer S-curl sweeping up and away from center
+    ctx.lineWidth = 6;
     ctx.beginPath();
-    ctx.moveTo(startX, 30);
+    ctx.moveTo(startX + dir * 5, 35);
     ctx.bezierCurveTo(
-      startX + dir * 70, 20,
-      startX + dir * 110, 80,
-      startX + dir * 90, 120
+      startX + dir * 50, 22,
+      startX + dir * 110, 30,
+      startX + dir * 150, 70
     );
     ctx.bezierCurveTo(
-      startX + dir * 70, 145,
-      startX + dir * 40, 150,
-      startX + dir * 20, 130
+      startX + dir * 180, 100,
+      startX + dir * 175, 145,
+      startX + dir * 145, 155
+    );
+    ctx.bezierCurveTo(
+      startX + dir * 105, 165,
+      startX + dir * 75, 145,
+      startX + dir * 90, 115
+    );
+    ctx.bezierCurveTo(
+      startX + dir * 110, 95,
+      startX + dir * 135, 105,
+      startX + dir * 130, 125
     );
     ctx.stroke();
-    // Inner curl returning
+
+    // Inner sub-curl
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(startX + dir * 60, 65);
+    ctx.bezierCurveTo(
+      startX + dir * 30, 75,
+      startX + dir * 30, 110,
+      startX + dir * 60, 125
+    );
+    ctx.bezierCurveTo(
+      startX + dir * 80, 130,
+      startX + dir * 90, 115,
+      startX + dir * 80, 100
+    );
+    ctx.stroke();
+
+    // Connector arc — joins the two curls visually
     ctx.lineWidth = 3.5;
     ctx.beginPath();
-    ctx.moveTo(startX + dir * 90, 120);
+    ctx.moveTo(startX + dir * 5, 35);
     ctx.bezierCurveTo(
-      startX + dir * 75, 90,
-      startX + dir * 50, 90,
-      startX + dir * 55, 115
+      startX + dir * 25, 50,
+      startX + dir * 45, 50,
+      startX + dir * 60, 65
     );
     ctx.stroke();
-    // Small accent dot at the curl center
+
+    // Small accent dot at the curl center (the "eye" of the scroll)
     ctx.fillStyle = accent;
     ctx.beginPath();
-    ctx.arc(startX + dir * 65, 110, 5, 0, Math.PI * 2);
+    ctx.arc(startX + dir * 130, 125, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = trim;
+    ctx.beginPath();
+    ctx.arc(startX + dir * 130, 125, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny accent dot in the inner curl
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(startX + dir * 55, 100, 3.5, 0, Math.PI * 2);
     ctx.fill();
   }
-  // Right scroll
-  drawScroll(256, 1);
-  // Left scroll (mirrored)
-  drawScroll(256, -1);
-  // Central ornament — a small fleur shape between the two scrolls
+  drawApron(256, 1);
+  drawApron(256, -1);
+
+  // ── CENTRAL FLEUR — vertical ornament between the two scroll halves
   ctx.strokeStyle = trim;
+  ctx.lineWidth = 5;
+  // Vertical stem
+  ctx.beginPath();
+  ctx.moveTo(256, 35);
+  ctx.lineTo(256, 130);
+  ctx.stroke();
+  // Upper trefoil — 3 small petals at the top
   ctx.lineWidth = 4;
+  for (let i = 0; i < 3; i++) {
+    const angle = (i / 3) * Math.PI * 2 - Math.PI / 2;
+    const px = 256 + Math.cos(angle) * 14;
+    const py = 50 + Math.sin(angle) * 14;
+    ctx.beginPath();
+    ctx.arc(px, py, 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Crossbar in the middle
+  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.moveTo(256, 50);
-  ctx.lineTo(256, 110);
+  ctx.moveTo(232, 90);
+  ctx.lineTo(280, 90);
   ctx.stroke();
-  // Crossbar
+  // Small curls at each end of the crossbar
+  ctx.lineWidth = 3.5;
   ctx.beginPath();
-  ctx.moveTo(240, 80);
-  ctx.lineTo(272, 80);
+  ctx.arc(228, 90, 4, 0, Math.PI * 2);
   ctx.stroke();
-  // Tip at top
+  ctx.beginPath();
+  ctx.arc(284, 90, 4, 0, Math.PI * 2);
+  ctx.stroke();
+  // Accent gem at the top center
   ctx.fillStyle = accent;
   ctx.beginPath();
-  ctx.arc(256, 48, 6, 0, Math.PI * 2);
+  ctx.arc(256, 50, 7, 0, Math.PI * 2);
   ctx.fill();
-  // Bottom drop tip
-  ctx.beginPath();
-  ctx.moveTo(248, 110);
-  ctx.lineTo(256, 130);
-  ctx.lineTo(264, 110);
-  ctx.closePath();
+  // Bottom drop — fleur-de-lis tip
   ctx.fillStyle = trim;
+  ctx.beginPath();
+  ctx.moveTo(244, 130);
+  ctx.lineTo(256, 168);
+  ctx.lineTo(268, 130);
+  ctx.closePath();
+  ctx.fill();
+  // Accent dot in the drop
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.arc(256, 145, 4, 0, Math.PI * 2);
   ctx.fill();
 
   const tex = new THREE.CanvasTexture(c);
@@ -3524,13 +3768,16 @@ function rebuildAllFrames() {
       fg.userData.victorianMats = null;
     }
     if (fg.userData.victorianTrefoilMat) {
-      // The texture is cached globally; the material is unique per mesh
       fg.userData.victorianTrefoilMat.dispose();
       fg.userData.victorianTrefoilMat = null;
     }
     if (fg.userData.victorianScrollMat) {
       fg.userData.victorianScrollMat.dispose();
       fg.userData.victorianScrollMat = null;
+    }
+    if (fg.userData.victorianCuspMat) {
+      fg.userData.victorianCuspMat.dispose();
+      fg.userData.victorianCuspMat = null;
     }
     // Rebuild
     const newGroup = buildFrame(
@@ -3547,6 +3794,7 @@ function rebuildAllFrames() {
     fg.userData.victorianMats = newGroup.userData.victorianMats;
     fg.userData.victorianTrefoilMat = newGroup.userData.victorianTrefoilMat;
     fg.userData.victorianScrollMat = newGroup.userData.victorianScrollMat;
+    fg.userData.victorianCuspMat = newGroup.userData.victorianCuspMat;
     fg.userData.frameDepth = newGroup.userData.frameDepth;
   }
   // Reposition each painting plane to sit just in front of its (possibly
