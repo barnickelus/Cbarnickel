@@ -1488,28 +1488,13 @@ function initScene() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(T().rendererClear, 1);
-  // PBR realism — proper color handling so MeshStandardMaterial reads correctly.
-  // ACES Filmic tone mapping rolls highlights gently instead of clipping.
-  // sRGB output encoding makes colors look correct on screen (no washed-out
-  // "plastic" appearance that plagues raw-linear WebGL).
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
-  renderer.outputEncoding = THREE.sRGBEncoding;
-
-  // SHADOWS — ONE directional shadow light (used only for the frame drop
-  // shadows on the wall). One 2048×2048 shadow map is cheap; what crashed
-  // iOS previously was 19+ shadow-casting spotlights all allocating maps.
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Shadow maps disabled — they previously crashed iOS Safari with too many
+  // shadow-casting spotlights. Frame depth comes from the fake-shadow plane
+  // technique instead (see buildFrame).
+  renderer.shadowMap.enabled = false;
 
   scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(T().fog.color, T().fog.density);
-
-  // ENVIRONMENT MAP — a small generated gradient cube provides reflections
-  // for metallic and glossy materials. Without this, metals look flat and
-  // dead. Generated once via PMREMGenerator; pmrem result is set as
-  // scene.environment so all MeshStandardMaterials pick it up automatically.
-  setupEnvironmentMap();
 
   camera = new THREE.PerspectiveCamera(FOV, window.innerWidth / window.innerHeight, 0.1, 80);
   camera.position.set(0, PLAYER_HEIGHT, 4.5);
@@ -1723,11 +1708,6 @@ function buildGallery() {
   scene.add(lightingRefs.ambient);
   lightingRefs.hemi = new THREE.HemisphereLight(t.hemi.sky, t.hemi.ground, t.hemi.intensity);
   scene.add(lightingRefs.hemi);
-
-  // Single directional light that casts shadows for ALL frames (one shadow
-  // map total — safe on iPad). Soft, warm, low-intensity so it doesn't
-  // override the per-painting spotlights.
-  setupShadowLight();
 
   // Soft center glow per room — only for the lobby (series rooms stay dark
   // and rely on per-painting spotlights for illumination)
@@ -2894,9 +2874,7 @@ function getFramePreset(isSeriesRoom) {
 }
 
 // Build a single material from a hex + finish, used by single-color styles.
-// includeNormal=true adds the procedural normal map for carved relief —
-// only used on the main body mesh, not on small ornaments (would over-detail).
-function makeFrameMaterialFromHex(hex, finish, includeNormal = false) {
+function makeFrameMaterialFromHex(hex, finish) {
   let roughness, metalness;
   switch (finish) {
     case 'metal': roughness = 0.40; metalness = 0.55; break;
@@ -2904,60 +2882,25 @@ function makeFrameMaterialFromHex(hex, finish, includeNormal = false) {
     case 'matte':
     default:      roughness = 0.70; metalness = 0.05; break;
   }
-  const params = { color: hex, roughness, metalness };
-  if (includeNormal) {
-    params.normalMap = getFrameNormalMap();
-    params.normalScale = new THREE.Vector2(0.35, 0.35);
-  }
-  return new THREE.MeshStandardMaterial(params);
-}
-
-// MeshPhysicalMaterial with clearcoat — for painted Victorian bodies. The
-// clearcoat layer adds subtle paint sheen that catches the directional
-// light, reading as lacquered woodwork instead of matte plastic. r128
-// supports clearcoat on MeshPhysicalMaterial.
-function makeFrameBodyMaterialPhysical(hex, finish) {
-  let roughness, metalness;
-  switch (finish) {
-    case 'metal': roughness = 0.40; metalness = 0.55; break;
-    case 'wood':  roughness = 0.80; metalness = 0.0;  break;
-    case 'matte':
-    default:      roughness = 0.65; metalness = 0.05; break;
-  }
-  return new THREE.MeshPhysicalMaterial({
-    color: hex,
-    roughness,
-    metalness,
-    normalMap: getFrameNormalMap(),
-    normalScale: new THREE.Vector2(0.45, 0.45),
-    clearcoat: 0.25,
-    clearcoatRoughness: 0.35,
-  });
+  return new THREE.MeshStandardMaterial({ color: hex, roughness, metalness });
 }
 
 function getFrameMaterial(isSeriesRoom) {
   const preset = getFramePreset(isSeriesRoom);
-  // Single-color styles use the simpler MeshStandardMaterial, but with the
-  // normal map for relief. Cheaper than MeshPhysicalMaterial.
-  return makeFrameMaterialFromHex(preset.body, preset.finish, true);
+  return makeFrameMaterialFromHex(preset.body, preset.finish);
 }
 
 // For Victorian style: returns three coordinated materials (body, trim, accent).
-// Body uses MeshPhysicalMaterial with clearcoat for paint sheen; trim and
-// accent use MeshStandardMaterial since they're small details and clearcoat
-// would be invisible at that scale.
 function getFrameMaterialSet(isSeriesRoom) {
   const preset = getFramePreset(isSeriesRoom);
-  const bodyMat   = makeFrameBodyMaterialPhysical(preset.body, preset.finish);
+  const bodyMat   = makeFrameMaterialFromHex(preset.body, preset.finish);
   const trimMat   = makeFrameMaterialFromHex(
-    preset.trim   !== undefined ? preset.trim   : preset.body,
-    preset.finish === 'wood' ? 'matte' : preset.finish,
-    false
+    preset.trim !== undefined ? preset.trim : preset.body,
+    preset.finish === 'wood' ? 'matte' : preset.finish
   );
   const accentMat = makeFrameMaterialFromHex(
     preset.accent !== undefined ? preset.accent : (preset.trim !== undefined ? preset.trim : preset.body),
-    preset.finish,
-    false
+    preset.finish
   );
   return { bodyMat, trimMat, accentMat };
 }
@@ -2978,11 +2921,30 @@ function buildFrame(pW, pH, isSeriesRoom) {
   group.userData.frameMat = mat;
   group.userData.frameMatSet = matSet;   // for victorian-style cleanup
 
-  // Real shadows are now produced by the single directional shadow light
-  // (see setupShadowLight). The fake gradient shadow plane that used to
-  // sit behind each frame is gone — would have doubled-up with the real
-  // ones and looked too dark. All frame meshes are flagged castShadow
-  // after the style-specific builder runs.
+  // FAKE SHADOW PLANE — sits just in front of the wall behind the frame,
+  // sized larger than the frame and offset down-right to suggest a drop
+  // shadow from the painting spotlight. Compensates for the WebGL shadowMap
+  // being disabled (it crashed iOS Safari with too many lights).
+  const shadowTex = getFrameShadowTexture();
+  const shadowMat = new THREE.MeshBasicMaterial({
+    map: shadowTex,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  });
+  let shadowScaleX = 1.5, shadowScaleY = 1.5;
+  if (frameSettings.style === 'gothic') {
+    shadowScaleX = 2.0; shadowScaleY = 2.6;
+  } else if (frameSettings.style === 'victorian') {
+    shadowScaleX = 2.2; shadowScaleY = 2.8;
+  } else if (frameSettings.style === 'ornate') {
+    shadowScaleX = 1.9; shadowScaleY = 1.9;
+  }
+  const shadowGeo = new THREE.PlaneGeometry(pW * shadowScaleX, pH * shadowScaleY);
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+  shadow.position.set(pW * 0.04, -pH * 0.06, -0.010);
+  group.add(shadow);
+  group.userData.shadowMat = shadowMat;
 
   if (frameSettings.style === 'gothic') {
     buildGothicFrame(group, pW, pH, mat);
@@ -2997,15 +2959,6 @@ function buildFrame(pW, pH, isSeriesRoom) {
     buildMinimalFrame(group, pW, pH, mat);
     group.userData.frameDepth = 0.045;
   }
-
-  // Every solid mesh in the frame casts a shadow onto the wall behind it.
-  // The painting plane itself is not part of the frame group — it's added
-  // separately by the caller and stays a non-shadow-caster.
-  group.traverse(o => {
-    if (o.isMesh && o.material && o.material.transparent !== true) {
-      o.castShadow = true;
-    }
-  });
   return group;
 }
 
@@ -3342,56 +3295,39 @@ function buildVictorianFrame(group, pW, pH, matSet) {
     group.add(base);
   }
 
-  // ── TREFOIL ROSE WINDOW at peak ── three TorusGeometry rings arranged
-  // as a trefoil clover, plus a central accent ring. Built as actual 3D
-  // geometry so it catches the directional light + casts real shadow on
-  // the body behind it. Trim color for the rings, accent for the center.
-  const trefoilR = pH * 0.085;
-  const ringThickness = trefoilR * 0.15;
-  const trefoilY = halfPaintH + peakH * 0.55;
-  const trefoilZ = frameDepth + ringThickness;
-  // Three outer rings at 0°, 120°, 240°
-  for (let i = 0; i < 3; i++) {
-    const angle = (i / 3) * Math.PI * 2 - Math.PI / 2;
-    const cx = Math.cos(angle) * trefoilR * 0.7;
-    const cy = Math.sin(angle) * trefoilR * 0.7;
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(trefoilR * 0.45, ringThickness, 8, 18),
-      trimMat
-    );
-    ring.position.set(cx, trefoilY + cy, trefoilZ);
-    group.add(ring);
-  }
-  // Central accent ring
-  const centerRing = new THREE.Mesh(
-    new THREE.TorusGeometry(trefoilR * 0.3, ringThickness * 1.1, 8, 18),
-    accentMat
+  // ── TREFOIL ROSE WINDOW at peak ── alpha-masked plane sitting on top of
+  // the upper portion of the body. Procedural texture draws the rose detail.
+  const trefoilTex = getVictorianTrefoilTexture(matSet);
+  const trefoilSize = pH * 0.22;
+  const trefoil = new THREE.Mesh(
+    new THREE.PlaneGeometry(trefoilSize, trefoilSize),
+    new THREE.MeshBasicMaterial({
+      map: trefoilTex,
+      transparent: true,
+      alphaTest: 0.4,
+      depthWrite: false,
+    })
   );
-  centerRing.position.set(0, trefoilY, trefoilZ);
-  group.add(centerRing);
+  trefoil.position.set(0, halfPaintH + peakH * 0.55, frameDepth + 0.002);
+  group.add(trefoil);
+  group.userData.victorianTrefoilMat = trefoil.material;
 
-  // ── BOTTOM SCROLLWORK ── alpha-masked plane with MeshStandardMaterial.
-  // The alpha mask cuts out the silhouette; the standard material catches
-  // the directional shadow light and casts a real silhouette shadow on the
-  // wall. This is much cheaper than extruding the curls in 3D.
+  // ── BOTTOM SCROLLWORK ── alpha-masked plane below the painting opening
   const scrollTex = getVictorianScrollworkTexture(matSet);
   const scrollW = pW * 1.2;
   const scrollH = flourishH * 1.6;
-  const scrollMat = new THREE.MeshStandardMaterial({
-    map: scrollTex,
-    transparent: true,
-    alphaTest: 0.35,
-    roughness: 0.65,
-    metalness: 0.05,
-    side: THREE.DoubleSide,
-  });
   const scroll = new THREE.Mesh(
     new THREE.PlaneGeometry(scrollW, scrollH),
-    scrollMat
+    new THREE.MeshBasicMaterial({
+      map: scrollTex,
+      transparent: true,
+      alphaTest: 0.35,
+      depthWrite: false,
+    })
   );
   scroll.position.set(0, -halfPaintH - frameThk - flourishH * 0.5, frameDepth + 0.002);
   group.add(scroll);
-  group.userData.victorianScrollMat = scrollMat;
+  group.userData.victorianScrollMat = scroll.material;
 
   // ── SPIRES ── three vertical spires: 2 tall flanking the peak, 1 shorter at apex
   // Each spire is a slim trim-colored cylinder + accent-colored cone cap.
