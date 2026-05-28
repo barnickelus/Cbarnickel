@@ -1261,6 +1261,8 @@ body { overscroll-behavior: none; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- GLTFLoader for the Victorian mesh frame (cdnjs lacks the r128 loaders dir, unpkg has it) -->
+<script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
@@ -1310,6 +1312,18 @@ const frameSettings = {
   style: localStorage.getItem('frameStyle') || 'minimal',
   color: localStorage.getItem('frameColor') || 'auto',
 };
+
+// ── Victorian mesh frame ── The "victorian" style loads a real 3D model
+// (victorian-frame.glb) instead of procedural geometry. The GLB is fetched
+// once, its geometry cached, then cloned + scaled per painting. Because
+// loading is async but frames build synchronously, any victorian frame
+// built before the mesh arrives registers here and gets populated on load.
+const VICTORIAN_GLB_URL = 'victorian-frame.glb';
+let _victorianGeo = null;          // cached BufferGeometry (vertex-colored)
+let _victorianLoadState = 'idle';  // idle | loading | ready | failed
+const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
+// The GLB's own bounding box (filled once loaded) so we can scale to fit.
+let _victorianNativeSize = null;
 
 const lightingRefs = {
   ambient: null,
@@ -2951,7 +2965,10 @@ function buildFrame(pW, pH, isSeriesRoom) {
     group.userData.frameDepth = 0.06;
   } else if (frameSettings.style === 'victorian') {
     buildVictorianFrame(group, pW, pH, matSet);
-    group.userData.frameDepth = 0.08;
+    // The mesh frame's opening sits near the wall; keep the painting close
+    // to the wall surface so it reads as set INTO the niche, not floating
+    // in front of the ornament. Tuned to the GLB's opening depth.
+    group.userData.frameDepth = 0.03;
   } else if (frameSettings.style === 'ornate') {
     buildOrnateFrame(group, pW, pH, mat);
     group.userData.frameDepth = 0.05;
@@ -3205,241 +3222,118 @@ function buildGothicFrame(group, pW, pH, mat) {
 // bottom flourish, three tall spires with cone caps. Inspired by Victorian
 // Gothic altarpiece-style picture frames.
 function buildVictorianFrame(group, pW, pH, matSet) {
-  const { bodyMat, trimMat, accentMat } = matSet;
-  group.userData.victorianMats = [bodyMat, trimMat, accentMat];
+  // The Victorian style is now a real 3D mesh (victorian-frame.glb), not
+  // procedural geometry. We clone the cached, vertex-colored geometry and
+  // scale it to fit this painting's opening. If the mesh hasn't loaded yet,
+  // we register this frame as pending and a lightweight placeholder box is
+  // shown until the GLB arrives (then populateVictorianFrame swaps it in).
+  group.userData.isVictorianMesh = true;
+  group.userData.victorianPW = pW;
+  group.userData.victorianPH = pH;
 
-  const frameThk = Math.max(0.08, Math.min(0.14, pH * 0.085));
-  const frameDepth = 0.08;
-  const peakH = pH * 0.55;
-  const flourishH = pH * 0.18;
-  const halfPaintW = pW / 2;
-  const halfPaintH = pH / 2;
-  const sideExtra = frameThk * 1.4;
-
-  // ── MAIN BODY ── built as THREE NESTED LAYERS to mimic the reference's
-  // concentric color stripes (outer accent band → mid trim band → inner
-  // body color, each at slightly different depths so they read as raised
-  // banding when light hits the bevel).
-  //
-  // The bottom is a FLAT SILL (rectangular base) — the reference has a
-  // strong horizontal sill below the painting opening, not a curved
-  // flourish. The decorative scrollwork hangs below that sill separately.
-  function makeOuterShape(inset) {
-    const s = new THREE.Shape();
-    const sExtra = sideExtra - inset;
-    const fThk = frameThk - inset * 0.5;
-    // Flat sill height — a clean horizontal base below the painting
-    const sillH = frameThk * 1.4;
-    // Bottom edge of the sill
-    const baseY = -halfPaintH - sillH;
-    s.moveTo(-halfPaintW - sExtra, baseY);
-    s.lineTo(halfPaintW + sExtra, baseY);
-    // Up the right side to the top of the painting opening
-    s.lineTo(halfPaintW + sExtra, halfPaintH);
-    // Shoulder of the peak — slope in slightly
-    s.lineTo(halfPaintW + fThk * 0.3, halfPaintH + fThk * 0.2);
-    // Curve up to apex
-    s.quadraticCurveTo(
-      halfPaintW * 0.5, halfPaintH + peakH * 0.85 - inset,
-      0, halfPaintH + peakH - inset
+  if (_victorianLoadState === 'ready' && _victorianGeo) {
+    addVictorianMesh(group, pW, pH);
+  } else {
+    // Placeholder: a thin dark rectangular surround so there's *something*
+    // framing the painting while the mesh loads.
+    const thk = Math.max(0.06, pH * 0.06);
+    const phMat = new THREE.MeshStandardMaterial({ color: 0x5f7ca6, roughness: 0.6, metalness: 0.05 });
+    const ph = new THREE.Mesh(
+      new THREE.BoxGeometry(pW + thk * 2, pH + thk * 2, 0.05),
+      phMat
     );
-    s.quadraticCurveTo(
-      -halfPaintW * 0.5, halfPaintH + peakH * 0.85 - inset,
-      -halfPaintW - fThk * 0.3, halfPaintH + fThk * 0.2
-    );
-    s.lineTo(-halfPaintW - sExtra, halfPaintH);
-    s.lineTo(-halfPaintW - sExtra, baseY);
-    // Painting opening hole — rectangular
-    const h = new THREE.Path();
-    const innerW = halfPaintW + Math.max(0, inset * 0.15);
-    const innerH = halfPaintH + Math.max(0, inset * 0.15);
-    h.moveTo(-innerW, -innerH);
-    h.lineTo(-innerW, innerH);
-    h.lineTo(innerW, innerH);
-    h.lineTo(innerW, -innerH);
-    h.lineTo(-innerW, -innerH);
-    s.holes.push(h);
-    return s;
+    ph.position.z = 0.025;
+    ph.userData.isVictorianPlaceholder = true;
+    group.add(ph);
+    group.userData.victorianPlaceholderMat = phMat;
+    _victorianPending.push({ group, pW, pH });
+    // Kick off the load if it hasn't started
+    loadVictorianMesh();
   }
+}
 
-  // Outer band — accent color (mint-green in pastel-blue palette)
-  const outerShape = makeOuterShape(0);
-  const outerGeo = new THREE.ExtrudeGeometry(outerShape, {
-    depth: frameDepth * 0.85,
-    bevelEnabled: true,
-    bevelThickness: frameDepth * 0.06,
-    bevelSize: frameDepth * 0.05,
-    bevelSegments: 1,
-    curveSegments: 14,
+// Clone the cached Victorian geometry, fit it to the painting, add to group.
+function addVictorianMesh(group, pW, pH) {
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.6,
+    metalness: 0.05,
   });
-  const outerBand = new THREE.Mesh(outerGeo, accentMat);
-  group.add(outerBand);
+  const mesh = new THREE.Mesh(_victorianGeo, mat);
+  // The GLB's native opening proportions differ from each painting. We scale
+  // the whole frame so its INNER opening matches pW × pH. The model's outer
+  // bounds are _victorianNativeSize; empirically the opening is ~ 0.52 of the
+  // model width and ~0.40 of the model height (measured from the mesh). We
+  // scale X to match painting width and Y to match height independently so
+  // any aspect ratio of painting sits correctly in the opening.
+  const openingFracW = 0.52;   // opening width as fraction of model width
+  const openingFracH = 0.42;   // opening height as fraction of model height
+  const modelOpeningW = _victorianNativeSize.x * openingFracW;
+  const modelOpeningH = _victorianNativeSize.y * openingFracH;
+  const sx = pW / modelOpeningW;
+  const sy = pH / modelOpeningH;
+  // Use a single uniform-ish scale based on the average to avoid distorting
+  // the ornament; bias toward matching width so frame doesn't overhang walls.
+  const s = Math.min(sx, sy);
+  mesh.scale.set(s, s, s);
+  // The model is centered at origin already (we centered it at export time).
+  // Push it out so it sits in front of the wall like the procedural frames.
+  mesh.position.set(0, 0, 0);
+  mesh.userData.isVictorianMeshChild = true;
+  group.add(mesh);
+  group.userData.victorianMeshMat = mat;
+}
 
-  // Middle band — trim color (white in pastel-blue palette), slightly inset + deeper
-  const midShape = makeOuterShape(frameThk * 0.18);
-  const midGeo = new THREE.ExtrudeGeometry(midShape, {
-    depth: frameDepth * 0.9,
-    bevelEnabled: true,
-    bevelThickness: frameDepth * 0.06,
-    bevelSize: frameDepth * 0.05,
-    bevelSegments: 1,
-    curveSegments: 14,
-  });
-  const midBand = new THREE.Mesh(midGeo, trimMat);
-  midBand.position.z = 0.003;
-  group.add(midBand);
-
-  // Inner body — main body color (blue in pastel-blue palette), more inset + deepest
-  const innerShape = makeOuterShape(frameThk * 0.36);
-  const innerGeo = new THREE.ExtrudeGeometry(innerShape, {
-    depth: frameDepth,
-    bevelEnabled: true,
-    bevelThickness: frameDepth * 0.08,
-    bevelSize: frameDepth * 0.06,
-    bevelSegments: 1,
-    curveSegments: 14,
-  });
-  const innerBody = new THREE.Mesh(innerGeo, bodyMat);
-  innerBody.position.z = 0.006;
-  group.add(innerBody);
-
-  // ── CUSP ARCH INTERIOR ── three white scalloped curves inside the peak,
-  // mimicking the trefoil-cusped gothic arch decoration in the reference.
-  // Built as an alpha-masked plane (procedural canvas drawing).
-  const cuspTex = getVictorianCuspTexture(matSet);
-  const cuspW = pW * 0.85;
-  const cuspH = peakH * 0.55;
-  const cusp = new THREE.Mesh(
-    new THREE.PlaneGeometry(cuspW, cuspH),
-    new THREE.MeshBasicMaterial({
-      map: cuspTex,
-      transparent: true,
-      alphaTest: 0.35,
-      depthWrite: false,
-    })
-  );
-  cusp.position.set(0, halfPaintH + peakH * 0.22, frameDepth + 0.008);
-  group.add(cusp);
-  group.userData.victorianCuspMat = cusp.material;
-
-  // ── PAIRED COLONNADES ── turned columns built with LatheGeometry so they
-  // have a real lathed silhouette: a flared base, a shaft with subtle
-  // entasis (mid-bulge), and a flared capital — all as ONE smooth profile
-  // spun around the Y axis. Two columns per side (twinned, as in reference).
-  const colH = pH * 0.88;
-  const colR = frameThk * 0.22;          // nominal shaft radius
-  const colInner = halfPaintW + frameThk * 0.38;
-  const colOuter = halfPaintW + frameThk * 0.82;
-  const colProfile = makeColumnProfile(colH, colR);
-  const colGeo = new THREE.LatheGeometry(colProfile, 12);
-  for (const sx of [-1, 1]) {
-    for (const xOffset of [colInner, colOuter]) {
-      const col = new THREE.Mesh(colGeo, trimMat);
-      col.position.set(sx * xOffset, -halfPaintH * 0.05, frameDepth * 0.92);
-      group.add(col);
+// Lazy-load the Victorian GLB once; populate all pending frames on success.
+function loadVictorianMesh() {
+  if (_victorianLoadState === 'loading' || _victorianLoadState === 'ready') return;
+  if (typeof THREE.GLTFLoader === 'undefined') {
+    console.warn('GLTFLoader not available; Victorian mesh frame disabled.');
+    _victorianLoadState = 'failed';
+    return;
+  }
+  _victorianLoadState = 'loading';
+  const loader = new THREE.GLTFLoader();
+  loader.load(
+    VICTORIAN_GLB_URL,
+    (gltf) => {
+      let geo = null;
+      gltf.scene.traverse(o => {
+        if (o.isMesh && !geo) {
+          o.geometry.computeVertexNormals();
+          geo = o.geometry;
+        }
+      });
+      if (!geo) { _victorianLoadState = 'failed'; return; }
+      _victorianGeo = geo;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      _victorianNativeSize = {
+        x: bb.max.x - bb.min.x,
+        y: bb.max.y - bb.min.y,
+        z: bb.max.z - bb.min.z,
+      };
+      _victorianLoadState = 'ready';
+      // Populate every pending frame: clear placeholder, add real mesh.
+      for (const p of _victorianPending) {
+        // Remove placeholder children
+        const toRemove = [];
+        p.group.traverse(o => { if (o.userData && o.userData.isVictorianPlaceholder) toRemove.push(o); });
+        for (const o of toRemove) {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+          p.group.remove(o);
+        }
+        addVictorianMesh(p.group, p.pW, p.pH);
+      }
+      _victorianPending.length = 0;
+    },
+    undefined,
+    (err) => {
+      console.warn('Victorian GLB failed to load:', err);
+      _victorianLoadState = 'failed';
     }
-  }
-
-  // ── TREFOIL ROSE WINDOW at peak ── alpha-masked plane (improved drawing
-  // with cleaner trefoil cusps; see getVictorianTrefoilTexture).
-  const trefoilTex = getVictorianTrefoilTexture(matSet);
-  const trefoilSize = pH * 0.20;
-  const trefoil = new THREE.Mesh(
-    new THREE.PlaneGeometry(trefoilSize, trefoilSize),
-    new THREE.MeshBasicMaterial({
-      map: trefoilTex,
-      transparent: true,
-      alphaTest: 0.4,
-      depthWrite: false,
-    })
   );
-  trefoil.position.set(0, halfPaintH + peakH * 0.62, frameDepth + 0.010);
-  group.add(trefoil);
-  group.userData.victorianTrefoilMat = trefoil.material;
-
-  // ── BOTTOM SCROLLWORK ── alpha-masked plane with elaborate Victorian apron
-  const scrollTex = getVictorianScrollworkTexture(matSet);
-  const scrollW = pW * 1.35;
-  const scrollH = flourishH * 1.9;
-  const scroll = new THREE.Mesh(
-    new THREE.PlaneGeometry(scrollW, scrollH),
-    new THREE.MeshBasicMaterial({
-      map: scrollTex,
-      transparent: true,
-      alphaTest: 0.35,
-      depthWrite: false,
-    })
-  );
-  const flourishYPos = -halfPaintH - frameThk * 1.4 - flourishH * 0.4;
-  scroll.position.set(0, flourishYPos, frameDepth + 0.008);
-  group.add(scroll);
-  group.userData.victorianScrollMat = scroll.material;
-
-  // ── SPIRES ── three pinnacle spires (2 side, 1 apex). Each spire's shaft +
-  // tapering spire-tip is a single turned LatheGeometry profile (body color),
-  // wrapped with 4 small accent "crockets" at the spire base, and capped with
-  // a tiny turned finial. Lathing gives the spire a real spindle silhouette
-  // instead of a plain cylinder+cone.
-  function makeSpire(sx, baseY, h) {
-    const cylR = frameThk * 0.26;
-    // Turned shaft+tip profile (bottom to top): collar, shaft, swell, taper
-    const spireProfile = makeSpireProfile(h, cylR);
-    const spireGeo = new THREE.LatheGeometry(spireProfile, 10);
-    const spire = new THREE.Mesh(spireGeo, bodyMat);
-    spire.position.set(sx, baseY, frameDepth * 0.72);
-    group.add(spire);
-    // Crockets — 4 small accent spheres ringing the spire base
-    const crocketY = baseY + h * 0.16;
-    const crocketR = cylR * 0.5;
-    for (let i = 0; i < 4; i++) {
-      const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const cx = sx + Math.cos(angle) * cylR * 1.5;
-      const cz = frameDepth * 0.72 + Math.sin(angle) * cylR * 1.5;
-      const crocket = new THREE.Mesh(
-        new THREE.SphereGeometry(crocketR, 6, 5),
-        accentMat
-      );
-      crocket.position.set(cx, crocketY, cz);
-      group.add(crocket);
-    }
-    // Tiny accent ball at the very tip
-    const tipBall = new THREE.Mesh(
-      new THREE.SphereGeometry(cylR * 0.3, 6, 5),
-      accentMat
-    );
-    tipBall.position.set(sx, baseY + h * 1.04, frameDepth * 0.72);
-    group.add(tipBall);
-  }
-  const sideSpireH = pH * 0.55;
-  const apexSpireH = pH * 0.34;
-  const spireX = halfPaintW + frameThk * 0.4;
-  const spireBaseY = halfPaintH + frameThk * 0.3;
-  makeSpire(-spireX, spireBaseY, sideSpireH);
-  makeSpire( spireX, spireBaseY, sideSpireH);
-  makeSpire(0, halfPaintH + peakH * 0.98, apexSpireH);
-
-  // ── BOTTOM TURNED FINIALS ── the urn-drop pendants under the apron. These
-  // are the classic lathed shape, now built properly with LatheGeometry: a
-  // collar, a swelling urn body, a narrow neck, and a pointed drop — one
-  // smooth turned profile. Two side pendants.
-  function makeTurnedFinial(px, totalH) {
-    const r = frameThk * 0.34;
-    const profile = makePendantProfile(totalH, r);
-    const geo = new THREE.LatheGeometry(profile, 12);
-    const finial = new THREE.Mesh(geo, bodyMat);
-    finial.position.set(px, flourishYPos - flourishH * 0.4, frameDepth * 0.72);
-    group.add(finial);
-    // Accent collar ring near the top of the urn
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(r * 0.6, r * 0.12, 6, 14),
-      accentMat
-    );
-    ring.position.set(px, flourishYPos - flourishH * 0.4 + totalH * 0.30, frameDepth * 0.72);
-    ring.rotation.x = Math.PI / 2;
-    group.add(ring);
-  }
-  makeTurnedFinial(-pW * 0.38, flourishH * 1.5);
-  makeTurnedFinial( pW * 0.38, flourishH * 1.5);
 }
 
 // ── Lathe profile helpers ──
@@ -3768,16 +3662,23 @@ function getVictorianScrollworkTexture(matSet) {
 /* Rebuild every frame in place (called when user changes style/color).
    Disposes old meshes and replaces with new ones in the same Group. */
 function rebuildAllFrames() {
+  // Reset the Victorian pending registry — any frames waiting on the mesh
+  // are about to be rebuilt fresh, so stale entries must not fire later.
+  _victorianPending.length = 0;
   for (const fg of paintingFrames) {
-    // Dispose old children
+    // Dispose old children. IMPORTANT: never dispose the shared Victorian
+    // geometry (_victorianGeo) — it's reused across every Victorian frame.
     while (fg.children.length) {
       const c = fg.children[0];
-      if (c.geometry) c.geometry.dispose();
+      if (c.geometry && c.geometry !== _victorianGeo) c.geometry.dispose();
+      if (c.userData && c.userData.isVictorianMeshChild && c.material) c.material.dispose();
       fg.remove(c);
     }
     if (fg.userData.frameMat) fg.userData.frameMat.dispose();
     if (fg.userData.shadowMat) fg.userData.shadowMat.dispose();
-    // Victorian-specific cleanup
+    if (fg.userData.victorianMeshMat) { fg.userData.victorianMeshMat.dispose(); fg.userData.victorianMeshMat = null; }
+    if (fg.userData.victorianPlaceholderMat) { fg.userData.victorianPlaceholderMat.dispose(); fg.userData.victorianPlaceholderMat = null; }
+    // Victorian-specific cleanup (legacy procedural materials, if any)
     if (fg.userData.victorianMats) {
       for (const m of fg.userData.victorianMats) {
         if (m && m !== fg.userData.frameMat) m.dispose();
@@ -3808,11 +3709,18 @@ function rebuildAllFrames() {
     }
     fg.userData.frameMat = newGroup.userData.frameMat;
     fg.userData.shadowMat = newGroup.userData.shadowMat;
+    fg.userData.victorianMeshMat = newGroup.userData.victorianMeshMat;
+    fg.userData.victorianPlaceholderMat = newGroup.userData.victorianPlaceholderMat;
     fg.userData.victorianMats = newGroup.userData.victorianMats;
     fg.userData.victorianTrefoilMat = newGroup.userData.victorianTrefoilMat;
     fg.userData.victorianScrollMat = newGroup.userData.victorianScrollMat;
     fg.userData.victorianCuspMat = newGroup.userData.victorianCuspMat;
     fg.userData.frameDepth = newGroup.userData.frameDepth;
+    // If this rebuilt frame is a pending Victorian placeholder, re-register it
+    // against the (possibly already-loaded) mesh.
+    if (newGroup.userData.isVictorianMesh && _victorianLoadState === 'ready') {
+      // already populated synchronously inside buildVictorianFrame; nothing to do
+    }
   }
   // Reposition each painting plane to sit just in front of its (possibly
   // resized) frame
