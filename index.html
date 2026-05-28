@@ -3322,36 +3322,21 @@ function buildVictorianFrame(group, pW, pH, matSet) {
   group.add(cusp);
   group.userData.victorianCuspMat = cusp.material;
 
-  // ── PAIRED COLONNADES ── two slim columns per side, like the twinned
-  // pillars in the reference. Each pair sits at slightly different x
-  // offsets to create the doubled-column appearance.
-  const colW = frameThk * 0.28;
+  // ── PAIRED COLONNADES ── turned columns built with LatheGeometry so they
+  // have a real lathed silhouette: a flared base, a shaft with subtle
+  // entasis (mid-bulge), and a flared capital — all as ONE smooth profile
+  // spun around the Y axis. Two columns per side (twinned, as in reference).
   const colH = pH * 0.88;
-  const colInner = halfPaintW + frameThk * 0.35;
-  const colOuter = halfPaintW + frameThk * 0.75;
+  const colR = frameThk * 0.22;          // nominal shaft radius
+  const colInner = halfPaintW + frameThk * 0.38;
+  const colOuter = halfPaintW + frameThk * 0.82;
+  const colProfile = makeColumnProfile(colH, colR);
+  const colGeo = new THREE.LatheGeometry(colProfile, 12);
   for (const sx of [-1, 1]) {
     for (const xOffset of [colInner, colOuter]) {
-      const col = new THREE.Mesh(
-        new THREE.CylinderGeometry(colW, colW, colH, 10),
-        trimMat
-      );
-      col.position.set(sx * xOffset, -halfPaintH * 0.05, frameDepth * 0.9);
+      const col = new THREE.Mesh(colGeo, trimMat);
+      col.position.set(sx * xOffset, -halfPaintH * 0.05, frameDepth * 0.92);
       group.add(col);
-      // Capital at top (accent color) — flared
-      const capR = colW * 1.9;
-      const cap = new THREE.Mesh(
-        new THREE.CylinderGeometry(capR, capR * 0.7, colW * 1.5, 10),
-        accentMat
-      );
-      cap.position.set(sx * xOffset, colH * 0.5 - halfPaintH * 0.05 + colW * 0.6, frameDepth * 0.9);
-      group.add(cap);
-      // Base at bottom (accent color) — mirrored capital
-      const base = new THREE.Mesh(
-        new THREE.CylinderGeometry(capR * 0.7, capR, colW * 1.5, 10),
-        accentMat
-      );
-      base.position.set(sx * xOffset, -colH * 0.5 - halfPaintH * 0.05 - colW * 0.6, frameDepth * 0.9);
-      group.add(base);
     }
   }
 
@@ -3390,34 +3375,26 @@ function buildVictorianFrame(group, pW, pH, matSet) {
   group.add(scroll);
   group.userData.victorianScrollMat = scroll.material;
 
-  // ── SPIRES ── three pinnacle spires (2 side, 1 apex), each with small
-  // foliage cresting at the cone base (mimicking the Gothic "crockets" in
-  // the reference) and a tiny finial nub at the top.
+  // ── SPIRES ── three pinnacle spires (2 side, 1 apex). Each spire's shaft +
+  // tapering spire-tip is a single turned LatheGeometry profile (body color),
+  // wrapped with 4 small accent "crockets" at the spire base, and capped with
+  // a tiny turned finial. Lathing gives the spire a real spindle silhouette
+  // instead of a plain cylinder+cone.
   function makeSpire(sx, baseY, h) {
     const cylR = frameThk * 0.26;
-    // Main slim shaft — body color (so it blends with the frame)
-    const cyl = new THREE.Mesh(
-      new THREE.CylinderGeometry(cylR * 0.7, cylR, h, 8),
-      bodyMat
-    );
-    cyl.position.set(sx, baseY + h / 2, frameDepth * 0.7);
-    group.add(cyl);
-    // Cone cap — trim color (lighter, matches reference white tips)
-    const coneH = cylR * 5;
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(cylR * 0.85, coneH, 8),
-      trimMat
-    );
-    cone.position.set(sx, baseY + h + coneH / 2, frameDepth * 0.7);
-    group.add(cone);
-    // Foliage cresting — 4 small accent-colored "crockets" around the
-    // cone base, suggesting carved leaves. Tiny spheres at quarter points.
-    const crocketY = baseY + h - cylR * 0.3;
+    // Turned shaft+tip profile (bottom to top): collar, shaft, swell, taper
+    const spireProfile = makeSpireProfile(h, cylR);
+    const spireGeo = new THREE.LatheGeometry(spireProfile, 10);
+    const spire = new THREE.Mesh(spireGeo, bodyMat);
+    spire.position.set(sx, baseY, frameDepth * 0.72);
+    group.add(spire);
+    // Crockets — 4 small accent spheres ringing the spire base
+    const crocketY = baseY + h * 0.16;
     const crocketR = cylR * 0.5;
     for (let i = 0; i < 4; i++) {
-      const angle = (i / 4) * Math.PI * 2;
-      const cx = sx + Math.cos(angle) * cylR * 1.4;
-      const cz = frameDepth * 0.7 + Math.sin(angle) * cylR * 1.4;
+      const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const cx = sx + Math.cos(angle) * cylR * 1.5;
+      const cz = frameDepth * 0.72 + Math.sin(angle) * cylR * 1.5;
       const crocket = new THREE.Mesh(
         new THREE.SphereGeometry(crocketR, 6, 5),
         accentMat
@@ -3425,60 +3402,100 @@ function buildVictorianFrame(group, pW, pH, matSet) {
       crocket.position.set(cx, crocketY, cz);
       group.add(crocket);
     }
-    // Tiny tip finial — small accent sphere at very top of the cone
+    // Tiny accent ball at the very tip
     const tipBall = new THREE.Mesh(
-      new THREE.SphereGeometry(cylR * 0.35, 6, 5),
+      new THREE.SphereGeometry(cylR * 0.3, 6, 5),
       accentMat
     );
-    tipBall.position.set(sx, baseY + h + coneH + cylR * 0.2, frameDepth * 0.7);
+    tipBall.position.set(sx, baseY + h * 1.04, frameDepth * 0.72);
     group.add(tipBall);
   }
   const sideSpireH = pH * 0.55;
-  const apexSpireH = pH * 0.32;
-  // Side spires sit at the OUTER EDGES of the peak shoulders, not way out on
-  // the body sides. In the reference these spires are at the widest point
-  // of the gothic peak, around halfPaintW + frameThk*0.4.
+  const apexSpireH = pH * 0.34;
   const spireX = halfPaintW + frameThk * 0.4;
   const spireBaseY = halfPaintH + frameThk * 0.3;
   makeSpire(-spireX, spireBaseY, sideSpireH);
   makeSpire( spireX, spireBaseY, sideSpireH);
-  // Apex spire — at the peak point, slightly above the body apex
   makeSpire(0, halfPaintH + peakH * 0.98, apexSpireH);
 
-  // ── BOTTOM TURNED FINIALS ── replace the simple downward cones with
-  // bulbous "turned-wood" pendant shapes: stacked sphere + cone + small
-  // sphere to approximate a lathed pendant. Two side pendants only (the
-  // center is occupied by the scrollwork's central ornament now).
+  // ── BOTTOM TURNED FINIALS ── the urn-drop pendants under the apron. These
+  // are the classic lathed shape, now built properly with LatheGeometry: a
+  // collar, a swelling urn body, a narrow neck, and a pointed drop — one
+  // smooth turned profile. Two side pendants.
   function makeTurnedFinial(px, totalH) {
-    const fGroup = new THREE.Group();
-    const r = frameThk * 0.32;
-    // Upper sphere (the "ball")
-    const upperBall = new THREE.Mesh(
-      new THREE.SphereGeometry(r, 10, 8),
-      bodyMat
-    );
-    upperBall.position.y = totalH * 0.35;
-    fGroup.add(upperBall);
-    // Mid cone (the tapered shaft)
-    const shaft = new THREE.Mesh(
-      new THREE.ConeGeometry(r * 0.55, totalH * 0.55, 10),
-      bodyMat
-    );
-    shaft.position.y = 0;
-    shaft.rotation.x = Math.PI;
-    fGroup.add(shaft);
-    // Tip — small accent-colored sphere at the bottom
-    const tip = new THREE.Mesh(
-      new THREE.SphereGeometry(r * 0.42, 8, 6),
+    const r = frameThk * 0.34;
+    const profile = makePendantProfile(totalH, r);
+    const geo = new THREE.LatheGeometry(profile, 12);
+    const finial = new THREE.Mesh(geo, bodyMat);
+    finial.position.set(px, flourishYPos - flourishH * 0.4, frameDepth * 0.72);
+    group.add(finial);
+    // Accent collar ring near the top of the urn
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(r * 0.6, r * 0.12, 6, 14),
       accentMat
     );
-    tip.position.y = -totalH * 0.42;
-    fGroup.add(tip);
-    fGroup.position.set(px, flourishYPos - flourishH * 0.4, frameDepth * 0.7);
-    group.add(fGroup);
+    ring.position.set(px, flourishYPos - flourishH * 0.4 + totalH * 0.30, frameDepth * 0.72);
+    ring.rotation.x = Math.PI / 2;
+    group.add(ring);
   }
-  makeTurnedFinial(-pW * 0.38, flourishH * 1.4);
-  makeTurnedFinial( pW * 0.38, flourishH * 1.4);
+  makeTurnedFinial(-pW * 0.38, flourishH * 1.5);
+  makeTurnedFinial( pW * 0.38, flourishH * 1.5);
+}
+
+// ── Lathe profile helpers ──
+// Each returns an array of THREE.Vector2 tracing a silhouette from bottom to
+// top (x = radius, y = height). LatheGeometry spins these around the Y axis.
+
+// Turned column: flared base → shaft with subtle entasis → flared capital.
+function makeColumnProfile(h, r) {
+  const half = h / 2;
+  return [
+    new THREE.Vector2(0.0,        -half),               // base center (bottom)
+    new THREE.Vector2(r * 1.9,    -half),               // base outer edge
+    new THREE.Vector2(r * 1.9,    -half + r * 0.5),     // base top
+    new THREE.Vector2(r * 1.1,    -half + r * 1.2),     // base fillet into shaft
+    new THREE.Vector2(r * 1.04,   -half + h * 0.30),    // shaft lower (entasis swell)
+    new THREE.Vector2(r * 1.0,     0),                  // shaft mid
+    new THREE.Vector2(r * 0.92,    half - h * 0.18),    // shaft upper taper
+    new THREE.Vector2(r * 1.1,     half - r * 1.3),     // capital fillet
+    new THREE.Vector2(r * 2.0,     half - r * 0.5),     // capital flare
+    new THREE.Vector2(r * 2.0,     half),               // capital top edge
+    new THREE.Vector2(0.0,         half),               // capital center (top)
+  ];
+}
+
+// Turned spire: short flared collar → tall slender shaft → swell → needle tip.
+function makeSpireProfile(h, r) {
+  return [
+    new THREE.Vector2(0.0,      0),            // base center
+    new THREE.Vector2(r * 1.3,  0),            // collar outer
+    new THREE.Vector2(r * 1.3,  h * 0.08),     // collar top
+    new THREE.Vector2(r * 0.85, h * 0.14),     // into shaft
+    new THREE.Vector2(r * 0.9,  h * 0.34),     // shaft swell
+    new THREE.Vector2(r * 0.78, h * 0.55),     // shaft narrowing
+    new THREE.Vector2(r * 0.95, h * 0.62),     // small swell (banded knop)
+    new THREE.Vector2(r * 0.5,  h * 0.74),     // taper begins
+    new THREE.Vector2(r * 0.18, h * 0.92),     // near tip
+    new THREE.Vector2(0.0,      h),            // needle point
+  ];
+}
+
+// Turned pendant (urn-drop): collar → swelling urn → neck → pointed drop.
+// Built downward — y=0 at top collar, negative y downward to the point.
+function makePendantProfile(h, r) {
+  return [
+    new THREE.Vector2(0.0,      0),            // top center (attaches up to apron)
+    new THREE.Vector2(r * 0.9,  0),            // collar outer
+    new THREE.Vector2(r * 0.95, -h * 0.06),    // collar bottom
+    new THREE.Vector2(r * 0.55, -h * 0.14),    // neck in
+    new THREE.Vector2(r * 1.05, -h * 0.30),    // urn shoulder
+    new THREE.Vector2(r * 1.1,  -h * 0.42),    // urn belly (widest)
+    new THREE.Vector2(r * 0.7,  -h * 0.58),    // urn taper
+    new THREE.Vector2(r * 0.42, -h * 0.70),    // narrow neck
+    new THREE.Vector2(r * 0.5,  -h * 0.78),    // small bead
+    new THREE.Vector2(r * 0.18, -h * 0.92),    // toward point
+    new THREE.Vector2(0.0,      -h),           // drop point (bottom)
+  ];
 }
 
 // Cusp arch interior texture — three downward-pointing scalloped curves
