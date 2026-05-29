@@ -1320,10 +1320,20 @@ const frameSettings = {
 // built before the mesh arrives registers here and gets populated on load.
 const VICTORIAN_GLB_URL = 'victorian-frame.glb';
 let _victorianGeo = null;          // cached BufferGeometry (vertex-colored)
+let _victorianBasePositions = null; // Float32Array of base vertex positions (for band-stretch)
 let _victorianLoadState = 'idle';  // idle | loading | ready | failed
 const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
 // The GLB's own bounding box (filled once loaded) so we can scale to fit.
 let _victorianNativeSize = null;
+// Band-stretch zones (model units, Y). Only the side-rail strip between
+// STRETCH_LO and STRETCH_HI scales vertically; everything above (arch, rose,
+// spires, capitals) and below (sill, apron, pendants) keeps fixed proportions.
+const VIC_STRETCH_LO = -0.70;
+const VIC_STRETCH_HI = -0.15;
+// Opening geometry measured from the cut mesh.
+const VIC_OPEN_W = 0.4720;   // model-unit opening width
+const VIC_OPEN_H = 0.9120;   // model-unit opening height (at base, unstretched)
+const VIC_OPEN_CY = -0.3040; // model-unit opening center Y (at base)
 
 const lightingRefs = {
   ambient: null,
@@ -3258,46 +3268,69 @@ function buildVictorianFrame(group, pW, pH, matSet) {
 }
 
 // Clone the cached Victorian geometry, fit it to the painting, add to group.
-// Measured opening geometry of victorian-frame.glb (in model units, after the
-// centering + opening cut we did at export time). The opening is NOT centered
-// in the model — the tracery/peak occupies the top, so the window sits low.
-const VIC_OPEN_FRAC_W = 0.5604;   // opening width  / model width
-const VIC_OPEN_FRAC_H = 0.4803;   // opening height / model height
-const VIC_OPEN_CY_FRAC = -0.1601; // opening center Y / model full height (negative = below center)
-
 function addVictorianMesh(group, pW, pH) {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.6,
     metalness: 0.05,
   });
-  const mesh = new THREE.Mesh(_victorianGeo, mat);
 
-  const modelW = _victorianNativeSize.x;
-  const modelH = _victorianNativeSize.y;
-  const modelOpeningW = modelW * VIC_OPEN_FRAC_W;
-  const modelOpeningH = modelH * VIC_OPEN_FRAC_H;
+  // Build a band-stretched COPY of the geometry sized to this painting.
+  // 1) X scale so the opening width matches the painting width.
+  // 2) Vertical band-stretch so the opening HEIGHT matches the painting,
+  //    stretching only the plain side-rail strip (VIC_STRETCH_LO..HI) and
+  //    keeping arch/rose/spires (above) and apron/pendants (below) fixed.
+  const geo = _victorianGeo.clone();
+  const pos = geo.attributes.position;
+  const base = _victorianBasePositions;
 
-  // Scale each axis so the opening matches the painting. We allow a mild
-  // non-uniform scale (clamped) so paintings of differing aspect still sit
-  // in the window without huge distortion of the ornament.
-  let sx = pW / modelOpeningW;
-  let sy = pH / modelOpeningH;
-  // Clamp the aspect difference so ornament never distorts more than 25%
-  const ratio = sx / sy;
-  const clamped = Math.max(0.8, Math.min(1.25, ratio));
-  sx = sy * clamped;
-  mesh.scale.set(sx, sy, (sx + sy) / 2);
+  // World target: opening must equal pW × pH.
+  // X scale: painting width / model opening width.
+  const sxModel = pW / VIC_OPEN_W;
+  // For height: we need the opening (currently VIC_OPEN_H in model units, but
+  // after X scaling everything is in model units still — we apply one overall
+  // model→world scale = sxModel to keep proportions, then add vertical extra
+  // in MODEL units to make the opening the right height).
+  // Desired opening height in model units (before the overall sxModel scale):
+  const desiredOpenH_model = pH / sxModel;
+  const extra = desiredOpenH_model - VIC_OPEN_H;   // model units to add to rail
 
-  // The opening center sits at modelH*VIC_OPEN_CY_FRAC in model space. After
-  // scaling by sy, that's at sy*modelH*VIC_OPEN_CY_FRAC in local space. We
-  // shift the mesh UP by that amount so the opening lands on the painting
-  // center (the group origin = painting center).
-  const openingCenterLocalY = sy * modelH * VIC_OPEN_CY_FRAC;
-  mesh.position.set(0, -openingCenterLocalY, 0);
+  const cur = VIC_STRETCH_HI - VIC_STRETCH_LO;
+  const railScale = (cur + extra) / cur;
+  const railCenter = (VIC_STRETCH_LO + VIC_STRETCH_HI) / 2;
+
+  for (let i = 0; i < pos.count; i++) {
+    const bx = base[i*3], by = base[i*3+1], bz = base[i*3+2];
+    let ny = by;
+    if (by > VIC_STRETCH_HI)       ny = by + extra / 2;          // above: shift up
+    else if (by < VIC_STRETCH_LO)  ny = by - extra / 2;          // below: shift down
+    else                            ny = railCenter + (by - railCenter) * railScale; // rail: scale
+    pos.setXYZ(i, bx, ny, bz);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+
+  const mesh = new THREE.Mesh(geo, mat);
+  // Apply the single overall model→world scale uniformly (so X width and the
+  // now-correct vertical layout all become world-sized together).
+  mesh.scale.setScalar(sxModel);
+
+  // After stretch, the opening center moved. Original opening center was
+  // VIC_OPEN_CY; the band-stretch shifts everything below HI down by extra/2,
+  // so the opening center (which is inside the rail zone / below HI) moves.
+  // Opening center is at VIC_OPEN_CY (-0.304), which lies in the rail zone,
+  // so it scales about railCenter:
+  let openCY_model;
+  if (VIC_OPEN_CY > VIC_STRETCH_HI) openCY_model = VIC_OPEN_CY + extra/2;
+  else if (VIC_OPEN_CY < VIC_STRETCH_LO) openCY_model = VIC_OPEN_CY - extra/2;
+  else openCY_model = railCenter + (VIC_OPEN_CY - railCenter) * railScale;
+  // Shift mesh so the (scaled) opening center sits at the group origin = painting center.
+  mesh.position.set(0, -openCY_model * sxModel, 0);
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
   group.userData.victorianMeshMat = mat;
+  group.userData.victorianGeo = geo;   // per-painting geometry, dispose on rebuild
 }
 
 // Lazy-load the Victorian GLB once; populate all pending frames on success.
@@ -3322,12 +3355,16 @@ function loadVictorianMesh() {
       });
       if (!geo) { _victorianLoadState = 'failed'; return; }
       _victorianGeo = geo;
+      // Cache the base position array so each painting can build a
+      // band-stretched copy (top/bottom ornament fixed, side rails stretch).
+      _victorianBasePositions = geo.attributes.position.array.slice();
       geo.computeBoundingBox();
       const bb = geo.boundingBox;
       _victorianNativeSize = {
         x: bb.max.x - bb.min.x,
         y: bb.max.y - bb.min.y,
         z: bb.max.z - bb.min.z,
+        minY: bb.min.y, maxY: bb.max.y,
       };
       _victorianLoadState = 'ready';
       // Populate every pending frame: clear placeholder, add real mesh.
