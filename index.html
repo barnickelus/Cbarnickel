@@ -3275,62 +3275,79 @@ function addVictorianMesh(group, pW, pH) {
     metalness: 0.05,
   });
 
-  // Build a band-stretched COPY of the geometry sized to this painting.
-  // 1) X scale so the opening width matches the painting width.
-  // 2) Vertical band-stretch so the opening HEIGHT matches the painting,
-  //    stretching only the plain side-rail strip (VIC_STRETCH_LO..HI) and
-  //    keeping arch/rose/spires (above) and apron/pendants (below) fixed.
+  // TRUE 9-SLICE in both axes. The ornament (arch, spires, apron, side
+  // borders) stays a CONSTANT real-world size for every painting — only the
+  // opening region stretches to fit the art. This avoids the old bug where
+  // the whole frame scaled with painting width (a 72-inch painting produced a
+  // 7-metre frame).
+  //
+  // Approach: choose ONE fixed model→world scale so the carved border is a
+  // sensible thickness in metres. Then in MODEL space, stretch the central
+  // opening zone (X: |x|<openHX, Y: rail band) so that AFTER the fixed world
+  // scale, the opening equals pW × pH. Border/ornament vertices outside the
+  // opening zone are shifted rigidly (never scaled), preserving their size.
   const geo = _victorianGeo.clone();
   const pos = geo.attributes.position;
   const base = _victorianBasePositions;
 
-  // World target: opening must equal pW × pH.
-  // X scale: painting width / model opening width.
-  const sxModel = pW / VIC_OPEN_W;
-  // For height: we need the opening (currently VIC_OPEN_H in model units, but
-  // after X scaling everything is in model units still — we apply one overall
-  // model→world scale = sxModel to keep proportions, then add vertical extra
-  // in MODEL units to make the opening the right height).
-  // Desired opening height in model units (before the overall sxModel scale):
-  const desiredOpenH_model = pH / sxModel;
-  const extra = desiredOpenH_model - VIC_OPEN_H;   // model units to add to rail
+  // Fixed world scale: pick so the side border (0.185 model units) renders at
+  // ~0.07 m — a believable carved frame border, constant across all paintings.
+  const FIXED_SCALE = 0.07 / 0.185;   // ≈ 0.378 world metres per model unit
 
-  const cur = VIC_STRETCH_HI - VIC_STRETCH_LO;
-  const railScale = (cur + extra) / cur;
-  const railCenter = (VIC_STRETCH_LO + VIC_STRETCH_HI) / 2;
+  // Opening half-extents in MODEL units (base mesh).
+  const openHX = 0.236;               // opening half-width
+  const openTopY = 0.152;             // opening top edge (model Y)
+  const openBotY = -0.760;            // opening bottom edge (model Y)
+
+  // Desired opening half-extents in MODEL units so that ×FIXED_SCALE == pW/pH.
+  const wantHX = (pW / 2) / FIXED_SCALE;
+  const wantOpenH = pH / FIXED_SCALE;
+
+  // X extra to inject on each side of the opening center.
+  const xExtraHalf = wantHX - openHX;       // model units added to each x side
+  // Y extra: opening currently (openTopY-openBotY) tall; want wantOpenH.
+  const yExtra = wantOpenH - (openTopY - openBotY);
+
+  // Rail band (vertical stretch zone) — between the fixed bottom apron and the
+  // fixed top arch spring.
+  const railLo = VIC_STRETCH_LO, railHi = VIC_STRETCH_HI;
+  const railCur = railHi - railLo;
+  const railScale = (railCur + yExtra) / railCur;
+  const railCenter = (railLo + railHi) / 2;
 
   for (let i = 0; i < pos.count; i++) {
-    const bx = base[i*3], by = base[i*3+1], bz = base[i*3+2];
-    let ny = by;
-    if (by > VIC_STRETCH_HI)       ny = by + extra / 2;          // above: shift up
-    else if (by < VIC_STRETCH_LO)  ny = by - extra / 2;          // below: shift down
-    else                            ny = railCenter + (by - railCenter) * railScale; // rail: scale
-    pos.setXYZ(i, bx, ny, bz);
+    let x = base[i*3], y = base[i*3+1], z = base[i*3+2];
+
+    // ── X 9-slice: keep |x|>openHX borders rigid, stretch interior. ──
+    if (x > openHX)       x = x + xExtraHalf;        // right border shifts out
+    else if (x < -openHX) x = x - xExtraHalf;        // left border shifts out
+    else                  x = x * (wantHX / openHX); // interior scales to opening
+
+    // ── Y band-stretch: rigid above/below, stretch rail. ──
+    if (y > railHi)       y = y + yExtra / 2;
+    else if (y < railLo)  y = y - yExtra / 2;
+    else                  y = railCenter + (y - railCenter) * railScale;
+
+    pos.setXYZ(i, x, y, z);
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
   geo.computeBoundingBox();
 
   const mesh = new THREE.Mesh(geo, mat);
-  // Apply the single overall model→world scale uniformly (so X width and the
-  // now-correct vertical layout all become world-sized together).
-  mesh.scale.setScalar(sxModel);
+  mesh.scale.setScalar(FIXED_SCALE);
 
-  // After stretch, the opening center moved. Original opening center was
-  // VIC_OPEN_CY; the band-stretch shifts everything below HI down by extra/2,
-  // so the opening center (which is inside the rail zone / below HI) moves.
-  // Opening center is at VIC_OPEN_CY (-0.304), which lies in the rail zone,
-  // so it scales about railCenter:
-  let openCY_model;
-  if (VIC_OPEN_CY > VIC_STRETCH_HI) openCY_model = VIC_OPEN_CY + extra/2;
-  else if (VIC_OPEN_CY < VIC_STRETCH_LO) openCY_model = VIC_OPEN_CY - extra/2;
-  else openCY_model = railCenter + (VIC_OPEN_CY - railCenter) * railScale;
-  // Shift mesh so the (scaled) opening center sits at the group origin = painting center.
-  mesh.position.set(0, -openCY_model * sxModel, 0);
+  // Opening center Y after stretch (it's inside the rail zone, scales about railCenter)
+  let openCY = VIC_OPEN_CY;
+  if (openCY > railHi) openCY = openCY + yExtra/2;
+  else if (openCY < railLo) openCY = openCY - yExtra/2;
+  else openCY = railCenter + (openCY - railCenter) * railScale;
+  mesh.position.set(0, -openCY * FIXED_SCALE, 0);
+
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
   group.userData.victorianMeshMat = mat;
-  group.userData.victorianGeo = geo;   // per-painting geometry, dispose on rebuild
+  group.userData.victorianGeo = geo;
 }
 
 // Lazy-load the Victorian GLB once; populate all pending frames on success.
