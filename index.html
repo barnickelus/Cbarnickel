@@ -2947,16 +2947,21 @@ function buildFrame(pW, pH, isSeriesRoom) {
     depthWrite: false,
   });
   let shadowScaleX = 1.5, shadowScaleY = 1.5;
+  let shadowYShift = -pH * 0.06;   // default: slightly down
   if (frameSettings.style === 'gothic') {
     shadowScaleX = 2.0; shadowScaleY = 2.6;
   } else if (frameSettings.style === 'victorian') {
-    shadowScaleX = 2.2; shadowScaleY = 2.8;
+    // The mesh frame is far taller than the painting (opening ~48% of model
+    // height) and extends well above center with spires. Size the shadow to
+    // cover the whole frame and shift it UP so the spires cast onto the wall.
+    shadowScaleX = 2.4; shadowScaleY = 4.6;
+    shadowYShift = pH * 0.55;
   } else if (frameSettings.style === 'ornate') {
     shadowScaleX = 1.9; shadowScaleY = 1.9;
   }
   const shadowGeo = new THREE.PlaneGeometry(pW * shadowScaleX, pH * shadowScaleY);
   const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-  shadow.position.set(pW * 0.04, -pH * 0.06, -0.010);
+  shadow.position.set(pW * 0.06, shadowYShift, -0.010);
   group.add(shadow);
   group.userData.shadowMat = shadowMat;
 
@@ -3253,6 +3258,13 @@ function buildVictorianFrame(group, pW, pH, matSet) {
 }
 
 // Clone the cached Victorian geometry, fit it to the painting, add to group.
+// Measured opening geometry of victorian-frame.glb (in model units, after the
+// centering + opening cut we did at export time). The opening is NOT centered
+// in the model — the tracery/peak occupies the top, so the window sits low.
+const VIC_OPEN_FRAC_W = 0.5604;   // opening width  / model width
+const VIC_OPEN_FRAC_H = 0.4803;   // opening height / model height
+const VIC_OPEN_CY_FRAC = -0.1601; // opening center Y / model full height (negative = below center)
+
 function addVictorianMesh(group, pW, pH) {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
@@ -3260,25 +3272,29 @@ function addVictorianMesh(group, pW, pH) {
     metalness: 0.05,
   });
   const mesh = new THREE.Mesh(_victorianGeo, mat);
-  // The GLB's native opening proportions differ from each painting. We scale
-  // the whole frame so its INNER opening matches pW × pH. The model's outer
-  // bounds are _victorianNativeSize; empirically the opening is ~ 0.52 of the
-  // model width and ~0.40 of the model height (measured from the mesh). We
-  // scale X to match painting width and Y to match height independently so
-  // any aspect ratio of painting sits correctly in the opening.
-  const openingFracW = 0.52;   // opening width as fraction of model width
-  const openingFracH = 0.42;   // opening height as fraction of model height
-  const modelOpeningW = _victorianNativeSize.x * openingFracW;
-  const modelOpeningH = _victorianNativeSize.y * openingFracH;
-  const sx = pW / modelOpeningW;
-  const sy = pH / modelOpeningH;
-  // Use a single uniform-ish scale based on the average to avoid distorting
-  // the ornament; bias toward matching width so frame doesn't overhang walls.
-  const s = Math.min(sx, sy);
-  mesh.scale.set(s, s, s);
-  // The model is centered at origin already (we centered it at export time).
-  // Push it out so it sits in front of the wall like the procedural frames.
-  mesh.position.set(0, 0, 0);
+
+  const modelW = _victorianNativeSize.x;
+  const modelH = _victorianNativeSize.y;
+  const modelOpeningW = modelW * VIC_OPEN_FRAC_W;
+  const modelOpeningH = modelH * VIC_OPEN_FRAC_H;
+
+  // Scale each axis so the opening matches the painting. We allow a mild
+  // non-uniform scale (clamped) so paintings of differing aspect still sit
+  // in the window without huge distortion of the ornament.
+  let sx = pW / modelOpeningW;
+  let sy = pH / modelOpeningH;
+  // Clamp the aspect difference so ornament never distorts more than 25%
+  const ratio = sx / sy;
+  const clamped = Math.max(0.8, Math.min(1.25, ratio));
+  sx = sy * clamped;
+  mesh.scale.set(sx, sy, (sx + sy) / 2);
+
+  // The opening center sits at modelH*VIC_OPEN_CY_FRAC in model space. After
+  // scaling by sy, that's at sy*modelH*VIC_OPEN_CY_FRAC in local space. We
+  // shift the mesh UP by that amount so the opening lands on the painting
+  // center (the group origin = painting center).
+  const openingCenterLocalY = sy * modelH * VIC_OPEN_CY_FRAC;
+  mesh.position.set(0, -openingCenterLocalY, 0);
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
   group.userData.victorianMeshMat = mat;
