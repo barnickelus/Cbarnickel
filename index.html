@@ -1347,6 +1347,38 @@ const VIC_OPEN_H  = VIC_OPEN_YT - VIC_OPEN_YB;        // opening height
 const VIC_STRETCH_LO = VIC_OPEN_YB;
 const VIC_STRETCH_HI = VIC_OPEN_YT;
 
+// ── Cap-stretch (anti-warp) ── The horizontal warp of the carved arch/tracery
+// equals (openingAspect / nativeOpeningAspect). We clamp the opening's aspect to
+// this band so a wide landscape can't flatten the gothic arch (and a very tall
+// canvas can't pinch it). When a painting's aspect falls outside the band the
+// opening grows PAST the painting in the cramped axis and the back panel fills
+// the leftover area (letterbox top/bottom, or pillarbox at the sides) instead of
+// distorting the frame. nativeOpeningAspect ≈ 0.603 (tall).
+const VIC_MAX_WARP = 1.9;   // opening may get at most 1.9× wider (rel. to native)
+const VIC_MIN_WARP = 0.55;  // …and at most ~0.55× narrower
+
+// ── Back panel ── A frame-colored board behind the openwork so the lunette
+// above the painting, the trefoil tracery, the rose window and any letterbox
+// margin read as solid carved frame rather than bare wall. VIC_PANEL_PROFILE is
+// the aperture silhouette in MODEL space as (modelY, halfWidth) samples from the
+// opening floor up to an apex tucked inside the solid gable; it is pushed through
+// the same 9-slice as the frame so it tracks the opening at every painting size.
+// Sample edges sit just inside carved material so the panel's own outline stays
+// hidden and only its interior shows through the cut-out tracery.
+const VIC_PANEL_Z = 0.012;        // metres out from the wall (behind the painting)
+const VIC_PANEL_COLOR = 0xd9d4ca; // warm off-white, a touch darker than the frame
+const VIC_PANEL_PROFILE = [
+  [VIC_OPEN_YB - 0.05, 0.968],    // opening floor (tucked behind the sill)
+  [4.20, 0.968],                  // top of the straight opening / arch spring
+  [4.50, 0.950],
+  [4.90, 0.860],
+  [5.30, 0.710],
+  [5.70, 0.560],                  // across the rose window
+  [6.10, 0.410],
+  [6.50, 0.230],
+  [6.90, 0.0],                    // apex, hidden inside the solid gable
+];
+
 const lightingRefs = {
   ambient: null,
   hemi: null,
@@ -3317,32 +3349,53 @@ function addVictorianMesh(group, pW, pH) {
   const bandHi = VIC_OPEN_YT;         // opening top    = stretch band top
   const bandCenter = VIC_OPEN_CY;     // == opening center Y
 
-  // Desired opening half-extents in MODEL units so that ×FIXED_SCALE == pW/pH.
-  const wantHX = (pW / 2) / FIXED_SCALE;
-  const wantOpenH = pH / FIXED_SCALE;
+  // ── CAP STRETCH + CONTAIN ── The carved arch warps horizontally by exactly
+  // (openingAspect / nativeOpeningAspect), so we clamp the opening aspect to the
+  // VIC_*_WARP band. If the painting is wider (or much taller) than the clamp
+  // allows, the opening grows PAST the painting in the cramped axis — the art
+  // stays at true size, centered, and the back panel fills the leftover margin
+  // (letterbox / pillarbox) — rather than flattening the gothic ornament.
+  const nativeAR = (openHX * 2) / VIC_OPEN_H;     // ≈ 0.603 (tall)
+  const paintAR  = pW / pH;
+  const openAR   = Math.min(VIC_MAX_WARP * nativeAR,
+                            Math.max(VIC_MIN_WARP * nativeAR, paintAR));
+  // World opening size that contains the painting at TRUE size with that aspect.
+  let openWorldW, openWorldH;
+  if (paintAR > openAR) {            // painting too wide → grow opening height
+    openWorldW = pW;  openWorldH = pW / openAR;
+  } else if (paintAR < openAR) {     // painting too tall/narrow → grow width
+    openWorldH = pH;  openWorldW = pH * openAR;
+  } else {                           // within the band → opening == painting
+    openWorldW = pW;  openWorldH = pH;
+  }
 
-  // Extra model units to inject so the opening matches the painting exactly.
+  // Desired opening half-extents in MODEL units so that ×FIXED_SCALE == openWorld.
+  const wantHX = (openWorldW / 2) / FIXED_SCALE;
+  const wantOpenH = openWorldH / FIXED_SCALE;
+
+  // Extra model units to inject so the opening matches the (capped) opening.
   const xExtraHalf = wantHX - openHX;             // added to each x side
   const yExtra = wantOpenH - VIC_OPEN_H;          // added to the band height
   const bandScale = wantOpenH / VIC_OPEN_H;       // band stretches about its center
 
+  // Shared 9-slice transform so the frame and its back panel deform IDENTICALLY.
+  //   X: keep |x|>openHX borders rigid, stretch the interior to the opening.
+  //   Y: ornament above bandHi / below bandLo shifts rigidly; the opening band
+  //      scales about its own center, keeping the arch & apron welded to the rim.
+  const stretchXY = (x, y) => {
+    let nx, ny;
+    if (x > openHX)       nx = x + xExtraHalf;
+    else if (x < -openHX) nx = x - xExtraHalf;
+    else                  nx = x * (wantHX / openHX);
+    if (y > bandHi)       ny = y + yExtra / 2;
+    else if (y < bandLo)  ny = y - yExtra / 2;
+    else                  ny = bandCenter + (y - bandCenter) * bandScale;
+    return [nx, ny];
+  };
+
   for (let i = 0; i < pos.count; i++) {
-    let x = base[i*3], y = base[i*3+1], z = base[i*3+2];
-
-    // ── X 9-slice: keep |x|>openHX borders rigid, stretch interior. ──
-    if (x > openHX)       x = x + xExtraHalf;        // right border shifts out
-    else if (x < -openHX) x = x - xExtraHalf;        // left border shifts out
-    else                  x = x * (wantHX / openHX); // interior scales to opening
-
-    // ── Y band-stretch: ornament above/below shifts rigidly; the opening band
-    //    (== the painting zone) scales about its own center. Because the band
-    //    edges coincide with the opening edges, the carved arch and apron stay
-    //    welded to the rim at every painting size — no floating, no gaps. ──
-    if (y > bandHi)       y = y + yExtra / 2;
-    else if (y < bandLo)  y = y - yExtra / 2;
-    else                  y = bandCenter + (y - bandCenter) * bandScale;
-
-    pos.setXYZ(i, x, y, z);
+    const [nx, ny] = stretchXY(base[i*3], base[i*3+1]);
+    pos.setXYZ(i, nx, ny, base[i*3+2]);
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
@@ -3358,8 +3411,53 @@ function addVictorianMesh(group, pW, pH) {
 
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
+
+  // Back panel: same scale, same recenter, pushed out to VIC_PANEL_Z (behind the
+  // painting). Built with the SAME stretchXY so it always lines up with the
+  // opening, including the grown letterbox/pillarbox margins.
+  const panel = buildVictorianBackPanel(stretchXY);
+  panel.scale.setScalar(FIXED_SCALE);
+  panel.position.set(0, -bandCenter * FIXED_SCALE, VIC_PANEL_Z);
+  panel.userData.isVictorianMeshChild = true;
+  group.add(panel);
+
   group.userData.victorianMeshMat = mat;
   group.userData.victorianGeo = geo;
+  group.userData.victorianPanel = panel;
+}
+
+// Build the frame-colored back panel as the aperture silhouette (opening
+// rectangle + pointed-arch tracery zone), deformed by the frame's own 9-slice
+// `stretchXY` so it tracks the opening at any painting size. Returns a Mesh in
+// MODEL space (caller applies FIXED_SCALE + recenter + VIC_PANEL_Z).
+function buildVictorianBackPanel(stretchXY) {
+  const prof = VIC_PANEL_PROFILE;
+  const verts = [];
+  const idx = [];
+  // Two columns of vertices (left -hw, right +hw) per profile rung, stretched.
+  for (let i = 0; i < prof.length; i++) {
+    const [y, hw] = prof[i];
+    const [lx, ly] = stretchXY(-hw, y);
+    const [rx, ry] = stretchXY( hw, y);
+    verts.push(lx, ly, 0,  rx, ry, 0);   // L then R
+  }
+  // Stitch consecutive rungs into quads (two triangles each). Apex rung has
+  // hw=0 so its L and R coincide — the last band is a clean triangle fan tip.
+  for (let i = 0; i < prof.length - 1; i++) {
+    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+    idx.push(a, b, d,  a, d, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const m = new THREE.MeshStandardMaterial({
+    color: VIC_PANEL_COLOR,
+    roughness: 0.85,
+    metalness: 0.0,
+    side: THREE.DoubleSide,   // visible no matter which wall it hangs on
+  });
+  return new THREE.Mesh(g, m);
 }
 
 // Lazy-load the Victorian GLB once; populate all pending frames on success.
