@@ -3010,16 +3010,14 @@ function buildFrame(pW, pH, isSeriesRoom) {
   if (frameSettings.style === 'gothic') {
     shadowScaleX = 2.0; shadowScaleY = 2.6;
   } else if (frameSettings.style === 'victorian') {
-    // The mesh frame is far taller than the painting (opening ~48% of model
-    // height) and extends well above center with spires. Size the shadow to
-    // cover the whole frame and shift it UP so the spires cast onto the wall.
-    // The frame floats ~5 in off the wall, so the shadow is large, soft and
-    // diffuse — spread wide with a gentle opacity so it drifts up behind the
-    // frame rather than reading as a hard drop shadow.
-    shadowScaleX = 2.7; shadowScaleY = 5.4;
-    shadowYShift = pH * 0.52;
-    shadowXShift = pW * 0.13;
-    shadowMat.opacity = 0.48;
+    // The frame floats ~5 in off the wall and is lit from above, so its shadow
+    // is cast DOWNWARD onto the wall and slightly to the side. Large, soft and
+    // diffuse: spread wide and biased below the frame so it reads as a gentle
+    // top-lit drop shadow angling down rather than drifting up.
+    shadowScaleX = 2.7; shadowScaleY = 5.2;
+    shadowYShift = -pH * 0.20;
+    shadowXShift = pW * 0.10;
+    shadowMat.opacity = 0.5;
   } else if (frameSettings.style === 'ornate') {
     shadowScaleX = 1.9; shadowScaleY = 1.9;
   }
@@ -4018,6 +4016,11 @@ function placePainting(art, dir, localCoord, room) {
       const pMat = new THREE.MeshStandardMaterial({
         map: tex,
         roughness: 0.62,
+        // Lift the art with a modest self-illumination so inherently dark
+        // pieces stay readable in the dim gallery (not purely spotlight-lit).
+        emissive: 0xffffff,
+        emissiveMap: tex,
+        emissiveIntensity: 0.32,
       });
       const p = new THREE.Mesh(new THREE.PlaneGeometry(pW, pH), pMat);
       // Sit the painting flush with the frame's front face (frameDepth out
