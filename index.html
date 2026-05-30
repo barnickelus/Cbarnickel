@@ -1368,7 +1368,7 @@ const VIC_MIN_WARP = 0.55;  // …and at most ~0.55× narrower
 // The whole Victorian frame (mesh + panel + painting) floats this far out along
 // the wall normal so it stands proud of the wall; the soft shadow plane stays
 // back on the wall surface and reads as the cast shadow.
-const VIC_FLOAT = 0.05;           // metres the frame hovers off the wall
+const VIC_FLOAT = 0.127;          // metres the frame hovers off the wall (~5 in)
 const VIC_PANEL_Z = 0.012;        // extra metres the panel sits behind the painting
 const VIC_PANEL_COLOR = 0xd9d4ca; // warm off-white, a touch darker than the frame
 const VIC_PANEL_PROFILE = [
@@ -3013,12 +3013,13 @@ function buildFrame(pW, pH, isSeriesRoom) {
     // The mesh frame is far taller than the painting (opening ~48% of model
     // height) and extends well above center with spires. Size the shadow to
     // cover the whole frame and shift it UP so the spires cast onto the wall.
-    // The frame floats VIC_FLOAT off the wall, so deepen the shadow and nudge
-    // it down-right of the frame to read as a real cast shadow.
-    shadowScaleX = 2.5; shadowScaleY = 4.8;
-    shadowYShift = pH * 0.42;
-    shadowXShift = pW * 0.12;
-    shadowMat.opacity = 0.65;
+    // The frame floats ~5 in off the wall, so the shadow is large, soft and
+    // diffuse — spread wide with a gentle opacity so it drifts up behind the
+    // frame rather than reading as a hard drop shadow.
+    shadowScaleX = 2.7; shadowScaleY = 5.4;
+    shadowYShift = pH * 0.52;
+    shadowXShift = pW * 0.13;
+    shadowMat.opacity = 0.48;
   } else if (frameSettings.style === 'ornate') {
     shadowScaleX = 1.9; shadowScaleY = 1.9;
   }
