@@ -1365,7 +1365,11 @@ const VIC_MIN_WARP = 0.55;  // …and at most ~0.55× narrower
 // the same 9-slice as the frame so it tracks the opening at every painting size.
 // Sample edges sit just inside carved material so the panel's own outline stays
 // hidden and only its interior shows through the cut-out tracery.
-const VIC_PANEL_Z = 0.012;        // metres out from the wall (behind the painting)
+// The whole Victorian frame (mesh + panel + painting) floats this far out along
+// the wall normal so it stands proud of the wall; the soft shadow plane stays
+// back on the wall surface and reads as the cast shadow.
+const VIC_FLOAT = 0.05;           // metres the frame hovers off the wall
+const VIC_PANEL_Z = 0.012;        // extra metres the panel sits behind the painting
 const VIC_PANEL_COLOR = 0xd9d4ca; // warm off-white, a touch darker than the frame
 const VIC_PANEL_PROFILE = [
   [VIC_OPEN_YB - 0.05, 0.968],    // opening floor (tucked behind the sill)
@@ -3002,20 +3006,25 @@ function buildFrame(pW, pH, isSeriesRoom) {
   });
   let shadowScaleX = 1.5, shadowScaleY = 1.5;
   let shadowYShift = -pH * 0.06;   // default: slightly down
+  let shadowXShift = pW * 0.06;
   if (frameSettings.style === 'gothic') {
     shadowScaleX = 2.0; shadowScaleY = 2.6;
   } else if (frameSettings.style === 'victorian') {
     // The mesh frame is far taller than the painting (opening ~48% of model
     // height) and extends well above center with spires. Size the shadow to
     // cover the whole frame and shift it UP so the spires cast onto the wall.
-    shadowScaleX = 2.4; shadowScaleY = 4.6;
-    shadowYShift = pH * 0.55;
+    // The frame floats VIC_FLOAT off the wall, so deepen the shadow and nudge
+    // it down-right of the frame to read as a real cast shadow.
+    shadowScaleX = 2.5; shadowScaleY = 4.8;
+    shadowYShift = pH * 0.42;
+    shadowXShift = pW * 0.12;
+    shadowMat.opacity = 0.65;
   } else if (frameSettings.style === 'ornate') {
     shadowScaleX = 1.9; shadowScaleY = 1.9;
   }
   const shadowGeo = new THREE.PlaneGeometry(pW * shadowScaleX, pH * shadowScaleY);
   const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-  shadow.position.set(pW * 0.06, shadowYShift, -0.010);
+  shadow.position.set(shadowXShift, shadowYShift, -0.010);
   group.add(shadow);
   group.userData.shadowMat = shadowMat;
 
@@ -3313,11 +3322,22 @@ function buildVictorianFrame(group, pW, pH, matSet) {
 
 // Clone the cached Victorian geometry, fit it to the painting, add to group.
 function addVictorianMesh(group, pW, pH) {
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.6,
-    metalness: 0.05,
-  });
+  // The GLB carries no baked vertex colors, so the frame must take the user's
+  // chosen color/finish. group.userData.frameMat is the preset body material
+  // (color + roughness + metalness already set per finish); clone it so the
+  // mesh owns a disposable copy. Fall back to near-black if it's somehow absent.
+  const srcMat = group.userData.frameMat;
+  const mat = srcMat
+    ? srcMat.clone()
+    : new THREE.MeshStandardMaterial({ color: 0x141210, roughness: 0.65, metalness: 0.1 });
+  mat.vertexColors = false;
+
+  // Back-panel color: the same frame color, a touch darker so it reads as a
+  // recessed board behind the openwork rather than a bright patch of wall. For
+  // dark frames this is ~= the frame tone (a solid carved look); for light
+  // frames it's a soft recessed liner.
+  const panelColor = (srcMat ? srcMat.color.clone() : new THREE.Color(0x141210))
+    .multiplyScalar(0.82);
 
   // TRUE 9-SLICE in both axes. The ornament (arch, spires, apron, side
   // borders) stays a CONSTANT real-world size for every painting — only the
@@ -3406,18 +3426,21 @@ function addVictorianMesh(group, pW, pH) {
 
   // The opening center sits at bandCenter and scales about itself, so it is
   // invariant under the stretch. Shift the mesh so that point lands on the
-  // group origin — i.e. exactly on the painting's center on the wall.
-  mesh.position.set(0, -bandCenter * FIXED_SCALE, 0);
+  // group origin — i.e. exactly on the painting's center on the wall. The frame
+  // also floats VIC_FLOAT out along +Z so it stands proud of the wall (the soft
+  // shadow plane stays back on the wall, reading as a cast shadow).
+  mesh.position.set(0, -bandCenter * FIXED_SCALE, VIC_FLOAT);
 
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
 
-  // Back panel: same scale, same recenter, pushed out to VIC_PANEL_Z (behind the
-  // painting). Built with the SAME stretchXY so it always lines up with the
-  // opening, including the grown letterbox/pillarbox margins.
-  const panel = buildVictorianBackPanel(stretchXY);
+  // Back panel: same scale + recenter, floated with the frame and pushed out an
+  // extra VIC_PANEL_Z so it sits just behind the painting. Built with the SAME
+  // stretchXY so it always lines up with the opening, including the grown
+  // letterbox/pillarbox margins.
+  const panel = buildVictorianBackPanel(stretchXY, panelColor);
   panel.scale.setScalar(FIXED_SCALE);
-  panel.position.set(0, -bandCenter * FIXED_SCALE, VIC_PANEL_Z);
+  panel.position.set(0, -bandCenter * FIXED_SCALE, VIC_FLOAT + VIC_PANEL_Z);
   panel.userData.isVictorianMeshChild = true;
   group.add(panel);
 
@@ -3430,7 +3453,7 @@ function addVictorianMesh(group, pW, pH) {
 // rectangle + pointed-arch tracery zone), deformed by the frame's own 9-slice
 // `stretchXY` so it tracks the opening at any painting size. Returns a Mesh in
 // MODEL space (caller applies FIXED_SCALE + recenter + VIC_PANEL_Z).
-function buildVictorianBackPanel(stretchXY) {
+function buildVictorianBackPanel(stretchXY, color) {
   const prof = VIC_PANEL_PROFILE;
   const verts = [];
   const idx = [];
@@ -3452,7 +3475,7 @@ function buildVictorianBackPanel(stretchXY) {
   g.setIndex(idx);
   g.computeVertexNormals();
   const m = new THREE.MeshStandardMaterial({
-    color: VIC_PANEL_COLOR,
+    color: color !== undefined ? color : VIC_PANEL_COLOR,
     roughness: 0.85,
     metalness: 0.0,
     side: THREE.DoubleSide,   // visible no matter which wall it hangs on
@@ -3908,10 +3931,13 @@ function rebuildAllFrames() {
     const u = p.userData;
     if (u.frameGroup) {
       const fd = u.frameGroup.userData.frameDepth;
+      // Victorian frames float off the wall, so the inset painting floats too.
+      const flt = (frameSettings.style === 'victorian') ? VIC_FLOAT : 0;
+      const standoff = WALL_THICKNESS / 2 + 0.012 + fd + 0.005 + flt;
       p.position.set(
-        u.wallX + u.normalX * (WALL_THICKNESS / 2 + 0.012 + fd + 0.005),
+        u.wallX + u.normalX * standoff,
         u.yCenter,
-        u.wallZ + u.normalZ * (WALL_THICKNESS / 2 + 0.012 + fd + 0.005)
+        u.wallZ + u.normalZ * standoff
       );
     }
   }
@@ -3994,11 +4020,13 @@ function placePainting(art, dir, localCoord, room) {
       });
       const p = new THREE.Mesh(new THREE.PlaneGeometry(pW, pH), pMat);
       // Sit the painting flush with the frame's front face (frameDepth out
-      // from the wall surface) so it reads as inset into the frame opening
+      // from the wall surface) so it reads as inset into the frame opening.
+      // Victorian frames float off the wall, so the painting floats with them.
+      const flt = (frameSettings.style === 'victorian') ? VIC_FLOAT : 0;
       p.position.set(
-        px + normalX * (frameDepth + 0.005),
+        px + normalX * (frameDepth + 0.005 + flt),
         yCenter,
-        pz + normalZ * (frameDepth + 0.005)
+        pz + normalZ * (frameDepth + 0.005 + flt)
       );
       p.rotation.y = faceY;
       p.userData.isPainting = true;
