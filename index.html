@@ -1325,15 +1325,23 @@ let _victorianLoadState = 'idle';  // idle | loading | ready | failed
 const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
 // The GLB's own bounding box (filled once loaded) so we can scale to fit.
 let _victorianNativeSize = null;
-// Band-stretch zones (model units, Y). Only the side-rail strip between
-// STRETCH_LO and STRETCH_HI scales vertically; everything above (arch, rose,
-// spires, capitals) and below (sill, apron, pendants) keeps fixed proportions.
-const VIC_STRETCH_LO = -0.70;
-const VIC_STRETCH_HI = -0.15;
-// Opening geometry measured from the cut mesh.
-const VIC_OPEN_W = 0.4720;   // model-unit opening width
-const VIC_OPEN_H = 0.9120;   // model-unit opening height (at base, unstretched)
-const VIC_OPEN_CY = -0.3040; // model-unit opening center Y (at base)
+// Opening rectangle (model units) — measured directly from victorian-frame.glb
+// by sampling the inner rim of the straight vertical side rails. This is the
+// SINGLE SOURCE OF TRUTH for the 9-slice: the rail band IS the opening, so the
+// stretch zone, the opening extents, and the re-centering offset can never
+// disagree (the old code carried three slightly different rectangles, which
+// drifted the opening off the painting center by up to 0.2 m on big canvases
+// and left the ornament floating above/below the art).
+const VIC_OPEN_HX = 0.235;   // opening half-width
+const VIC_OPEN_YB = -0.725;  // opening bottom edge (model Y)
+const VIC_OPEN_YT = 0.100;   // opening top edge (model Y)
+const VIC_OPEN_CY = (VIC_OPEN_YB + VIC_OPEN_YT) / 2;  // opening center Y
+const VIC_OPEN_H  = VIC_OPEN_YT - VIC_OPEN_YB;        // opening height
+// The vertical stretch band is exactly the opening span: everything above YT
+// (arch, rose window, spires, capitals) and below YB (sill, apron, pendants)
+// is shifted rigidly so the carved ornament keeps its true size on every wall.
+const VIC_STRETCH_LO = VIC_OPEN_YB;
+const VIC_STRETCH_HI = VIC_OPEN_YT;
 
 const lightingRefs = {
   ambient: null,
@@ -3294,26 +3302,22 @@ function addVictorianMesh(group, pW, pH) {
   // ~0.07 m — a believable carved frame border, constant across all paintings.
   const FIXED_SCALE = 0.07 / 0.185;   // ≈ 0.378 world metres per model unit
 
-  // Opening half-extents in MODEL units (base mesh).
-  const openHX = 0.236;               // opening half-width
-  const openTopY = 0.152;             // opening top edge (model Y)
-  const openBotY = -0.760;            // opening bottom edge (model Y)
+  // Opening rectangle in MODEL units — the single source of truth (see the
+  // VIC_OPEN_* constants). The stretch band IS this rectangle, so the opening,
+  // the rail zone, and the re-centering offset stay perfectly consistent.
+  const openHX = VIC_OPEN_HX;         // opening half-width
+  const bandLo = VIC_OPEN_YB;         // opening bottom = stretch band bottom
+  const bandHi = VIC_OPEN_YT;         // opening top    = stretch band top
+  const bandCenter = VIC_OPEN_CY;     // == opening center Y
 
   // Desired opening half-extents in MODEL units so that ×FIXED_SCALE == pW/pH.
   const wantHX = (pW / 2) / FIXED_SCALE;
   const wantOpenH = pH / FIXED_SCALE;
 
-  // X extra to inject on each side of the opening center.
-  const xExtraHalf = wantHX - openHX;       // model units added to each x side
-  // Y extra: opening currently (openTopY-openBotY) tall; want wantOpenH.
-  const yExtra = wantOpenH - (openTopY - openBotY);
-
-  // Rail band (vertical stretch zone) — between the fixed bottom apron and the
-  // fixed top arch spring.
-  const railLo = VIC_STRETCH_LO, railHi = VIC_STRETCH_HI;
-  const railCur = railHi - railLo;
-  const railScale = (railCur + yExtra) / railCur;
-  const railCenter = (railLo + railHi) / 2;
+  // Extra model units to inject so the opening matches the painting exactly.
+  const xExtraHalf = wantHX - openHX;             // added to each x side
+  const yExtra = wantOpenH - VIC_OPEN_H;          // added to the band height
+  const bandScale = wantOpenH / VIC_OPEN_H;       // band stretches about its center
 
   for (let i = 0; i < pos.count; i++) {
     let x = base[i*3], y = base[i*3+1], z = base[i*3+2];
@@ -3323,10 +3327,13 @@ function addVictorianMesh(group, pW, pH) {
     else if (x < -openHX) x = x - xExtraHalf;        // left border shifts out
     else                  x = x * (wantHX / openHX); // interior scales to opening
 
-    // ── Y band-stretch: rigid above/below, stretch rail. ──
-    if (y > railHi)       y = y + yExtra / 2;
-    else if (y < railLo)  y = y - yExtra / 2;
-    else                  y = railCenter + (y - railCenter) * railScale;
+    // ── Y band-stretch: ornament above/below shifts rigidly; the opening band
+    //    (== the painting zone) scales about its own center. Because the band
+    //    edges coincide with the opening edges, the carved arch and apron stay
+    //    welded to the rim at every painting size — no floating, no gaps. ──
+    if (y > bandHi)       y = y + yExtra / 2;
+    else if (y < bandLo)  y = y - yExtra / 2;
+    else                  y = bandCenter + (y - bandCenter) * bandScale;
 
     pos.setXYZ(i, x, y, z);
   }
@@ -3337,12 +3344,10 @@ function addVictorianMesh(group, pW, pH) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.scale.setScalar(FIXED_SCALE);
 
-  // Opening center Y after stretch (it's inside the rail zone, scales about railCenter)
-  let openCY = VIC_OPEN_CY;
-  if (openCY > railHi) openCY = openCY + yExtra/2;
-  else if (openCY < railLo) openCY = openCY - yExtra/2;
-  else openCY = railCenter + (openCY - railCenter) * railScale;
-  mesh.position.set(0, -openCY * FIXED_SCALE, 0);
+  // The opening center sits at bandCenter and scales about itself, so it is
+  // invariant under the stretch. Shift the mesh so that point lands on the
+  // group origin — i.e. exactly on the painting's center on the wall.
+  mesh.position.set(0, -bandCenter * FIXED_SCALE, 0);
 
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
