@@ -1309,8 +1309,10 @@ let lightingMul = 1.0;
 // Frame settings — persisted to localStorage. Style: minimal | ornate | gothic.
 // Color: auto (theme-aware) | black | white | gilt.
 const frameSettings = {
+  // First load shows the minimal black frame (returning visitors keep their
+  // last choice via localStorage).
   style: localStorage.getItem('frameStyle') || 'minimal',
-  color: localStorage.getItem('frameColor') || 'auto',
+  color: localStorage.getItem('frameColor') || 'black',
 };
 
 // ── Victorian mesh frame ── The "victorian" style loads a real 3D model
@@ -1368,7 +1370,11 @@ const VIC_MIN_WARP = 0.55;  // …and at most ~0.55× narrower
 // The whole Victorian frame (mesh + panel + painting) floats this far out along
 // the wall normal so it stands proud of the wall; the soft shadow plane stays
 // back on the wall surface and reads as the cast shadow.
-const VIC_FLOAT = 0.127;          // metres the frame hovers off the wall (~5 in)
+// Every frame style hovers this far off the wall (~5 in) while its soft shadow
+// plane stays pinned to the wall surface, so all frames read as standing proud
+// of the wall with a cast shadow.
+const FRAME_FLOAT = 0.127;        // metres every frame hovers off the wall (~5 in)
+const VIC_FLOAT = FRAME_FLOAT;    // Victorian mesh self-applies the same float
 const VIC_PANEL_Z = 0.012;        // extra metres the panel sits behind the painting
 const VIC_PANEL_COLOR = 0xd9d4ca; // warm off-white, a touch darker than the frame
 const VIC_PANEL_PROFILE = [
@@ -3004,11 +3010,15 @@ function buildFrame(pW, pH, isSeriesRoom) {
     opacity: 0.55,
     depthWrite: false,
   });
-  let shadowScaleX = 1.5, shadowScaleY = 1.5;
-  let shadowYShift = -pH * 0.06;   // default: slightly down
-  let shadowXShift = pW * 0.06;
+  // Defaults — every frame now floats ~5 in off the wall, so the shadow is
+  // spread a bit wider and biased DOWNWARD (top-lit) to read as a soft cast
+  // shadow rather than a tight halo.
+  let shadowScaleX = 1.7, shadowScaleY = 1.8;
+  let shadowYShift = -pH * 0.16;   // biased down (top-lit cast shadow)
+  let shadowXShift = pW * 0.08;
   if (frameSettings.style === 'gothic') {
-    shadowScaleX = 2.0; shadowScaleY = 2.6;
+    shadowScaleX = 2.1; shadowScaleY = 2.8;
+    shadowYShift = -pH * 0.16;
   } else if (frameSettings.style === 'victorian') {
     // The frame floats ~5 in off the wall and is lit from above, so its shadow
     // is cast DOWNWARD onto the wall and slightly to the side. Large, soft and
@@ -3019,7 +3029,8 @@ function buildFrame(pW, pH, isSeriesRoom) {
     shadowXShift = pW * 0.10;
     shadowMat.opacity = 0.5;
   } else if (frameSettings.style === 'ornate') {
-    shadowScaleX = 1.9; shadowScaleY = 1.9;
+    shadowScaleX = 2.0; shadowScaleY = 2.1;
+    shadowYShift = -pH * 0.16;
   }
   const shadowGeo = new THREE.PlaneGeometry(pW * shadowScaleX, pH * shadowScaleY);
   const shadow = new THREE.Mesh(shadowGeo, shadowMat);
@@ -3027,6 +3038,9 @@ function buildFrame(pW, pH, isSeriesRoom) {
   group.add(shadow);
   group.userData.shadowMat = shadowMat;
 
+  // Frame meshes are added after the shadow plane; remember where they start so
+  // we can float just the frame (not the shadow) off the wall below.
+  const frameChildStart = group.children.length;
   if (frameSettings.style === 'gothic') {
     buildGothicFrame(group, pW, pH, mat);
     group.userData.frameDepth = 0.06;
@@ -3042,6 +3056,14 @@ function buildFrame(pW, pH, isSeriesRoom) {
   } else {
     buildMinimalFrame(group, pW, pH, mat);
     group.userData.frameDepth = 0.045;
+  }
+  // Float the frame meshes off the wall so every style stands proud and casts a
+  // shadow (the shadow plane added above stays pinned to the wall). Victorian's
+  // mesh + panel self-apply VIC_FLOAT (and load asynchronously), so skip it here.
+  if (frameSettings.style !== 'victorian') {
+    for (let i = frameChildStart; i < group.children.length; i++) {
+      group.children[i].position.z += FRAME_FLOAT;
+    }
   }
   return group;
 }
@@ -3918,10 +3940,20 @@ function rebuildAllFrames() {
     fg.userData.victorianScrollMat = newGroup.userData.victorianScrollMat;
     fg.userData.victorianCuspMat = newGroup.userData.victorianCuspMat;
     fg.userData.frameDepth = newGroup.userData.frameDepth;
-    // If this rebuilt frame is a pending Victorian placeholder, re-register it
-    // against the (possibly already-loaded) mesh.
-    if (newGroup.userData.isVictorianMesh && _victorianLoadState === 'ready') {
-      // already populated synchronously inside buildVictorianFrame; nothing to do
+    fg.userData.isVictorianMesh = newGroup.userData.isVictorianMesh;
+    fg.userData.victorianPW = newGroup.userData.victorianPW;
+    fg.userData.victorianPH = newGroup.userData.victorianPH;
+    fg.userData.victorianMeshMat = newGroup.userData.victorianMeshMat || fg.userData.victorianMeshMat;
+    fg.userData.victorianPanel = newGroup.userData.victorianPanel;
+    fg.userData.victorianGeo = newGroup.userData.victorianGeo;
+    // If the Victorian mesh wasn't ready, buildVictorianFrame registered the
+    // THROWAWAY newGroup in _victorianPending (and added a placeholder we just
+    // reparented into fg). Repoint that pending entry at fg so the async loader
+    // swaps the real mesh into the live group — otherwise fg keeps showing the
+    // gray placeholder until the next rebuild. (This was the "Victorian loads
+    // as a gray rectangle until you pick a color" bug.)
+    for (const pend of _victorianPending) {
+      if (pend.group === newGroup) pend.group = fg;
     }
   }
   // Reposition each painting plane to sit just in front of its (possibly
@@ -3930,9 +3962,8 @@ function rebuildAllFrames() {
     const u = p.userData;
     if (u.frameGroup) {
       const fd = u.frameGroup.userData.frameDepth;
-      // Victorian frames float off the wall, so the inset painting floats too.
-      const flt = (frameSettings.style === 'victorian') ? VIC_FLOAT : 0;
-      const standoff = WALL_THICKNESS / 2 + 0.012 + fd + 0.005 + flt;
+      // Every frame floats off the wall, so the inset painting floats too.
+      const standoff = WALL_THICKNESS / 2 + 0.012 + fd + 0.005 + FRAME_FLOAT;
       p.position.set(
         u.wallX + u.normalX * standoff,
         u.yCenter,
@@ -4025,8 +4056,8 @@ function placePainting(art, dir, localCoord, room) {
       const p = new THREE.Mesh(new THREE.PlaneGeometry(pW, pH), pMat);
       // Sit the painting flush with the frame's front face (frameDepth out
       // from the wall surface) so it reads as inset into the frame opening.
-      // Victorian frames float off the wall, so the painting floats with them.
-      const flt = (frameSettings.style === 'victorian') ? VIC_FLOAT : 0;
+      // Every frame floats off the wall, so the painting floats with it.
+      const flt = FRAME_FLOAT;
       p.position.set(
         px + normalX * (frameDepth + 0.005 + flt),
         yCenter,
