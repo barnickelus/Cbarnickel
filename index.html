@@ -1171,6 +1171,7 @@ body { overscroll-behavior: none; }
     <div class="nav-grid">
       <button class="nav-btn active" data-frame-color="auto">Auto</button>
       <button class="nav-btn" data-frame-color="painted">Painted</button>
+      <button class="nav-btn" data-frame-color="linework">Line Art</button>
       <button class="nav-btn" data-frame-color="black">Black</button>
       <button class="nav-btn" data-frame-color="white">White</button>
       <button class="nav-btn" data-frame-color="gilt">Gilt</button>
@@ -1594,9 +1595,11 @@ const THEMES = {
     ceiling: 0xf6f6f4,
     // No wallpaper in white mode — flat pure walls
     wallpaperBase: null,
-    ambient: { color: 0xffffff, intensity: 0.65 },
-    hemi: { sky: 0xffffff, ground: 0x9c9890, intensity: 0.55 },
-    spot: { color: 0xffffff, intensity: 0.55 },
+    // Flatter, brighter fill so white surfaces read as flat drawn paper; the
+    // spotlights stay (a touch softer) to keep the color paintings readable.
+    ambient: { color: 0xffffff, intensity: 0.92 },
+    hemi: { sky: 0xffffff, ground: 0xdedbd5, intensity: 0.6 },
+    spot: { color: 0xffffff, intensity: 0.45 },
     glow: { color: 0xffffff, intensity: 0.0 },
     trackBar: 0x111111,         // visible black track bars
     title: '#1a1a1a',           // pure dark on white walls (IMG_8299 lettering)
@@ -1893,23 +1896,19 @@ function buildFloorsAndCeilings(t) {
   //   - dark mode: warm wood plank
   //   - white mode: polished concrete (high-gloss minimalist gallery)
   const lobbyFloorMat = new THREE.MeshStandardMaterial({
-    map: theme === 'white'
-      ? makePolishedConcreteTexture(t.floor)
-      : makeWoodFloorTexture(t.floor),
-    roughness: theme === 'white' ? 0.35 : 0.62,
-    metalness: theme === 'white' ? 0.15 : 0.05,
+    map: floorTextureFor(t.floor),
+    roughness: theme === 'white' ? 1.0 : 0.62,
+    metalness: theme === 'white' ? 0.0 : 0.05,
   });
   const lobbyCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceiling,
     roughness: 1.0,
   });
-  // Series rooms — dark wood floor in dark mode, lighter concrete in white mode
+  // Series rooms — dark wood floor in dark mode, comic tiles in white mode
   const seriesFloorMat = new THREE.MeshStandardMaterial({
-    map: theme === 'white'
-      ? makePolishedConcreteTexture(t.floorSeries)
-      : makeWoodFloorTexture(t.floorSeries),
-    roughness: theme === 'white' ? 0.35 : 0.85,
-    metalness: theme === 'white' ? 0.15 : 0.0,
+    map: floorTextureFor(t.floorSeries),
+    roughness: theme === 'white' ? 1.0 : 0.85,
+    metalness: theme === 'white' ? 0.0 : 0.0,
   });
   const seriesCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceilingSeries,
@@ -1957,12 +1956,13 @@ function buildAllWalls(t) {
   // flat color in white mode.
   const lobbyWallMat = new THREE.MeshStandardMaterial({
     color: t.wall,
-    map: t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null,
+    map: lobbyWallTextureFor(t),
     roughness: 0.92,
     metalness: 0.0,
   });
   const seriesWallMat = new THREE.MeshStandardMaterial({
     color: t.wallSeries,
+    map: seriesWallTextureFor(t),
     roughness: 0.95,
     metalness: 0.0,
   });
@@ -2547,6 +2547,109 @@ function makePolishedConcreteTexture(baseHex) {
   return tex;
 }
 
+// ── Line-art "2D café" textures (white-cube comic mode) ──
+// A small hand-wobbled helper so baked black outlines read as drawn-by-hand
+// rather than CAD-perfect.
+function _wobbleRect(ctx, x, y, w, h, lw, jitter) {
+  const j = jitter || 0;
+  const rnd = () => (Math.random() - 0.5) * 2 * j;
+  ctx.beginPath();
+  ctx.moveTo(x + rnd(), y + rnd());
+  ctx.lineTo(x + w + rnd(), y + rnd());
+  ctx.lineTo(x + w + rnd(), y + h + rnd());
+  ctx.lineTo(x + rnd(), y + h + rnd());
+  ctx.closePath();
+  ctx.lineWidth = lw;
+  ctx.stroke();
+}
+
+// Comic floor: rounded square tiles, bold black outline on flat white, with a
+// gentle hand-drawn wobble (the wavy tile grid from the reference café).
+function makeComicTileFloorTexture(_baseHex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f7f7f4';
+  ctx.fillRect(0, 0, c.width, c.height);
+  const N = 4;                 // tiles per texture cell
+  const cell = c.width / N;
+  const pad = cell * 0.10;     // grout gap
+  const r = cell * 0.26;       // corner radius
+  ctx.strokeStyle = '#0b0b0b';
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  // Draw tiles across a 1-cell margin so the wrapping seam stays clean.
+  for (let gy = -1; gy <= N; gy++) {
+    for (let gx = -1; gx <= N; gx++) {
+      const x = gx * cell + pad;
+      const y = gy * cell + pad;
+      const w = cell - pad * 2;
+      const h = cell - pad * 2;
+      const jx = (Math.random() - 0.5) * cell * 0.05;
+      const jy = (Math.random() - 0.5) * cell * 0.05;
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      // rounded rect with slight per-corner wobble
+      const wob = () => (Math.random() - 0.5) * cell * 0.04;
+      ctx.moveTo(x + r + jx, y + jy + wob());
+      ctx.lineTo(x + w - r + jx, y + jy + wob());
+      ctx.quadraticCurveTo(x + w + jx, y + jy, x + w + jx, y + r + jy);
+      ctx.lineTo(x + w + jx, y + h - r + jy + wob());
+      ctx.quadraticCurveTo(x + w + jx, y + h + jy, x + w - r + jx, y + h + jy);
+      ctx.lineTo(x + r + jx, y + h + jy + wob());
+      ctx.quadraticCurveTo(x + jx, y + h + jy, x + jx, y + h - r + jy);
+      ctx.lineTo(x + jx, y + r + jy + wob());
+      ctx.quadraticCurveTo(x + jx, y + jy, x + r + jx, y + jy);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(7, 7);
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Comic wall: flat white with bold black-outlined molding panels + a baseboard
+// line, echoing the paneled walls in the reference interiors.
+function makeComicWallTexture(_baseHex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fbfbf9';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = '#0b0b0b';
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  // Outer panel
+  ctx.lineWidth = 6;
+  _wobbleRect(ctx, 40, 40, c.width - 80, c.height - 80, 6, 2.5);
+  // Inner panel (double-line moulding)
+  ctx.lineWidth = 4;
+  _wobbleRect(ctx, 64, 64, c.width - 128, c.height - 128, 4, 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Theme-aware texture pickers used by both initial build and applyTheme so the
+// white cube reads as a flat black-and-white line drawing.
+function floorTextureFor(hex) {
+  return (theme === 'white') ? makeComicTileFloorTexture(hex) : makeWoodFloorTexture(hex);
+}
+function lobbyWallTextureFor(t) {
+  if (theme === 'white') return makeComicWallTexture(t.wall);
+  return t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null;
+}
+function seriesWallTextureFor(t) {
+  return (theme === 'white') ? makeComicWallTexture(t.wallSeries) : null;
+}
+
 /* ─── Lobby title (C.Barnickel banner) ─── */
 function buildLobbyTitle() {
   const lobby = ROOMS.lobby;
@@ -3022,6 +3125,11 @@ const FRAME_COLOR_PRESETS = {
 // Auto picks different palettes per (style, theme, isSeriesRoom) so each
 // style has a sensible default look in each theme.
 function getFramePreset(isSeriesRoom) {
+  // Line-art frame: flat white body so the bold black edge outline (added in
+  // buildFrame) reads as a hand-drawn 2D frame, à la the comic-café interiors.
+  if (activeFrame.color === 'linework') {
+    return { body: 0xf6f6f3, trim: 0xffffff, accent: 0xeeeeea, finish: 'matte' };
+  }
   if (activeFrame.color !== 'auto' && FRAME_COLOR_PRESETS[activeFrame.color]) {
     return FRAME_COLOR_PRESETS[activeFrame.color];
   }
@@ -3037,6 +3145,26 @@ function getFramePreset(isSeriesRoom) {
   } else {
     return FRAME_COLOR_PRESETS.black;
   }
+}
+
+// Shared black line material for baked-in 2D outlines (frames, fixtures).
+const LINEWORK_COLOR = 0x0b0b0b;
+let _lineworkMat = null;
+function lineworkMaterial() {
+  if (!_lineworkMat) _lineworkMat = new THREE.LineBasicMaterial({ color: LINEWORK_COLOR });
+  return _lineworkMat;
+}
+
+// Add a bold black edge outline as a child of `mesh` (so it inherits the mesh's
+// transform). thresholdAngle keeps only strong edges — low for boxy frames, a
+// bit higher to tame busy meshes. Used by the "Line Art" frame option.
+function addLineworkOutline(mesh, thresholdAngle) {
+  if (!mesh.geometry) return null;
+  const eg = new THREE.EdgesGeometry(mesh.geometry, thresholdAngle == null ? 28 : thresholdAngle);
+  const ls = new THREE.LineSegments(eg, lineworkMaterial());
+  ls.userData.isLineworkOutline = true;
+  mesh.add(ls);
+  return ls;
 }
 
 // Build a single material from a hex + finish, used by single-color styles.
@@ -3159,6 +3287,15 @@ function buildFrame(pW, pH, isSeriesRoom, resolved) {
   if (activeFrame.style !== 'victorian') {
     for (let i = frameChildStart; i < group.children.length; i++) {
       group.children[i].position.z += FRAME_FLOAT;
+    }
+  }
+  // LINE ART: trace bold black outlines over the (flat white) frame meshes so
+  // the frame reads as a 2D drawing. Victorian's mesh loads async, so it adds
+  // its own outline in addVictorianMesh; here we handle the procedural styles.
+  if (activeFrame.color === 'linework' && activeFrame.style !== 'victorian') {
+    for (let i = frameChildStart; i < group.children.length; i++) {
+      const ch = group.children[i];
+      if (ch.isMesh) addLineworkOutline(ch);
     }
   }
   return group;
@@ -3558,6 +3695,13 @@ function addVictorianMesh(group, pW, pH) {
 
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
+
+  // LINE ART: the Victorian frame is dense (62k tris), so trace only its
+  // strongest silhouette/feature edges in black over the flat white material.
+  if (group.userData.frameColor === 'linework') {
+    const o = addLineworkOutline(mesh, 50);
+    if (o) o.userData.isVictorianMeshChild = true;
+  }
 
   // Back panel: same scale + recenter, floated with the frame and pushed out an
   // extra VIC_PANEL_Z so it sits just behind the painting. Built with the SAME
@@ -4003,9 +4147,13 @@ function rebuildSingleFrame(fg) {
   }
   // Dispose old children. IMPORTANT: never dispose the shared Victorian
   // geometry (_victorianGeo) — it's reused across every Victorian frame.
+  // Traverse so nested Line Art outline geometries (children of frame meshes)
+  // are freed too; outlines share _lineworkMat, which we never dispose.
   while (fg.children.length) {
     const c = fg.children[0];
-    if (c.geometry && c.geometry !== _victorianGeo) c.geometry.dispose();
+    c.traverse(n => {
+      if (n.geometry && n.geometry !== _victorianGeo) n.geometry.dispose();
+    });
     if (c.userData && c.userData.isVictorianMeshChild && c.material) c.material.dispose();
     fg.remove(c);
   }
@@ -4296,7 +4444,8 @@ const FRAME_STYLE_OPTIONS = [
   ['gothic', 'Gothic'], ['victorian', 'Victorian'],
 ];
 const FRAME_COLOR_OPTIONS = [
-  ['auto', 'Auto'], ['painted', 'Painted'], ['black', 'Black'], ['white', 'White'],
+  ['auto', 'Auto'], ['painted', 'Painted'], ['linework', 'Line Art'],
+  ['black', 'Black'], ['white', 'White'],
   ['gilt', 'Gilt'], ['bronze', 'Bronze'], ['silver', 'Silver'], ['walnut', 'Walnut'],
   ['oak', 'Oak'], ['pastel-blue', 'Pastel Blue'], ['ebony', 'Ebony'],
   ['sage', 'Sage'], ['ivory', 'Ivory'],
@@ -4958,27 +5107,31 @@ function applyTheme() {
   if (wallMeshes._lobbyMat) {
     wallMeshes._lobbyMat.color.setHex(t.wall);
     if (wallMeshes._lobbyMat.map) wallMeshes._lobbyMat.map.dispose();
-    wallMeshes._lobbyMat.map = t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null;
+    wallMeshes._lobbyMat.map = lobbyWallTextureFor(t);
     wallMeshes._lobbyMat.needsUpdate = true;
   }
-  if (wallMeshes._seriesMat) wallMeshes._seriesMat.color.setHex(t.wallSeries);
+  if (wallMeshes._seriesMat) {
+    wallMeshes._seriesMat.color.setHex(t.wallSeries);
+    if (wallMeshes._seriesMat.map) wallMeshes._seriesMat.map.dispose();
+    wallMeshes._seriesMat.map = seriesWallTextureFor(t);
+    wallMeshes._seriesMat.needsUpdate = true;
+  }
 
-  // Floors — regenerate textures based on theme. White mode uses polished
-  // concrete; dark mode uses warm wood plank.
-  const floorTexFn = (theme === 'white') ? makePolishedConcreteTexture : makeWoodFloorTexture;
-  const floorRoughness = (theme === 'white') ? 0.35 : 0.62;
-  const floorMetalness = (theme === 'white') ? 0.15 : 0.05;
+  // Floors — regenerate textures based on theme. White mode uses the comic
+  // tile pattern (flat, matte); dark mode uses warm wood plank.
+  const floorRoughness = (theme === 'white') ? 1.0 : 0.62;
+  const floorMetalness = (theme === 'white') ? 0.0 : 0.05;
   if (floorMeshes._lobbyMat) {
     if (floorMeshes._lobbyMat.map) floorMeshes._lobbyMat.map.dispose();
-    floorMeshes._lobbyMat.map = floorTexFn(t.floor);
+    floorMeshes._lobbyMat.map = floorTextureFor(t.floor);
     floorMeshes._lobbyMat.roughness = floorRoughness;
     floorMeshes._lobbyMat.metalness = floorMetalness;
     floorMeshes._lobbyMat.needsUpdate = true;
   }
   if (floorMeshes._seriesMat) {
     if (floorMeshes._seriesMat.map) floorMeshes._seriesMat.map.dispose();
-    floorMeshes._seriesMat.map = floorTexFn(t.floorSeries);
-    floorMeshes._seriesMat.roughness = (theme === 'white') ? 0.35 : 0.85;
+    floorMeshes._seriesMat.map = floorTextureFor(t.floorSeries);
+    floorMeshes._seriesMat.roughness = (theme === 'white') ? 1.0 : 0.85;
     floorMeshes._seriesMat.metalness = floorMetalness;
     floorMeshes._seriesMat.needsUpdate = true;
   }
