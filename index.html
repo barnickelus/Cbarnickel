@@ -392,6 +392,12 @@ body { overscroll-behavior: none; }
   transition: all 0.2s;
 }
 .ghost-btn:hover { color: var(--ink); border-color: var(--gold-dim); }
+.frame-hint {
+  margin-top: 10px;
+  font-size: 9px; line-height: 1.6;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
 
 /* ─── Bottom hint ─── */
 .bottom-hint {
@@ -576,6 +582,50 @@ body { overscroll-behavior: none; }
 .modal-info .desc {
   color: var(--ink-dim); line-height: 1.7;
   font-size: 14px;
+}
+.modal-frame {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(239, 231, 215, 0.08);
+}
+.modal-frame .mf-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 10px;
+}
+.modal-frame .mf-label {
+  font-size: 9px; letter-spacing: 0.3em;
+  color: var(--ink-faint); text-transform: uppercase;
+}
+.modal-frame .mf-default {
+  background: transparent; border: none;
+  color: var(--ink-faint); cursor: pointer;
+  font-family: var(--sans); font-size: 9px;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  padding: 2px 0; transition: color 0.2s;
+}
+.modal-frame .mf-default:hover { color: var(--gold); }
+.modal-frame .mf-default.active { color: var(--gold); }
+.modal-frame .mf-grid {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  margin-bottom: 7px;
+}
+.modal-frame .mf-grid button {
+  background: transparent;
+  border: 1px solid var(--ink-faint);
+  color: var(--ink-dim);
+  padding: 6px 9px;
+  font-family: var(--sans);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.modal-frame .mf-grid button:hover { color: var(--ink); border-color: var(--gold-dim); }
+.modal-frame .mf-grid button.active {
+  background: rgba(201, 169, 110, 0.15);
+  color: var(--gold);
+  border-color: var(--gold);
 }
 .modal-close {
   position: absolute;
@@ -1133,6 +1183,9 @@ body { overscroll-behavior: none; }
       <button class="nav-btn" data-frame-color="sage">Sage</button>
       <button class="nav-btn" data-frame-color="ivory">Ivory</button>
     </div>
+    <p class="frame-hint">Sets the default for every painting. To frame a single
+      piece, open it and use the picker below its details.</p>
+    <button class="ghost-btn" id="reset-frames" style="display:none; margin-top:10px;">Reset individual frames</button>
   </div>
   <div class="row" style="margin-top: 14px;">
     <button class="ghost-btn" id="show-tutorial">How to navigate ↗</button>
@@ -1167,6 +1220,14 @@ body { overscroll-behavior: none; }
       <div class="meta" id="modal-meta"></div>
       <div class="size" id="modal-size"></div>
       <div class="desc" id="modal-desc"></div>
+      <div class="modal-frame" id="modal-frame">
+        <div class="mf-head">
+          <span class="mf-label">Frame for this piece</span>
+          <button class="mf-default" id="mf-default" type="button">Use gallery default</button>
+        </div>
+        <div class="mf-grid" id="mf-style"></div>
+        <div class="mf-grid" id="mf-color"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1315,6 +1376,31 @@ const frameSettings = {
   style: localStorage.getItem('frameStyle') || 'minimal',
   color: localStorage.getItem('frameColor') || 'black',
 };
+
+// ── Per-painting frame overrides ── Keyed by art.file, each value is
+// { style, color }. An override wins over the global frameSettings, so the gear
+// panel sets the DEFAULT for every painting you haven't individually framed
+// (via the picker in each painting's modal), and "Reset individual frames"
+// clears them all.
+let framePerPainting = {};
+try {
+  framePerPainting = JSON.parse(localStorage.getItem('framePerPainting') || '{}') || {};
+} catch (e) { framePerPainting = {}; }
+function saveFramePerPainting() {
+  try { localStorage.setItem('framePerPainting', JSON.stringify(framePerPainting)); } catch (e) {}
+}
+// Effective frame settings for one painting: its override, else the global default.
+function resolveFrame(artFile) {
+  const o = (artFile && framePerPainting[artFile]) || null;
+  return {
+    style: (o && o.style) || frameSettings.style,
+    color: (o && o.color) || frameSettings.color,
+  };
+}
+// The settings the CURRENT synchronous frame build reads. buildFrame points this
+// at the resolved per-painting values so getFramePreset / the style builders use
+// them instead of the global frameSettings. Defaults to the global object.
+let activeFrame = frameSettings;
 
 // ── Victorian mesh frame ── The "victorian" style loads a real 3D model
 // (victorian-frame.glb) instead of procedural geometry. The GLB is fetched
@@ -2936,11 +3022,11 @@ const FRAME_COLOR_PRESETS = {
 // Auto picks different palettes per (style, theme, isSeriesRoom) so each
 // style has a sensible default look in each theme.
 function getFramePreset(isSeriesRoom) {
-  if (frameSettings.color !== 'auto' && FRAME_COLOR_PRESETS[frameSettings.color]) {
-    return FRAME_COLOR_PRESETS[frameSettings.color];
+  if (activeFrame.color !== 'auto' && FRAME_COLOR_PRESETS[activeFrame.color]) {
+    return FRAME_COLOR_PRESETS[activeFrame.color];
   }
   // Auto mode — theme + style aware
-  if (frameSettings.style === 'victorian') {
+  if (activeFrame.style === 'victorian') {
     // Victorian looks best with painted multi-tone palettes
     return theme === 'dark'
       ? FRAME_COLOR_PRESETS['pastel-blue']
@@ -2990,11 +3076,19 @@ function getFrameMaterialSet(isSeriesRoom) {
 // caller, positioned at z = frameDepth + small offset along the local +Z
 // (which becomes the outward normal after rotation). The group's local +Z
 // always faces OUT of the wall.
-function buildFrame(pW, pH, isSeriesRoom) {
+function buildFrame(pW, pH, isSeriesRoom, resolved) {
+  // Point the build at this painting's resolved settings (override ▸ global).
+  // The style builders, getFramePreset, and the Victorian material set all read
+  // `activeFrame` for the duration of this synchronous build.
+  activeFrame = resolved || frameSettings;
   const group = new THREE.Group();
+  // Stamp the resolved settings so async paths (Victorian GLB load) and the
+  // per-frame rebuild can recover what this frame was built with.
+  group.userData.frameStyle = activeFrame.style;
+  group.userData.frameColor = activeFrame.color;
   // For Victorian style we use 3 coordinated materials; other styles use 1.
   // Track all materials we create so rebuildAllFrames can dispose them.
-  const matSet = (frameSettings.style === 'victorian')
+  const matSet = (activeFrame.style === 'victorian')
     ? getFrameMaterialSet(isSeriesRoom)
     : null;
   const mat = matSet ? matSet.bodyMat : getFrameMaterial(isSeriesRoom);
@@ -3018,10 +3112,10 @@ function buildFrame(pW, pH, isSeriesRoom) {
   let shadowScaleX = 1.7, shadowScaleY = 1.8;
   let shadowYShift = -pH * 0.16;   // biased down (top-lit cast shadow)
   let shadowXShift = pW * 0.08;
-  if (frameSettings.style === 'gothic') {
+  if (activeFrame.style === 'gothic') {
     shadowScaleX = 2.1; shadowScaleY = 2.8;
     shadowYShift = -pH * 0.16;
-  } else if (frameSettings.style === 'victorian') {
+  } else if (activeFrame.style === 'victorian') {
     // The frame floats ~5 in off the wall and is lit from above, so its shadow
     // is cast DOWNWARD onto the wall and slightly to the side. Large, soft and
     // diffuse: spread wide and biased below the frame so it reads as a gentle
@@ -3030,7 +3124,7 @@ function buildFrame(pW, pH, isSeriesRoom) {
     shadowYShift = -pH * 0.20;
     shadowXShift = pW * 0.10;
     shadowMat.opacity = 0.5;
-  } else if (frameSettings.style === 'ornate') {
+  } else if (activeFrame.style === 'ornate') {
     shadowScaleX = 2.0; shadowScaleY = 2.1;
     shadowYShift = -pH * 0.16;
   }
@@ -3043,16 +3137,16 @@ function buildFrame(pW, pH, isSeriesRoom) {
   // Frame meshes are added after the shadow plane; remember where they start so
   // we can float just the frame (not the shadow) off the wall below.
   const frameChildStart = group.children.length;
-  if (frameSettings.style === 'gothic') {
+  if (activeFrame.style === 'gothic') {
     buildGothicFrame(group, pW, pH, mat);
     group.userData.frameDepth = 0.06;
-  } else if (frameSettings.style === 'victorian') {
+  } else if (activeFrame.style === 'victorian') {
     buildVictorianFrame(group, pW, pH, matSet);
     // The mesh frame's opening sits near the wall; keep the painting close
     // to the wall surface so it reads as set INTO the niche, not floating
     // in front of the ornament. Tuned to the GLB's opening depth.
     group.userData.frameDepth = 0.03;
-  } else if (frameSettings.style === 'ornate') {
+  } else if (activeFrame.style === 'ornate') {
     buildOrnateFrame(group, pW, pH, mat);
     group.userData.frameDepth = 0.05;
   } else {
@@ -3062,7 +3156,7 @@ function buildFrame(pW, pH, isSeriesRoom) {
   // Float the frame meshes off the wall so every style stands proud and casts a
   // shadow (the shadow plane added above stays pinned to the wall). Victorian's
   // mesh + panel self-apply VIC_FLOAT (and load asynchronously), so skip it here.
-  if (frameSettings.style !== 'victorian') {
+  if (activeFrame.style !== 'victorian') {
     for (let i = frameChildStart; i < group.children.length; i++) {
       group.children[i].position.z += FRAME_FLOAT;
     }
@@ -3349,7 +3443,7 @@ function addVictorianMesh(group, pW, pH) {
   // polychrome paint (blue body / cream colonnettes / sage accents) via its PBR
   // material. Every other color (including the default) drops the texture and
   // uses a flat single-color material in that preset color/finish instead.
-  const useTexture = (frameSettings.color === 'painted') && _victorianTexMat;
+  const useTexture = (group.userData.frameColor === 'painted') && _victorianTexMat;
   const srcMat = group.userData.frameMat;
   let mat;
   if (useTexture) {
@@ -3900,81 +3994,86 @@ function getVictorianScrollworkTexture(matSet) {
   return tex;
 }
 
-/* Rebuild every frame in place (called when user changes style/color).
-   Disposes old meshes and replaces with new ones in the same Group. */
-function rebuildAllFrames() {
-  // Reset the Victorian pending registry — any frames waiting on the mesh
-  // are about to be rebuilt fresh, so stale entries must not fire later.
-  _victorianPending.length = 0;
-  for (const fg of paintingFrames) {
-    // Dispose old children. IMPORTANT: never dispose the shared Victorian
-    // geometry (_victorianGeo) — it's reused across every Victorian frame.
-    while (fg.children.length) {
-      const c = fg.children[0];
-      if (c.geometry && c.geometry !== _victorianGeo) c.geometry.dispose();
-      if (c.userData && c.userData.isVictorianMeshChild && c.material) c.material.dispose();
-      fg.remove(c);
-    }
-    if (fg.userData.frameMat) fg.userData.frameMat.dispose();
-    if (fg.userData.shadowMat) fg.userData.shadowMat.dispose();
-    if (fg.userData.victorianMeshMat) { fg.userData.victorianMeshMat.dispose(); fg.userData.victorianMeshMat = null; }
-    if (fg.userData.victorianPlaceholderMat) { fg.userData.victorianPlaceholderMat.dispose(); fg.userData.victorianPlaceholderMat = null; }
-    // Victorian-specific cleanup (legacy procedural materials, if any)
-    if (fg.userData.victorianMats) {
-      for (const m of fg.userData.victorianMats) {
-        if (m && m !== fg.userData.frameMat) m.dispose();
-      }
-      fg.userData.victorianMats = null;
-    }
-    if (fg.userData.victorianTrefoilMat) {
-      fg.userData.victorianTrefoilMat.dispose();
-      fg.userData.victorianTrefoilMat = null;
-    }
-    if (fg.userData.victorianScrollMat) {
-      fg.userData.victorianScrollMat.dispose();
-      fg.userData.victorianScrollMat = null;
-    }
-    if (fg.userData.victorianCuspMat) {
-      fg.userData.victorianCuspMat.dispose();
-      fg.userData.victorianCuspMat = null;
-    }
-    // Rebuild
-    const newGroup = buildFrame(
-      fg.userData.paintingW,
-      fg.userData.paintingH,
-      fg.userData.isSeriesRoom
-    );
-    // Move children from newGroup into existing group (preserves position/rotation)
-    while (newGroup.children.length) {
-      fg.add(newGroup.children[0]);
-    }
-    fg.userData.frameMat = newGroup.userData.frameMat;
-    fg.userData.shadowMat = newGroup.userData.shadowMat;
-    fg.userData.victorianMeshMat = newGroup.userData.victorianMeshMat;
-    fg.userData.victorianPlaceholderMat = newGroup.userData.victorianPlaceholderMat;
-    fg.userData.victorianMats = newGroup.userData.victorianMats;
-    fg.userData.victorianTrefoilMat = newGroup.userData.victorianTrefoilMat;
-    fg.userData.victorianScrollMat = newGroup.userData.victorianScrollMat;
-    fg.userData.victorianCuspMat = newGroup.userData.victorianCuspMat;
-    fg.userData.frameDepth = newGroup.userData.frameDepth;
-    fg.userData.isVictorianMesh = newGroup.userData.isVictorianMesh;
-    fg.userData.victorianPW = newGroup.userData.victorianPW;
-    fg.userData.victorianPH = newGroup.userData.victorianPH;
-    fg.userData.victorianMeshMat = newGroup.userData.victorianMeshMat || fg.userData.victorianMeshMat;
-    fg.userData.victorianPanel = newGroup.userData.victorianPanel;
-    fg.userData.victorianGeo = newGroup.userData.victorianGeo;
-    // If the Victorian mesh wasn't ready, buildVictorianFrame registered the
-    // THROWAWAY newGroup in _victorianPending (and added a placeholder we just
-    // reparented into fg). Repoint that pending entry at fg so the async loader
-    // swaps the real mesh into the live group — otherwise fg keeps showing the
-    // gray placeholder until the next rebuild. (This was the "Victorian loads
-    // as a gray rectangle until you pick a color" bug.)
-    for (const pend of _victorianPending) {
-      if (pend.group === newGroup) pend.group = fg;
-    }
+/* Rebuild ONE frame group in place, using its painting's resolved settings.
+   Disposes old meshes/materials and replaces with new ones in the same Group. */
+function rebuildSingleFrame(fg) {
+  // Drop any stale Victorian pending entry for this frame — it's rebuilt now.
+  for (let i = _victorianPending.length - 1; i >= 0; i--) {
+    if (_victorianPending[i].group === fg) _victorianPending.splice(i, 1);
   }
-  // Reposition each painting plane to sit just in front of its (possibly
-  // resized) frame
+  // Dispose old children. IMPORTANT: never dispose the shared Victorian
+  // geometry (_victorianGeo) — it's reused across every Victorian frame.
+  while (fg.children.length) {
+    const c = fg.children[0];
+    if (c.geometry && c.geometry !== _victorianGeo) c.geometry.dispose();
+    if (c.userData && c.userData.isVictorianMeshChild && c.material) c.material.dispose();
+    fg.remove(c);
+  }
+  if (fg.userData.frameMat) fg.userData.frameMat.dispose();
+  if (fg.userData.shadowMat) fg.userData.shadowMat.dispose();
+  if (fg.userData.victorianMeshMat) { fg.userData.victorianMeshMat.dispose(); fg.userData.victorianMeshMat = null; }
+  if (fg.userData.victorianPlaceholderMat) { fg.userData.victorianPlaceholderMat.dispose(); fg.userData.victorianPlaceholderMat = null; }
+  // Victorian-specific cleanup (legacy procedural materials, if any)
+  if (fg.userData.victorianMats) {
+    for (const m of fg.userData.victorianMats) {
+      if (m && m !== fg.userData.frameMat) m.dispose();
+    }
+    fg.userData.victorianMats = null;
+  }
+  if (fg.userData.victorianTrefoilMat) {
+    fg.userData.victorianTrefoilMat.dispose();
+    fg.userData.victorianTrefoilMat = null;
+  }
+  if (fg.userData.victorianScrollMat) {
+    fg.userData.victorianScrollMat.dispose();
+    fg.userData.victorianScrollMat = null;
+  }
+  if (fg.userData.victorianCuspMat) {
+    fg.userData.victorianCuspMat.dispose();
+    fg.userData.victorianCuspMat = null;
+  }
+  // Rebuild with this painting's resolved (override ▸ global) settings.
+  const newGroup = buildFrame(
+    fg.userData.paintingW,
+    fg.userData.paintingH,
+    fg.userData.isSeriesRoom,
+    resolveFrame(fg.userData.artFile)
+  );
+  // Move children from newGroup into existing group (preserves position/rotation)
+  while (newGroup.children.length) {
+    fg.add(newGroup.children[0]);
+  }
+  fg.userData.frameStyle = newGroup.userData.frameStyle;
+  fg.userData.frameColor = newGroup.userData.frameColor;
+  fg.userData.frameMat = newGroup.userData.frameMat;
+  fg.userData.shadowMat = newGroup.userData.shadowMat;
+  fg.userData.victorianMeshMat = newGroup.userData.victorianMeshMat;
+  fg.userData.victorianPlaceholderMat = newGroup.userData.victorianPlaceholderMat;
+  fg.userData.victorianMats = newGroup.userData.victorianMats;
+  fg.userData.victorianTrefoilMat = newGroup.userData.victorianTrefoilMat;
+  fg.userData.victorianScrollMat = newGroup.userData.victorianScrollMat;
+  fg.userData.victorianCuspMat = newGroup.userData.victorianCuspMat;
+  fg.userData.frameDepth = newGroup.userData.frameDepth;
+  fg.userData.isVictorianMesh = newGroup.userData.isVictorianMesh;
+  fg.userData.victorianPW = newGroup.userData.victorianPW;
+  fg.userData.victorianPH = newGroup.userData.victorianPH;
+  fg.userData.victorianMeshMat = newGroup.userData.victorianMeshMat || fg.userData.victorianMeshMat;
+  fg.userData.victorianPanel = newGroup.userData.victorianPanel;
+  fg.userData.victorianGeo = newGroup.userData.victorianGeo;
+  // If the Victorian mesh wasn't ready, buildVictorianFrame registered the
+  // THROWAWAY newGroup in _victorianPending (and added a placeholder we just
+  // reparented into fg). Repoint that pending entry at fg so the async loader
+  // swaps the real mesh into the live group — otherwise fg keeps showing the
+  // gray placeholder until the next rebuild. (This was the "Victorian loads
+  // as a gray rectangle until you pick a color" bug.)
+  for (const pend of _victorianPending) {
+    if (pend.group === newGroup) pend.group = fg;
+  }
+}
+
+/* Reposition every painting plane to sit just in front of its (possibly
+   resized) frame. */
+function repositionAllPaintings() {
   for (const p of paintingMeshes) {
     const u = p.userData;
     if (u.frameGroup) {
@@ -3988,6 +4087,25 @@ function rebuildAllFrames() {
       );
     }
   }
+}
+
+/* Rebuild every frame in place (called when the global style/color changes).
+   Disposes old meshes and replaces with new ones in the same Group. */
+function rebuildAllFrames() {
+  // Reset the Victorian pending registry — any frames waiting on the mesh
+  // are about to be rebuilt fresh, so stale entries must not fire later.
+  _victorianPending.length = 0;
+  for (const fg of paintingFrames) rebuildSingleFrame(fg);
+  repositionAllPaintings();
+}
+
+/* Rebuild only the frame(s) for a specific painting (used by the per-painting
+   picker in the modal so we don't churn all 30 frames on every tweak). */
+function rebuildFramesForArtFile(artFile) {
+  for (const fg of paintingFrames) {
+    if (fg.userData.artFile === artFile) rebuildSingleFrame(fg);
+  }
+  repositionAllPaintings();
 }
 
 // Place a single painting on a specific wall of a room at a given lateral offset.
@@ -4033,12 +4151,13 @@ function placePainting(art, dir, localCoord, room) {
   // owns a Group containing all frame parts so we can rebuild on the fly
   // when the user changes settings without re-loading textures.
   const isSeriesRoom = (room.id !== 'lobby');
-  const frameGroup = buildFrame(pW, pH, isSeriesRoom);
+  const frameGroup = buildFrame(pW, pH, isSeriesRoom, resolveFrame(art.file));
   // Position the frame group at the wall, oriented to face the room
   frameGroup.position.set(px, yCenter, pz);
   frameGroup.rotation.y = faceY;
   // Tag for later rebuild
   frameGroup.userData.isFrame = true;
+  frameGroup.userData.artFile = art.file;   // which painting this frame belongs to
   frameGroup.userData.paintingW = pW;
   frameGroup.userData.paintingH = pH;
   frameGroup.userData.isSeriesRoom = isSeriesRoom;
@@ -4150,15 +4269,116 @@ function setFrameStyle(style) {
 }
 
 function setFrameColor(color) {
-  const valid = ['auto', 'painted', 'black', 'white', 'gilt', 'bronze', 'silver',
-                 'walnut', 'oak', 'pastel-blue', 'ebony', 'sage', 'ivory'];
-  if (!valid.includes(color)) color = 'auto';
+  if (!FRAME_COLOR_OPTIONS.some(o => o[0] === color)) color = 'auto';
   frameSettings.color = color;
   localStorage.setItem('frameColor', color);
   document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => {
     b.classList.toggle('active', b.dataset.frameColor === color);
   });
   rebuildAllFrames();
+}
+
+// Clear ALL per-painting frame overrides (the gear panel's reset). Paintings
+// fall back to the global default afterwards.
+function resetIndividualFrames() {
+  framePerPainting = {};
+  saveFramePerPainting();
+  rebuildAllFrames();
+  // If the modal is open, reflect the cleared state.
+  const m = document.getElementById('modal');
+  if (m && m.classList.contains('show')) refreshModalFramePicker(parseInt(m.dataset.idx, 10) || 0);
+  updateResetFramesBtn();
+}
+
+// ── Per-painting frame picker (in the painting modal) ──
+const FRAME_STYLE_OPTIONS = [
+  ['minimal', 'Minimal'], ['ornate', 'Ornate'],
+  ['gothic', 'Gothic'], ['victorian', 'Victorian'],
+];
+const FRAME_COLOR_OPTIONS = [
+  ['auto', 'Auto'], ['painted', 'Painted'], ['black', 'Black'], ['white', 'White'],
+  ['gilt', 'Gilt'], ['bronze', 'Bronze'], ['silver', 'Silver'], ['walnut', 'Walnut'],
+  ['oak', 'Oak'], ['pastel-blue', 'Pastel Blue'], ['ebony', 'Ebony'],
+  ['sage', 'Sage'], ['ivory', 'Ivory'],
+];
+
+// Build the modal picker buttons once.
+function buildModalFramePicker() {
+  const styleWrap = document.getElementById('mf-style');
+  const colorWrap = document.getElementById('mf-color');
+  if (!styleWrap || !colorWrap) return;
+  for (const [val, label] of FRAME_STYLE_OPTIONS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = label; b.dataset.mfStyle = val;
+    b.addEventListener('click', () => setPaintingFrame({ style: val }));
+    styleWrap.appendChild(b);
+  }
+  for (const [val, label] of FRAME_COLOR_OPTIONS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = label; b.dataset.mfColor = val;
+    b.addEventListener('click', () => setPaintingFrame({ color: val }));
+    colorWrap.appendChild(b);
+  }
+  const def = document.getElementById('mf-default');
+  if (def) def.addEventListener('click', clearPaintingFrame);
+}
+
+// Current art.file for the open modal, or null.
+function currentModalArtFile() {
+  const m = document.getElementById('modal');
+  if (!m) return null;
+  const art = ARTWORKS[parseInt(m.dataset.idx, 10)];
+  return art ? art.file : null;
+}
+
+// Set a per-painting override (style and/or color) for the open modal painting.
+function setPaintingFrame(patch) {
+  const file = currentModalArtFile();
+  if (!file) return;
+  // Seed from the painting's current resolved look so the unspecified axis sticks.
+  const cur = framePerPainting[file] || resolveFrame(file);
+  framePerPainting[file] = { style: cur.style, color: cur.color, ...patch };
+  saveFramePerPainting();
+  rebuildFramesForArtFile(file);
+  refreshModalFramePicker(parseInt(document.getElementById('modal').dataset.idx, 10) || 0);
+  updateResetFramesBtn();
+}
+
+// Drop the override for the open modal painting (revert to gallery default).
+function clearPaintingFrame() {
+  const file = currentModalArtFile();
+  if (!file) return;
+  delete framePerPainting[file];
+  saveFramePerPainting();
+  rebuildFramesForArtFile(file);
+  refreshModalFramePicker(parseInt(document.getElementById('modal').dataset.idx, 10) || 0);
+  updateResetFramesBtn();
+}
+
+// Reflect the open painting's resolved frame + override state in the picker.
+function refreshModalFramePicker(idx) {
+  const art = ARTWORKS[idx];
+  if (!art) return;
+  const hasOverride = !!framePerPainting[art.file];
+  const r = resolveFrame(art.file);
+  document.querySelectorAll('#mf-style [data-mf-style]').forEach(b => {
+    b.classList.toggle('active', b.dataset.mfStyle === r.style);
+  });
+  document.querySelectorAll('#mf-color [data-mf-color]').forEach(b => {
+    b.classList.toggle('active', b.dataset.mfColor === r.color);
+  });
+  const def = document.getElementById('mf-default');
+  // "Use gallery default" reads as active only when there's no override.
+  if (def) def.classList.toggle('active', !hasOverride);
+}
+
+// Show/hide the gear-panel reset button based on whether any overrides exist.
+function updateResetFramesBtn() {
+  const btn = document.getElementById('reset-frames');
+  if (!btn) return;
+  const n = Object.keys(framePerPainting).length;
+  btn.style.display = n ? '' : 'none';
+  btn.textContent = 'Reset ' + n + ' individual frame' + (n === 1 ? '' : 's');
 }
 
 // Get the appropriate "first interaction" hint for the current nav mode
@@ -4810,8 +5030,12 @@ function applyTheme() {
     lbl.mesh.material.opacity = t.labelAlpha;
     lbl.mesh.material.needsUpdate = true;
   }
-  // Frames may need to update color (when frameSettings.color === 'auto')
-  if (frameSettings.color === 'auto') {
+  // Frames may need to update color when any resolve to 'auto' (theme-aware):
+  // the global default, or any per-painting override set to Auto.
+  const anyAutoOverride = Object.keys(framePerPainting).some(
+    k => framePerPainting[k] && framePerPainting[k].color === 'auto'
+  );
+  if (frameSettings.color === 'auto' || anyAutoOverride) {
     rebuildAllFrames();
   }
 }
@@ -5618,6 +5842,7 @@ function openModal(idx) {
   document.getElementById('modal-desc').textContent = art.description || '';
   document.getElementById('modal').classList.add('show');
   document.getElementById('modal').dataset.idx = idx;
+  refreshModalFramePicker(idx);
 }
 function closeModal() {
   document.getElementById('modal').classList.remove('show');
@@ -5787,6 +6012,11 @@ function wireUI() {
   document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => {
     b.classList.toggle('active', b.dataset.frameColor === frameSettings.color);
   });
+  // Per-painting frame picker (modal) + the gear-panel reset for overrides
+  buildModalFramePicker();
+  const resetBtn = document.getElementById('reset-frames');
+  if (resetBtn) resetBtn.addEventListener('click', resetIndividualFrames);
+  updateResetFramesBtn();
 
   // Tutorial
   document.getElementById('show-tutorial').addEventListener('click', () => {
