@@ -1120,6 +1120,7 @@ body { overscroll-behavior: none; }
     <label>Frame color</label>
     <div class="nav-grid">
       <button class="nav-btn active" data-frame-color="auto">Auto</button>
+      <button class="nav-btn" data-frame-color="painted">Painted</button>
       <button class="nav-btn" data-frame-color="black">Black</button>
       <button class="nav-btn" data-frame-color="white">White</button>
       <button class="nav-btn" data-frame-color="gilt">Gilt</button>
@@ -1320,8 +1321,9 @@ const frameSettings = {
 // once, its geometry cached, then cloned + scaled per painting. Because
 // loading is async but frames build synchronously, any victorian frame
 // built before the mesh arrives registers here and gets populated on load.
-const VICTORIAN_GLB_URL = 'victorian-frame.glb';
-let _victorianGeo = null;          // cached BufferGeometry (vertex-colored)
+const VICTORIAN_GLB_URL = 'victorian-frame-textured.glb';
+let _victorianGeo = null;          // cached BufferGeometry
+let _victorianTexMat = null;       // cached PBR material from the GLB (polychrome paint)
 let _victorianBasePositions = null; // Float32Array of base vertex positions (for band-stretch)
 let _victorianLoadState = 'idle';  // idle | loading | ready | failed
 const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
@@ -3343,22 +3345,30 @@ function buildVictorianFrame(group, pW, pH, matSet) {
 
 // Clone the cached Victorian geometry, fit it to the painting, add to group.
 function addVictorianMesh(group, pW, pH) {
-  // The GLB carries no baked vertex colors, so the frame must take the user's
-  // chosen color/finish. group.userData.frameMat is the preset body material
-  // (color + roughness + metalness already set per finish); clone it so the
-  // mesh owns a disposable copy. Fall back to near-black if it's somehow absent.
+  // TEXTURE + FALLBACK. The dedicated "Painted" color shows the GLB's baked
+  // polychrome paint (blue body / cream colonnettes / sage accents) via its PBR
+  // material. Every other color (including the default) drops the texture and
+  // uses a flat single-color material in that preset color/finish instead.
+  const useTexture = (frameSettings.color === 'painted') && _victorianTexMat;
   const srcMat = group.userData.frameMat;
-  const mat = srcMat
-    ? srcMat.clone()
-    : new THREE.MeshStandardMaterial({ color: 0x141210, roughness: 0.65, metalness: 0.1 });
-  mat.vertexColors = false;
+  let mat;
+  if (useTexture) {
+    // Clone so each frame owns a disposable copy (maps are shared by reference,
+    // which is fine — they're never mutated).
+    mat = _victorianTexMat.clone();
+  } else {
+    mat = srcMat
+      ? srcMat.clone()
+      : new THREE.MeshStandardMaterial({ color: 0x141210, roughness: 0.65, metalness: 0.1 });
+    mat.vertexColors = false;
+  }
 
-  // Back-panel color: the same frame color, a touch darker so it reads as a
-  // recessed board behind the openwork rather than a bright patch of wall. For
-  // dark frames this is ~= the frame tone (a solid carved look); for light
-  // frames it's a soft recessed liner.
-  const panelColor = (srcMat ? srcMat.color.clone() : new THREE.Color(0x141210))
-    .multiplyScalar(0.82);
+  // Back-panel color: behind the openwork. With the textured frame, sample a
+  // mid blue from the painted palette so the lunette reads as solid frame; with
+  // a flat color, use that color a touch darker (a recessed liner).
+  const panelColor = useTexture
+    ? new THREE.Color(0x46556b)
+    : (srcMat ? srcMat.color.clone() : new THREE.Color(0x141210)).multiplyScalar(0.82);
 
   // TRUE 9-SLICE in both axes. The ornament (arch, spires, apron, side
   // borders) stays a CONSTANT real-world size for every painting — only the
@@ -3520,8 +3530,15 @@ function loadVictorianMesh() {
       let geo = null;
       gltf.scene.traverse(o => {
         if (o.isMesh && !geo) {
-          o.geometry.computeVertexNormals();
+          // Keep the GLB's own normals (they carry the baked carving detail);
+          // the textured asset already ships correct smooth normals.
           geo = o.geometry;
+          // Cache the GLB's PBR material (baked polychrome paint + normal map).
+          // Used when frame color is AUTO; specific colors use a flat material.
+          if (o.material) {
+            _victorianTexMat = o.material;
+            _victorianTexMat.side = THREE.FrontSide;
+          }
         }
       });
       if (!geo) { _victorianLoadState = 'failed'; return; }
@@ -4133,7 +4150,7 @@ function setFrameStyle(style) {
 }
 
 function setFrameColor(color) {
-  const valid = ['auto', 'black', 'white', 'gilt', 'bronze', 'silver',
+  const valid = ['auto', 'painted', 'black', 'white', 'gilt', 'bronze', 'silver',
                  'walnut', 'oak', 'pastel-blue', 'ebony', 'sage', 'ivory'];
   if (!valid.includes(color)) color = 'auto';
   frameSettings.color = color;
