@@ -2603,52 +2603,46 @@ function _wobbleRect(ctx, x, y, w, h, lw, jitter) {
   ctx.stroke();
 }
 
-// Comic floor: rounded square tiles, bold black outline on flat white, with a
-// gentle hand-drawn wobble (the wavy tile grid from the reference café).
+// Comic floor: line-art HERRINGBONE parquet (the floor from the reference café).
+// Planks are W×2W; each pair of one horizontal + one vertical plank interlocks
+// on the lattice a=(2W,2W), b=(3W,-W), which makes the pattern repeat exactly
+// every 8W in both axes — so an 8W canvas tiles seamlessly. Faint centre-grain
+// strokes give each plank a hand-drawn wood feel.
 function makeComicTileFloorTexture(bgCss, lineCss) {
   bgCss = bgCss || '#f7f7f4'; lineCss = lineCss || '#0b0b0b';
+  const W = 64, L = 2 * W, size = 8 * W;   // 512px = one exact period
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
+  c.width = size; c.height = size;
   const ctx = c.getContext('2d');
   ctx.fillStyle = bgCss;
-  ctx.fillRect(0, 0, c.width, c.height);
-  const N = 4;                 // tiles per texture cell
-  const cell = c.width / N;
-  const pad = cell * 0.10;     // grout gap
-  const r = cell * 0.26;       // corner radius
-  ctx.strokeStyle = lineCss;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  // Draw tiles across a 1-cell margin so the wrapping seam stays clean.
-  for (let gy = -1; gy <= N; gy++) {
-    for (let gx = -1; gx <= N; gx++) {
-      const x = gx * cell + pad;
-      const y = gy * cell + pad;
-      const w = cell - pad * 2;
-      const h = cell - pad * 2;
-      const jx = (Math.random() - 0.5) * cell * 0.05;
-      const jy = (Math.random() - 0.5) * cell * 0.05;
-      ctx.lineWidth = 7;
+  ctx.fillRect(0, 0, size, size);
+  ctx.lineJoin = 'miter';
+  ctx.lineCap = 'butt';
+  // Draw plank pairs across a wide margin so every wrapped copy is present.
+  for (let cc = -12; cc < 24; cc++) {
+    for (let k = -12; k < 24; k++) {
+      const bX = k * L + cc * (L + W);
+      const bY = k * L - cc * W;
+      // plank outlines
+      ctx.strokeStyle = lineCss;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(bX, bY, L, W);          // horizontal plank
+      ctx.strokeRect(bX + L, bY, W, L);      // interlocking vertical plank
+      // faint grain down the centre of each plank
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      // rounded rect with slight per-corner wobble
-      const wob = () => (Math.random() - 0.5) * cell * 0.04;
-      ctx.moveTo(x + r + jx, y + jy + wob());
-      ctx.lineTo(x + w - r + jx, y + jy + wob());
-      ctx.quadraticCurveTo(x + w + jx, y + jy, x + w + jx, y + r + jy);
-      ctx.lineTo(x + w + jx, y + h - r + jy + wob());
-      ctx.quadraticCurveTo(x + w + jx, y + h + jy, x + w - r + jx, y + h + jy);
-      ctx.lineTo(x + r + jx, y + h + jy + wob());
-      ctx.quadraticCurveTo(x + jx, y + h + jy, x + jx, y + h - r + jy);
-      ctx.lineTo(x + jx, y + r + jy + wob());
-      ctx.quadraticCurveTo(x + jx, y + jy, x + r + jx, y + jy);
-      ctx.closePath();
+      ctx.moveTo(bX + 6, bY + W * 0.5); ctx.lineTo(bX + L - 6, bY + W * 0.5);
+      ctx.moveTo(bX + L + W * 0.5, bY + 6); ctx.lineTo(bX + L + W * 0.5, bY + L - 6);
       ctx.stroke();
+      ctx.restore();
     }
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(7, 7);
+  tex.repeat.set(5, 5);
   tex.anisotropy = 8;
   return tex;
 }
