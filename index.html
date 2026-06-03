@@ -1600,11 +1600,11 @@ const THEMES = {
     ceiling: 0xf6f6f4,
     // No wallpaper in white mode — flat pure walls
     wallpaperBase: null,
-    // Flatter, brighter fill so white surfaces read as flat drawn paper; the
-    // spotlights stay (a touch softer) to keep the color paintings readable.
-    ambient: { color: 0xffffff, intensity: 0.92 },
-    hemi: { sky: 0xffffff, ground: 0xdedbd5, intensity: 0.6 },
-    spot: { color: 0xffffff, intensity: 0.45 },
+    // Dimmer flat fill (~55%) so the white room stops washing out the colour
+    // paintings, with stronger spotlights so each piece pops without blowing out.
+    ambient: { color: 0xffffff, intensity: 0.52 },
+    hemi: { sky: 0xffffff, ground: 0xdedbd5, intensity: 0.34 },
+    spot: { color: 0xffffff, intensity: 0.78 },
     glow: { color: 0xffffff, intensity: 0.0 },
     trackBar: 0x111111,         // visible black track bars
     title: '#1a1a1a',           // pure dark on white walls (IMG_8299 lettering)
@@ -2654,21 +2654,49 @@ function makeComicWallTexture(bgCss, lineCss) {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 512;
   const ctx = c.getContext('2d');
+  const S = c.width;            // 512
   ctx.fillStyle = bgCss;
-  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillRect(0, 0, S, S);
   ctx.strokeStyle = lineCss;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  // Outer panel
-  ctx.lineWidth = 6;
-  _wobbleRect(ctx, 40, 40, c.width - 80, c.height - 80, 6, 2.5);
-  // Inner panel (double-line moulding)
-  ctx.lineWidth = 4;
-  _wobbleRect(ctx, 64, 64, c.width - 128, c.height - 128, 4, 2);
+  // A 2×2 grid of moulded panels, each a double-line frame with a small
+  // centred motif — more hand-drawn line detail to fill the walls (reads well
+  // in both the white and the dark "Ink" galleries).
+  const half = S / 2;
+  const m = 26;                 // margin from cell edge to outer moulding
+  for (let gy = 0; gy < 2; gy++) {
+    for (let gx = 0; gx < 2; gx++) {
+      const ox = gx * half, oy = gy * half;
+      const px = ox + m, py = oy + m;
+      const pw = half - m * 2, ph = half - m * 2;
+      ctx.lineWidth = 5;
+      _wobbleRect(ctx, px, py, pw, ph, 5, 2.2);            // outer moulding
+      ctx.lineWidth = 3;
+      _wobbleRect(ctx, px + 16, py + 16, pw - 32, ph - 32, 3, 1.6); // inner moulding
+      // centred lozenge motif
+      const cx = ox + half / 2, cy = oy + half / 2, r = 16;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r * 0.62, cy);
+      ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r * 0.62, cy);
+      ctx.closePath();
+      ctx.stroke();
+      // small corner ticks on the outer moulding
+      ctx.lineWidth = 2;
+      const tk = 10;
+      [[px, py, 1, 1], [px + pw, py, -1, 1], [px, py + ph, 1, -1], [px + pw, py + ph, -1, -1]]
+        .forEach(([x, y, sx, sy]) => {
+          ctx.beginPath();
+          ctx.moveTo(x + sx * tk, y); ctx.lineTo(x, y); ctx.lineTo(x, y + sy * tk);
+          ctx.stroke();
+        });
+    }
+  }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 2);
+  tex.repeat.set(2, 2);
   tex.anisotropy = 8;
   return tex;
 }
@@ -3228,6 +3256,16 @@ function addBoldOutline(mesh, colorHex, worldWidth) {
   return shell;
 }
 
+// Frames cast a soft fake shadow on the wall; in the (now dimmer) white cube we
+// deepen it so pieces sit off the wall more convincingly. Dark/Ink keep the base.
+function applyShadowOpacityForTheme(group) {
+  const m = group.userData.shadowMat;
+  if (!m) return;
+  const base = group.userData.shadowBaseOpacity != null ? group.userData.shadowBaseOpacity : m.opacity;
+  const mul = theme === 'white' ? 1.45 : 1.0;
+  m.opacity = Math.min(0.9, base * mul);
+}
+
 // Resolve which line-art mode (if any) the active frame is in, and the colors.
 function lineworkSpec() {
   if (activeFrame.color === 'linework')      return { body: 0xf6f6f3, line: LINEWORK_INK };
@@ -3329,6 +3367,8 @@ function buildFrame(pW, pH, isSeriesRoom, resolved) {
   shadow.position.set(shadowXShift, shadowYShift, -0.010);
   group.add(shadow);
   group.userData.shadowMat = shadowMat;
+  group.userData.shadowBaseOpacity = shadowMat.opacity;
+  applyShadowOpacityForTheme(group);
 
   // Frame meshes are added after the shadow plane; remember where they start so
   // we can float just the frame (not the shadow) off the wall below.
@@ -3765,10 +3805,12 @@ function addVictorianMesh(group, pW, pH) {
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
 
-  // LINE ART: bold inked/chalk hull outline over the flat Victorian material.
+  // LINE ART: inked/chalk hull outline over the flat Victorian material. The
+  // Victorian mesh is intricate, so use a MUCH finer width than the boxy frames
+  // (the bold default fills the tracery into chunky blobs).
   if (group.userData.frameColor === 'linework' || group.userData.frameColor === 'linework-dark') {
     const line = group.userData.frameColor === 'linework-dark' ? LINEWORK_CHALK : LINEWORK_INK;
-    const o = addBoldOutline(mesh, line);
+    const o = addBoldOutline(mesh, line, 0.006);
     if (o) o.userData.isVictorianMeshChild = true;
   }
 
@@ -5254,6 +5296,8 @@ function applyTheme() {
     lbl.mesh.material.opacity = t.labelAlpha;
     lbl.mesh.material.needsUpdate = true;
   }
+  // Deepen frame cast shadows in the (dimmer) white cube, lighten elsewhere.
+  for (const fg of paintingFrames) applyShadowOpacityForTheme(fg);
   // Frames may need to update color when any resolve to 'auto' (theme-aware):
   // the global default, or any per-painting override set to Auto.
   const anyAutoOverride = Object.keys(framePerPainting).some(
