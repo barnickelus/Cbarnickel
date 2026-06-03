@@ -1144,9 +1144,13 @@ body { overscroll-behavior: none; }
     <label>Lighting <span class="val" id="lighting-val">100%</span></label>
     <input type="range" id="lighting-slider" min="20" max="200" value="100">
   </div>
-  <div class="row" style="display: flex; justify-content: space-between; align-items: center;">
-    <label style="margin-bottom: 0; flex: 1;">White cube mode</label>
-    <div class="toggle-switch" id="white-toggle"></div>
+  <div class="row">
+    <label>Gallery style</label>
+    <div class="nav-grid">
+      <button class="nav-btn active" data-theme="dark">Dark</button>
+      <button class="nav-btn" data-theme="white">White</button>
+      <button class="nav-btn" data-theme="ink">Ink</button>
+    </div>
   </div>
   <div class="row divider">
     <label>Navigation</label>
@@ -1172,6 +1176,7 @@ body { overscroll-behavior: none; }
       <button class="nav-btn active" data-frame-color="auto">Auto</button>
       <button class="nav-btn" data-frame-color="painted">Painted</button>
       <button class="nav-btn" data-frame-color="linework">Line Art</button>
+      <button class="nav-btn" data-frame-color="linework-dark">Line Art Dark</button>
       <button class="nav-btn" data-frame-color="black">Black</button>
       <button class="nav-btn" data-frame-color="white">White</button>
       <button class="nav-btn" data-frame-color="gilt">Gilt</button>
@@ -1609,10 +1614,45 @@ const THEMES = {
     fog: { color: 0xf4f3f0, density: 0.0025 },
     rendererClear: 0xf4f3f0,
     plants: false,
+    // Line-art (comic) surface colors: black ink on paper-white.
+    comic: { floorBg: '#f7f7f4', floorLine: '#0b0b0b', wallBg: '#fbfbf9', wallLine: '#0b0b0b' },
     // Geometric color-block accent on west wall (purple/pink palette from photo)
     accentBlock: {
       colors: [0x4a2885, 0x7d2bbb, 0xc54aa6, 0xec74a3, 0xf5b6c8],
     },
+  },
+  // Ink mode — the inverted line-art gallery. Near-black walls/floor/ceiling
+  // with chalk-white drawn tiles, panels, archway lines and track bars. The
+  // colour paintings glow against the dark like lit panels in a graphic novel.
+  ink: {
+    bg: 0x111017,
+    wall: 0x15141b,
+    wallStrong: 0x1d1c24,
+    wallSeries: 0x100f15,
+    floor: 0x131219,
+    ceiling: 0x100f15,
+    floorSeries: 0x0d0c12,
+    ceilingSeries: 0x0b0a10,
+    // Trim / track bars are the CHALK lines in this scheme — light on dark.
+    trim: 0xe9e5da,
+    trimDark: 0xb9b4a6,
+    floorAlt: 0x131219,
+    wallpaperBase: null,
+    // Dark, but spotlights stay strong so the colour paintings pop.
+    ambient: { color: 0xbfc4d8, intensity: 0.34 },
+    hemi: { sky: 0x9aa0bb, ground: 0x0a0910, intensity: 0.3 },
+    spot: { color: 0xfff3da, intensity: 1.35 },
+    glow: { color: 0x8088a8, intensity: 0.06 },
+    trackBar: 0xe9e5da,
+    title: '#efeadd',
+    titleAlpha: 0.96,
+    label: '#efeadd',
+    labelAlpha: 0.92,
+    fog: { color: 0x111017, density: 0.012 },
+    rendererClear: 0x0c0b11,
+    plants: false,
+    // Inverted line art: chalk-white lines on a near-black ground.
+    comic: { floorBg: '#15141b', floorLine: '#ece7da', wallBg: '#17161d', wallLine: '#ece7da' },
   },
 };
 function T() { return THEMES[theme]; }
@@ -1897,18 +1937,18 @@ function buildFloorsAndCeilings(t) {
   //   - white mode: polished concrete (high-gloss minimalist gallery)
   const lobbyFloorMat = new THREE.MeshStandardMaterial({
     map: floorTextureFor(t.floor),
-    roughness: theme === 'white' ? 1.0 : 0.62,
-    metalness: theme === 'white' ? 0.0 : 0.05,
+    roughness: isComicTheme() ? 1.0 : 0.62,
+    metalness: isComicTheme() ? 0.0 : 0.05,
   });
   const lobbyCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceiling,
     roughness: 1.0,
   });
-  // Series rooms — dark wood floor in dark mode, comic tiles in white mode
+  // Series rooms — dark wood floor in dark mode, comic tiles in line-art modes
   const seriesFloorMat = new THREE.MeshStandardMaterial({
     map: floorTextureFor(t.floorSeries),
-    roughness: theme === 'white' ? 1.0 : 0.85,
-    metalness: theme === 'white' ? 0.0 : 0.0,
+    roughness: isComicTheme() ? 1.0 : 0.85,
+    metalness: 0.0,
   });
   const seriesCeilMat = new THREE.MeshStandardMaterial({
     color: t.ceilingSeries,
@@ -2563,64 +2603,60 @@ function _wobbleRect(ctx, x, y, w, h, lw, jitter) {
   ctx.stroke();
 }
 
-// Comic floor: rounded square tiles, bold black outline on flat white, with a
-// gentle hand-drawn wobble (the wavy tile grid from the reference café).
-function makeComicTileFloorTexture(_baseHex) {
+// Comic floor: line-art HERRINGBONE parquet (the floor from the reference café).
+// Planks are W×2W; each pair of one horizontal + one vertical plank interlocks
+// on the lattice a=(2W,2W), b=(3W,-W), which makes the pattern repeat exactly
+// every 8W in both axes — so an 8W canvas tiles seamlessly. Faint centre-grain
+// strokes give each plank a hand-drawn wood feel.
+function makeComicTileFloorTexture(bgCss, lineCss) {
+  bgCss = bgCss || '#f7f7f4'; lineCss = lineCss || '#0b0b0b';
+  const W = 64, L = 2 * W, size = 8 * W;   // 512px = one exact period
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
+  c.width = size; c.height = size;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#f7f7f4';
-  ctx.fillRect(0, 0, c.width, c.height);
-  const N = 4;                 // tiles per texture cell
-  const cell = c.width / N;
-  const pad = cell * 0.10;     // grout gap
-  const r = cell * 0.26;       // corner radius
-  ctx.strokeStyle = '#0b0b0b';
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  // Draw tiles across a 1-cell margin so the wrapping seam stays clean.
-  for (let gy = -1; gy <= N; gy++) {
-    for (let gx = -1; gx <= N; gx++) {
-      const x = gx * cell + pad;
-      const y = gy * cell + pad;
-      const w = cell - pad * 2;
-      const h = cell - pad * 2;
-      const jx = (Math.random() - 0.5) * cell * 0.05;
-      const jy = (Math.random() - 0.5) * cell * 0.05;
-      ctx.lineWidth = 7;
+  ctx.fillStyle = bgCss;
+  ctx.fillRect(0, 0, size, size);
+  ctx.lineJoin = 'miter';
+  ctx.lineCap = 'butt';
+  // Draw plank pairs across a wide margin so every wrapped copy is present.
+  for (let cc = -12; cc < 24; cc++) {
+    for (let k = -12; k < 24; k++) {
+      const bX = k * L + cc * (L + W);
+      const bY = k * L - cc * W;
+      // plank outlines
+      ctx.strokeStyle = lineCss;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(bX, bY, L, W);          // horizontal plank
+      ctx.strokeRect(bX + L, bY, W, L);      // interlocking vertical plank
+      // faint grain down the centre of each plank
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      // rounded rect with slight per-corner wobble
-      const wob = () => (Math.random() - 0.5) * cell * 0.04;
-      ctx.moveTo(x + r + jx, y + jy + wob());
-      ctx.lineTo(x + w - r + jx, y + jy + wob());
-      ctx.quadraticCurveTo(x + w + jx, y + jy, x + w + jx, y + r + jy);
-      ctx.lineTo(x + w + jx, y + h - r + jy + wob());
-      ctx.quadraticCurveTo(x + w + jx, y + h + jy, x + w - r + jx, y + h + jy);
-      ctx.lineTo(x + r + jx, y + h + jy + wob());
-      ctx.quadraticCurveTo(x + jx, y + h + jy, x + jx, y + h - r + jy);
-      ctx.lineTo(x + jx, y + r + jy + wob());
-      ctx.quadraticCurveTo(x + jx, y + jy, x + r + jx, y + jy);
-      ctx.closePath();
+      ctx.moveTo(bX + 6, bY + W * 0.5); ctx.lineTo(bX + L - 6, bY + W * 0.5);
+      ctx.moveTo(bX + L + W * 0.5, bY + 6); ctx.lineTo(bX + L + W * 0.5, bY + L - 6);
       ctx.stroke();
+      ctx.restore();
     }
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(7, 7);
+  tex.repeat.set(5, 5);
   tex.anisotropy = 8;
   return tex;
 }
 
 // Comic wall: flat white with bold black-outlined molding panels + a baseboard
 // line, echoing the paneled walls in the reference interiors.
-function makeComicWallTexture(_baseHex) {
+function makeComicWallTexture(bgCss, lineCss) {
+  bgCss = bgCss || '#fbfbf9'; lineCss = lineCss || '#0b0b0b';
   const c = document.createElement('canvas');
   c.width = 512; c.height = 512;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#fbfbf9';
+  ctx.fillStyle = bgCss;
   ctx.fillRect(0, 0, c.width, c.height);
-  ctx.strokeStyle = '#0b0b0b';
+  ctx.strokeStyle = lineCss;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   // Outer panel
@@ -2637,17 +2673,23 @@ function makeComicWallTexture(_baseHex) {
   return tex;
 }
 
-// Theme-aware texture pickers used by both initial build and applyTheme so the
-// white cube reads as a flat black-and-white line drawing.
+// Theme-aware texture pickers used by both initial build and applyTheme.
+// Both comic themes draw the flat line art; 'white' = black ink on paper,
+// 'ink' = chalk lines on a near-black ground (inverted). 'comic' on the theme
+// object supplies the {floorBg, floorLine, wallBg, wallLine} CSS colors.
+function isComicTheme() { return theme === 'white' || theme === 'ink'; }
 function floorTextureFor(hex) {
-  return (theme === 'white') ? makeComicTileFloorTexture(hex) : makeWoodFloorTexture(hex);
+  if (!isComicTheme()) return makeWoodFloorTexture(hex);
+  const c = T().comic;
+  return makeComicTileFloorTexture(c.floorBg, c.floorLine);
 }
 function lobbyWallTextureFor(t) {
-  if (theme === 'white') return makeComicWallTexture(t.wall);
+  if (isComicTheme()) return makeComicWallTexture(t.comic.wallBg, t.comic.wallLine);
   return t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null;
 }
 function seriesWallTextureFor(t) {
-  return (theme === 'white') ? makeComicWallTexture(t.wallSeries) : null;
+  if (isComicTheme()) return makeComicWallTexture(t.comic.wallBg, t.comic.wallLine);
+  return null;
 }
 
 /* ─── Lobby title (C.Barnickel banner) ─── */
@@ -3125,14 +3167,18 @@ const FRAME_COLOR_PRESETS = {
 // Auto picks different palettes per (style, theme, isSeriesRoom) so each
 // style has a sensible default look in each theme.
 function getFramePreset(isSeriesRoom) {
-  // Line-art frame: flat white body so the bold black edge outline (added in
-  // buildFrame) reads as a hand-drawn 2D frame, à la the comic-café interiors.
-  if (activeFrame.color === 'linework') {
-    return { body: 0xf6f6f3, trim: 0xffffff, accent: 0xeeeeea, finish: 'matte' };
+  // Line-art frames: flat body so the bold inked/chalk hull outline (added in
+  // buildFrame) reads as a hand-drawn 2D frame. 'linework' = white body + black
+  // line; 'linework-dark' = near-black body + light line (inverted).
+  const lw = lineworkSpec();
+  if (lw) {
+    return { body: lw.body, trim: lw.body, accent: lw.body, finish: 'matte' };
   }
   if (activeFrame.color !== 'auto' && FRAME_COLOR_PRESETS[activeFrame.color]) {
     return FRAME_COLOR_PRESETS[activeFrame.color];
   }
+  // Ink gallery auto — light frames so they read against the near-black walls.
+  if (theme === 'ink') return FRAME_COLOR_PRESETS.ivory;
   // Auto mode — theme + style aware
   if (activeFrame.style === 'victorian') {
     // Victorian looks best with painted multi-tone palettes
@@ -3147,24 +3193,46 @@ function getFramePreset(isSeriesRoom) {
   }
 }
 
-// Shared black line material for baked-in 2D outlines (frames, fixtures).
-const LINEWORK_COLOR = 0x0b0b0b;
-let _lineworkMat = null;
-function lineworkMaterial() {
-  if (!_lineworkMat) _lineworkMat = new THREE.LineBasicMaterial({ color: LINEWORK_COLOR });
-  return _lineworkMat;
+// ── Bold "inked" outlines for the line-art frames ──
+// Inverted-hull technique: a back-face copy of the mesh, pushed out along its
+// normals in the vertex shader, renders as a uniform-width silhouette + opening
+// outline behind the flat frame face. Width is in WORLD metres (we divide by the
+// mesh's own scale so Victorian's scaled mesh gets the same on-screen weight).
+const LINEWORK_INK = 0x0a0a0a;     // black ink lines, for the white "Line Art" frame
+const LINEWORK_CHALK = 0xf2efe4;   // chalk lines, for the dark "Line Art Dark" frame
+const OUTLINE_WIDTH = 0.018;       // ~bold; world metres
+const _outlineMats = {};
+function outlineHullMaterial(colorHex, objWidth) {
+  const key = colorHex + ':' + objWidth.toFixed(4);
+  if (_outlineMats[key]) return _outlineMats[key];
+  const m = new THREE.MeshBasicMaterial({ color: colorHex, side: THREE.BackSide });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uOutlineW = { value: objWidth };
+    shader.vertexShader = 'uniform float uOutlineW;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n  transformed += normalize(normal) * uOutlineW;'
+    );
+  };
+  _outlineMats[key] = m;
+  return m;
 }
 
-// Add a bold black edge outline as a child of `mesh` (so it inherits the mesh's
-// transform). thresholdAngle keeps only strong edges — low for boxy frames, a
-// bit higher to tame busy meshes. Used by the "Line Art" frame option.
-function addLineworkOutline(mesh, thresholdAngle) {
+// Add a bold outline shell as a child of `mesh` (inherits its transform, shares
+// its geometry). colorHex picks ink (dark) vs chalk (light); width is world m.
+function addBoldOutline(mesh, colorHex, worldWidth) {
   if (!mesh.geometry) return null;
-  const eg = new THREE.EdgesGeometry(mesh.geometry, thresholdAngle == null ? 28 : thresholdAngle);
-  const ls = new THREE.LineSegments(eg, lineworkMaterial());
-  ls.userData.isLineworkOutline = true;
-  mesh.add(ls);
-  return ls;
+  const s = mesh.scale.x || 1;
+  const shell = new THREE.Mesh(mesh.geometry, outlineHullMaterial(colorHex, (worldWidth || OUTLINE_WIDTH) / s));
+  shell.userData.isLineworkOutline = true;
+  mesh.add(shell);
+  return shell;
+}
+
+// Resolve which line-art mode (if any) the active frame is in, and the colors.
+function lineworkSpec() {
+  if (activeFrame.color === 'linework')      return { body: 0xf6f6f3, line: LINEWORK_INK };
+  if (activeFrame.color === 'linework-dark') return { body: 0x121210, line: LINEWORK_CHALK };
+  return null;
 }
 
 // Build a single material from a hex + finish, used by single-color styles.
@@ -3289,13 +3357,14 @@ function buildFrame(pW, pH, isSeriesRoom, resolved) {
       group.children[i].position.z += FRAME_FLOAT;
     }
   }
-  // LINE ART: trace bold black outlines over the (flat white) frame meshes so
-  // the frame reads as a 2D drawing. Victorian's mesh loads async, so it adds
-  // its own outline in addVictorianMesh; here we handle the procedural styles.
-  if (activeFrame.color === 'linework' && activeFrame.style !== 'victorian') {
+  // LINE ART: trace bold inked/chalk outlines over the flat frame meshes so the
+  // frame reads as a 2D drawing. Victorian's mesh loads async, so it adds its
+  // own outline in addVictorianMesh; here we handle the procedural styles.
+  const lwGroup = lineworkSpec();
+  if (lwGroup && activeFrame.style !== 'victorian') {
     for (let i = frameChildStart; i < group.children.length; i++) {
       const ch = group.children[i];
-      if (ch.isMesh) addLineworkOutline(ch);
+      if (ch.isMesh) addBoldOutline(ch, lwGroup.line);
     }
   }
   return group;
@@ -3696,10 +3765,10 @@ function addVictorianMesh(group, pW, pH) {
   mesh.userData.isVictorianMeshChild = true;
   group.add(mesh);
 
-  // LINE ART: the Victorian frame is dense (62k tris), so trace only its
-  // strongest silhouette/feature edges in black over the flat white material.
-  if (group.userData.frameColor === 'linework') {
-    const o = addLineworkOutline(mesh, 50);
+  // LINE ART: bold inked/chalk hull outline over the flat Victorian material.
+  if (group.userData.frameColor === 'linework' || group.userData.frameColor === 'linework-dark') {
+    const line = group.userData.frameColor === 'linework-dark' ? LINEWORK_CHALK : LINEWORK_INK;
+    const o = addBoldOutline(mesh, line);
     if (o) o.userData.isVictorianMeshChild = true;
   }
 
@@ -4444,7 +4513,8 @@ const FRAME_STYLE_OPTIONS = [
   ['gothic', 'Gothic'], ['victorian', 'Victorian'],
 ];
 const FRAME_COLOR_OPTIONS = [
-  ['auto', 'Auto'], ['painted', 'Painted'], ['linework', 'Line Art'],
+  ['auto', 'Auto'], ['painted', 'Painted'],
+  ['linework', 'Line Art'], ['linework-dark', 'Line Art Dark'],
   ['black', 'Black'], ['white', 'White'],
   ['gilt', 'Gilt'], ['bronze', 'Bronze'], ['silver', 'Silver'], ['walnut', 'Walnut'],
   ['oak', 'Oak'], ['pastel-blue', 'Pastel Blue'], ['ebony', 'Ebony'],
@@ -5092,7 +5162,8 @@ function setTheme(newTheme) {
   if (theme === newTheme) return;
   theme = newTheme;
   applyTheme();
-  document.getElementById('white-toggle').classList.toggle('on', theme === 'white');
+  document.querySelectorAll('.nav-btn[data-theme]').forEach(b =>
+    b.classList.toggle('active', b.dataset.theme === theme));
 }
 
 function applyTheme() {
@@ -5119,8 +5190,8 @@ function applyTheme() {
 
   // Floors — regenerate textures based on theme. White mode uses the comic
   // tile pattern (flat, matte); dark mode uses warm wood plank.
-  const floorRoughness = (theme === 'white') ? 1.0 : 0.62;
-  const floorMetalness = (theme === 'white') ? 0.0 : 0.05;
+  const floorRoughness = isComicTheme() ? 1.0 : 0.62;
+  const floorMetalness = isComicTheme() ? 0.0 : 0.05;
   if (floorMeshes._lobbyMat) {
     if (floorMeshes._lobbyMat.map) floorMeshes._lobbyMat.map.dispose();
     floorMeshes._lobbyMat.map = floorTextureFor(t.floor);
@@ -5131,7 +5202,7 @@ function applyTheme() {
   if (floorMeshes._seriesMat) {
     if (floorMeshes._seriesMat.map) floorMeshes._seriesMat.map.dispose();
     floorMeshes._seriesMat.map = floorTextureFor(t.floorSeries);
-    floorMeshes._seriesMat.roughness = (theme === 'white') ? 1.0 : 0.85;
+    floorMeshes._seriesMat.roughness = isComicTheme() ? 1.0 : 0.85;
     floorMeshes._seriesMat.metalness = floorMetalness;
     floorMeshes._seriesMat.needsUpdate = true;
   }
@@ -6139,9 +6210,9 @@ function wireUI() {
     setLightingMul(v / 100);
   });
 
-  // White-cube toggle
-  document.getElementById('white-toggle').addEventListener('click', () => {
-    setTheme(theme === 'dark' ? 'white' : 'dark');
+  // Gallery style selector (Dark / White / Ink)
+  document.querySelectorAll('.nav-btn[data-theme]').forEach(b => {
+    b.addEventListener('click', () => setTheme(b.dataset.theme));
   });
 
   // Nav mode buttons — only those with data-nav (other .nav-btn elements
