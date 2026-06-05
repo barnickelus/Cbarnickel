@@ -1992,16 +1992,17 @@ function buildAllWalls(t) {
   // We build BoxGeometry walls with multi-material face arrays so that one
   // wall can present cream on the lobby face and dark on the series face.
   // Materials are stored on a global so applyTheme can update them in place.
-  // Lobby wall material — gets the damask wallpaper texture in dark mode,
-  // flat color in white mode.
+  // Lobby wall material — damask wallpaper texture in dark mode, line-art damask
+  // in the comic themes. Comic textures bake their own bg+line colors, so the
+  // material tint must be white there (else a dark wall hex hides the lines).
   const lobbyWallMat = new THREE.MeshStandardMaterial({
-    color: t.wall,
+    color: isComicTheme() ? 0xffffff : t.wall,
     map: lobbyWallTextureFor(t),
     roughness: 0.92,
     metalness: 0.0,
   });
   const seriesWallMat = new THREE.MeshStandardMaterial({
-    color: t.wallSeries,
+    color: isComicTheme() ? 0xffffff : t.wallSeries,
     map: seriesWallTextureFor(t),
     roughness: 0.95,
     metalness: 0.0,
@@ -2647,56 +2648,81 @@ function makeComicTileFloorTexture(bgCss, lineCss) {
   return tex;
 }
 
-// Comic wall: flat white with bold black-outlined molding panels + a baseboard
-// line, echoing the paneled walls in the reference interiors.
+// Comic wall: a LINE-ART version of the dark room's baroque damask wallpaper —
+// the same fleur/scroll motif (see makeDamaskWallpaperTexture) but stroked in
+// ink on paper (white cube) or chalk on near-black (Ink gallery), linked by an
+// ogee diamond lattice in a half-drop tiling so it reads as drawn wallpaper.
 function makeComicWallTexture(bgCss, lineCss) {
   bgCss = bgCss || '#fbfbf9'; lineCss = lineCss || '#0b0b0b';
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
+  c.width = 256; c.height = 384;
   const ctx = c.getContext('2d');
-  const S = c.width;            // 512
   ctx.fillStyle = bgCss;
-  ctx.fillRect(0, 0, S, S);
+  ctx.fillRect(0, 0, c.width, c.height);
   ctx.strokeStyle = lineCss;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  // A 2×2 grid of moulded panels, each a double-line frame with a small
-  // centred motif — more hand-drawn line detail to fill the walls (reads well
-  // in both the white and the dark "Ink" galleries).
-  const half = S / 2;
-  const m = 26;                 // margin from cell edge to outer moulding
-  for (let gy = 0; gy < 2; gy++) {
-    for (let gx = 0; gx < 2; gx++) {
-      const ox = gx * half, oy = gy * half;
-      const px = ox + m, py = oy + m;
-      const pw = half - m * 2, ph = half - m * 2;
-      ctx.lineWidth = 5;
-      _wobbleRect(ctx, px, py, pw, ph, 5, 2.2);            // outer moulding
-      ctx.lineWidth = 3;
-      _wobbleRect(ctx, px + 16, py + 16, pw - 32, ph - 32, 3, 1.6); // inner moulding
-      // centred lozenge motif
-      const cx = ox + half / 2, cy = oy + half / 2, r = 16;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r * 0.62, cy);
-      ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r * 0.62, cy);
-      ctx.closePath();
-      ctx.stroke();
-      // small corner ticks on the outer moulding
-      ctx.lineWidth = 2;
-      const tk = 10;
-      [[px, py, 1, 1], [px + pw, py, -1, 1], [px, py + ph, 1, -1], [px + pw, py + ph, -1, -1]]
-        .forEach(([x, y, sx, sy]) => {
-          ctx.beginPath();
-          ctx.moveTo(x + sx * tk, y); ctx.lineTo(x, y); ctx.lineTo(x, y + sy * tk);
-          ctx.stroke();
-        });
+
+  // The baroque fleur, traced as outlines (mirrors drawMotif's bezier paths).
+  function motif(cx, cy, scale) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.moveTo(0, -34);                 // central leaf
+    ctx.bezierCurveTo(-9, -28, -13, -16, -8, -4);
+    ctx.bezierCurveTo(-12, 4, -10, 14, -3, 20);
+    ctx.bezierCurveTo(-2, 24, -1, 26, 0, 28);
+    ctx.bezierCurveTo(1, 26, 2, 24, 3, 20);
+    ctx.bezierCurveTo(10, 14, 12, 4, 8, -4);
+    ctx.bezierCurveTo(13, -16, 9, -28, 0, -34);
+    ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-4, -8);                 // left curl
+    ctx.bezierCurveTo(-18, -4, -26, 6, -22, 18);
+    ctx.bezierCurveTo(-26, 14, -20, 6, -10, 4);
+    ctx.bezierCurveTo(-16, 10, -14, 18, -8, 16);
+    ctx.bezierCurveTo(-12, 12, -8, 8, -4, 4);
+    ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(4, -8);                  // right curl
+    ctx.bezierCurveTo(18, -4, 26, 6, 22, 18);
+    ctx.bezierCurveTo(26, 14, 20, 6, 10, 4);
+    ctx.bezierCurveTo(16, 10, 14, 18, 8, 16);
+    ctx.bezierCurveTo(12, 12, 8, 8, 4, 4);
+    ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -34);                 // top leaf
+    ctx.bezierCurveTo(-6, -42, -3, -50, 0, -54);
+    ctx.bezierCurveTo(3, -50, 6, -42, 0, -34);
+    ctx.closePath(); ctx.stroke();
+    ctx.lineWidth = 1.1;                                 // inner vein + seed
+    ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(0, 22); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(0, -2, 2.4, 6, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+  // Onion/ogee diamond linking the motifs into a damask lattice.
+  function ogee(cx, cy, w, h) {
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - h);
+    ctx.bezierCurveTo(cx + w * 0.55, cy - h * 0.6, cx + w, cy - h * 0.2, cx + w, cy);
+    ctx.bezierCurveTo(cx + w, cy + h * 0.2, cx + w * 0.55, cy + h * 0.6, cx, cy + h);
+    ctx.bezierCurveTo(cx - w * 0.55, cy + h * 0.6, cx - w, cy + h * 0.2, cx - w, cy);
+    ctx.bezierCurveTo(cx - w, cy - h * 0.2, cx - w * 0.55, cy - h * 0.6, cx, cy - h);
+    ctx.stroke();
+  }
+  const tileW = 128, tileH = 192;     // half-drop diamond, seamless on 256×384
+  for (let row = -1; row < c.height / tileH + 1; row++) {
+    for (let col = -1; col < c.width / tileW + 1; col++) {
+      const offY = (col % 2 === 0) ? 0 : tileH / 2;
+      const cx = col * tileW + tileW / 2;
+      const cy = row * tileH + tileH / 2 + offY;
+      ogee(cx, cy, tileW / 2, tileH / 2);
+      motif(cx, cy, 1.15);
     }
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(2, 2);
+  tex.repeat.set(5, 4);
   tex.anisotropy = 8;
   return tex;
 }
@@ -5218,13 +5244,13 @@ function applyTheme() {
   // Walls — update both lobby-side and series-side materials in place.
   // Lobby wall: also swap between damask wallpaper (dark) and flat (white).
   if (wallMeshes._lobbyMat) {
-    wallMeshes._lobbyMat.color.setHex(t.wall);
+    wallMeshes._lobbyMat.color.setHex(isComicTheme() ? 0xffffff : t.wall);
     if (wallMeshes._lobbyMat.map) wallMeshes._lobbyMat.map.dispose();
     wallMeshes._lobbyMat.map = lobbyWallTextureFor(t);
     wallMeshes._lobbyMat.needsUpdate = true;
   }
   if (wallMeshes._seriesMat) {
-    wallMeshes._seriesMat.color.setHex(t.wallSeries);
+    wallMeshes._seriesMat.color.setHex(isComicTheme() ? 0xffffff : t.wallSeries);
     if (wallMeshes._seriesMat.map) wallMeshes._seriesMat.map.dispose();
     wallMeshes._seriesMat.map = seriesWallTextureFor(t);
     wallMeshes._seriesMat.needsUpdate = true;
