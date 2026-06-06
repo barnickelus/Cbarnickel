@@ -1150,6 +1150,7 @@ body { overscroll-behavior: none; }
       <button class="nav-btn active" data-theme="dark">Dark</button>
       <button class="nav-btn" data-theme="white">White</button>
       <button class="nav-btn" data-theme="ink">Ink</button>
+      <button class="nav-btn" data-theme="spotlight">Spotlight</button>
     </div>
   </div>
   <div class="row divider">
@@ -1655,6 +1656,13 @@ const THEMES = {
     comic: { floorBg: '#15141b', floorLine: '#ece7da', wallBg: '#17161d', wallLine: '#ece7da' },
   },
 };
+// Spotlight mode — the white cube, but the walls BEHIND paintings are dark/ink
+// so the art pops, while the other (feature/doorway) walls keep the white
+// line-art damask. It's identical to 'white' apart from the painting-wall colour
+// (paintingWall), which plainWallColorHex picks up.
+THEMES.spotlight = Object.assign({}, THEMES.white, {
+  paintingWall: '#17161d',
+});
 function T() { return THEMES[theme]; }
 
 /* ─── 4. Painting data ─── */
@@ -2742,14 +2750,17 @@ function makeComicWallTexture(bgCss, lineCss) {
 // Both comic themes draw the flat line art; 'white' = black ink on paper,
 // 'ink' = chalk lines on a near-black ground (inverted). 'comic' on the theme
 // object supplies the {floorBg, floorLine, wallBg, wallLine} CSS colors.
-function isComicTheme() { return theme === 'white' || theme === 'ink'; }
+function isComicTheme() { return theme === 'white' || theme === 'ink' || theme === 'spotlight'; }
 // Parse a "#rrggbb" CSS string to a 0xRRGGBB number.
 function cssToHex(css) { return parseInt(css.replace('#', ''), 16); }
 // Flat (un-patterned) wall colour for the current theme — used on the faces of
-// walls that carry paintings so the art isn't competing with the wallpaper.
+// walls that carry paintings so the art isn't competing with the wallpaper. A
+// theme may force a specific painting-wall colour (Spotlight uses a dark wall).
 function plainWallColorHex(isSeries) {
-  if (isComicTheme()) return cssToHex(T().comic.wallBg);
-  return isSeries ? T().wallSeries : T().wall;
+  const t = T();
+  if (t.paintingWall) return cssToHex(t.paintingWall);
+  if (isComicTheme()) return cssToHex(t.comic.wallBg);
+  return isSeries ? t.wallSeries : t.wall;
 }
 function floorTextureFor(hex) {
   if (!isComicTheme()) return makeWoodFloorTexture(hex);
@@ -3280,6 +3291,8 @@ function getFramePreset(isSeriesRoom) {
   }
   // Ink gallery auto — light frames so they read against the near-black walls.
   if (theme === 'ink') return FRAME_COLOR_PRESETS.ivory;
+  // Spotlight auto — paintings hang on dark walls, so default to a light frame.
+  if (theme === 'spotlight') return FRAME_COLOR_PRESETS.white;
   // Auto mode — theme + style aware
   if (activeFrame.style === 'victorian') {
     // Victorian looks best with painted multi-tone palettes
