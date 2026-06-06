@@ -402,7 +402,7 @@ body { overscroll-behavior: none; }
 /* ─── Bottom hint ─── */
 .bottom-hint {
   position: fixed;
-  bottom: 32px; left: 50%;
+  bottom: 74px; left: 50%;
   transform: translateX(-50%);
   z-index: 40;
   pointer-events: none;
@@ -423,6 +423,44 @@ body { overscroll-behavior: none; }
   white-space: nowrap;
 }
 .bottom-hint.show { opacity: 1; }
+
+/* ─── Prev/Next painting tour pill ─── */
+.paint-nav {
+  position: fixed;
+  bottom: 24px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 41;
+  display: flex; align-items: center; gap: 2px;
+  background: rgba(10, 9, 8, 0.42);
+  border: 1px solid rgba(201, 169, 110, 0.25);
+  border-radius: 999px;
+  padding: 4px 6px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+.paint-nav.show { opacity: 0.92; pointer-events: auto; }
+.paint-nav-btn {
+  appearance: none; -webkit-appearance: none; border: none;
+  background: transparent;
+  color: var(--ink, #e8dcc4);
+  font-family: var(--sans);
+  font-size: 22px; line-height: 1;
+  width: 40px; height: 34px;
+  border-radius: 999px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.paint-nav-btn:hover { background: rgba(201, 169, 110, 0.18); }
+.paint-nav-btn:active { transform: scale(0.92); }
+.paint-nav-label {
+  font-family: var(--sans);
+  font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--ink-dim);
+  min-width: 76px; text-align: center;
+  user-select: none; -webkit-user-select: none;
+}
 
 /* ─── Tiny joystick (only when nav mode requires it) ─── */
 .joy {
@@ -1201,6 +1239,12 @@ body { overscroll-behavior: none; }
 
 <div class="bottom-hint" id="bottom-hint"></div>
 
+<div class="paint-nav" id="paint-nav">
+  <button class="paint-nav-btn" id="prev-paint" aria-label="Previous painting">&lsaquo;</button>
+  <span class="paint-nav-label" id="paint-nav-label">View art</span>
+  <button class="paint-nav-btn" id="next-paint" aria-label="Next painting">&rsaquo;</button>
+</div>
+
 <div class="joy" id="joy">
   <div class="stick" id="joy-stick"></div>
 </div>
@@ -1349,6 +1393,7 @@ const FOV = 65;
 const HANG_HEIGHT = 1.55;
 const WALK_SPEED = 3.2;
 const TAP_WALK_SPEED = 5.5;
+const TAP_STEP_DISTANCE = 2.6;     // a tap moves ~a couple of steps, not the whole way
 const PINCH_PX_PER_M = 110;
 const STRAFE_PX_PER_M = 130;
 const SNAP_TRIGGER_DIST = 2.4;
@@ -1511,6 +1556,7 @@ let touchLook = null;
 let timeSinceInput = 0;
 let snapTween = null;
 let lastSnappedPainting = null;
+let focusedArtIndex = null;        // last painting we approached/viewed (for Prev/Next)
 
 const intro = {
   active: false,
@@ -4972,28 +5018,104 @@ function handleTap(clientX, clientY) {
     // The "already at viewing position" threshold depends on this painting's
     // own snap distance (bigger paintings stand back further). If we're at
     // or near the snap target, treat a second tap as "open detail view".
-    // We allow a generous tolerance so the user doesn't have to be pixel-
-    // precise on the snap landing point.
     const snapBack = computeSnapBackDistance(p);
     if (dist < snapBack + 0.6) {
       openModal(p.userData.artIndex);
       return;
     }
+    // Approach the painting in steps rather than crossing the whole room at
+    // once. If its ideal viewing spot is within reach, land there (and face it);
+    // otherwise take a couple of steps toward it, turning to face it on the way.
     const view = computeViewingPosition(p);
-    if (view) tapWalkTarget = view;
+    if (!view) return;
+    focusedArtIndex = p.userData.artIndex;
+    updatePaintNavLabel();
+    const vdx = view.x - camera.position.x, vdz = view.z - camera.position.z;
+    const vd = Math.hypot(vdx, vdz);
+    if (vd <= TAP_STEP_DISTANCE * 1.4) {
+      tapWalkTarget = view;                 // close enough — go to the viewing spot
+    } else {
+      const c = clampToRooms(
+        camera.position.x + (vdx / vd) * TAP_STEP_DISTANCE,
+        camera.position.z + (vdz / vd) * TAP_STEP_DISTANCE
+      );
+      tapWalkTarget = { x: c.x, z: c.z, faceX: p.position.x, faceZ: p.position.z };
+    }
     return;
   }
 
-  // No painting hit
+  // No painting hit — step toward the tapped floor point (capped distance) so a
+  // tap nudges you a couple of intuitive steps into that area, not across the
+  // room. The idle magnetic-snap then gently turns you to any nearby art.
   if (navMode === 'tap-any' || navMode === 'tap-pinch') {
     const floorHits = raycaster.intersectObjects(floorMeshes, false);
     if (floorHits.length > 0) {
       const pt = floorHits[0].point;
-      const c = clampToRooms(pt.x, pt.z);
+      const dxf = pt.x - camera.position.x, dzf = pt.z - camera.position.z;
+      const df = Math.hypot(dxf, dzf);
+      let tx = pt.x, tz = pt.z;
+      if (df > TAP_STEP_DISTANCE) {
+        tx = camera.position.x + (dxf / df) * TAP_STEP_DISTANCE;
+        tz = camera.position.z + (dzf / df) * TAP_STEP_DISTANCE;
+      }
+      const c = clampToRooms(tx, tz);
       tapWalkTarget = { x: c.x, z: c.z };
     }
   }
   // tap-art mode: tapping floor does nothing
+}
+
+/* ─── Prev/Next painting tour (subtle sequential-gallery assist) ─── */
+function paintingByArtIndex(idx) {
+  return paintingMeshes.find(p => p.userData.artIndex === idx) || null;
+}
+function nearestPainting() {
+  let best = null, bd = Infinity;
+  for (const p of paintingMeshes) {
+    const d = Math.hypot(p.position.x - camera.position.x, p.position.z - camera.position.z);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+// Smoothly travel to a painting's viewing position and face it.
+function travelToPainting(p) {
+  if (!p) return;
+  noteUserInput();          // cancel any in-progress snap
+  tapWalkTarget = null;
+  focusedArtIndex = p.userData.artIndex;
+  startSnapTo(p);           // reuses the eased fly-to-viewing-spot tween
+  updatePaintNavLabel();
+}
+// step = +1 (next) or -1 (prev), in catalog order.
+function gotoAdjacentPainting(step) {
+  if (paintingMeshes.length === 0) return;
+  const indices = [...new Set(paintingMeshes.map(p => p.userData.artIndex))].sort((a, b) => a - b);
+  let pos = (focusedArtIndex == null) ? -1 : indices.indexOf(focusedArtIndex);
+  if (pos < 0) {
+    // No current focus — first press goes to the nearest piece.
+    const np = nearestPainting();
+    travelToPainting(np);
+    return;
+  }
+  const nextPos = (pos + step + indices.length) % indices.length;
+  travelToPainting(paintingByArtIndex(indices[nextPos]));
+}
+function updatePaintNavLabel() {
+  const el = document.getElementById('paint-nav-label');
+  if (!el) return;
+  const total = new Set(paintingMeshes.map(p => p.userData.artIndex)).size;
+  if (focusedArtIndex == null) { el.textContent = 'View art'; return; }
+  const indices = [...new Set(paintingMeshes.map(p => p.userData.artIndex))].sort((a, b) => a - b);
+  const n = indices.indexOf(focusedArtIndex) + 1;
+  el.textContent = (n > 0 ? n : 1) + ' / ' + total;
+}
+function updatePaintNavVis() {
+  const el = document.getElementById('paint-nav');
+  if (!el) return;
+  const galleryActive = document.getElementById('view-gallery').classList.contains('active');
+  const modalOpen = document.getElementById('modal').classList.contains('show');
+  const show = galleryActive && !modalOpen && !intro.active && paintingMeshes.length > 0;
+  el.classList.toggle('show', show);
 }
 
 // Compute how far back the camera should stand to view this painting:
@@ -5153,6 +5275,10 @@ function startSnapTo(painting) {
     painting,
   };
   lastSnappedPainting = painting;
+  if (painting.userData.artIndex != null) {
+    focusedArtIndex = painting.userData.artIndex;
+    updatePaintNavLabel();
+  }
 }
 
 function updateSnap(now) {
@@ -5216,6 +5342,7 @@ function startIntro() {
   hideHint();
   document.getElementById('joy').classList.remove('show');
   document.getElementById('skip-intro').classList.add('show');
+  updatePaintNavVis();
 }
 
 function endIntro() {
@@ -5237,6 +5364,7 @@ function endIntro() {
   if (navMode === 'classic' && hasTouch) {
     document.getElementById('joy').classList.add('show');
   }
+  updatePaintNavVis();
 }
 
 // Catmull-Rom spline interpolation through 4 points (p0, p1, p2, p3).
@@ -6200,9 +6328,13 @@ function openModal(idx) {
   document.getElementById('modal').classList.add('show');
   document.getElementById('modal').dataset.idx = idx;
   refreshModalFramePicker(idx);
+  focusedArtIndex = idx;
+  updatePaintNavLabel();
+  updatePaintNavVis();
 }
 function closeModal() {
   document.getElementById('modal').classList.remove('show');
+  updatePaintNavVis();
 }
 function modalNav(delta) {
   const m = document.getElementById('modal');
@@ -6259,6 +6391,7 @@ function setView(view) {
     const next = document.getElementById('contact-next');
     if (next) next.value = location.origin + location.pathname + '#contact-sent';
   }
+  updatePaintNavVis();
 }
 
 function closeAllOverlays() {
@@ -6318,6 +6451,13 @@ function showTutorial() {
 }
 
 function wireUI() {
+  // Prev/Next painting tour buttons
+  const prevP = document.getElementById('prev-paint');
+  const nextP = document.getElementById('next-paint');
+  if (prevP) prevP.addEventListener('click', (e) => { e.stopPropagation(); noteUserInput(); gotoAdjacentPainting(-1); });
+  if (nextP) nextP.addEventListener('click', (e) => { e.stopPropagation(); noteUserInput(); gotoAdjacentPainting(1); });
+  updatePaintNavLabel();
+
   // Settings gear
   const gear = document.getElementById('settings-btn');
   const panel = document.getElementById('settings-panel');
