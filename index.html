@@ -2009,6 +2009,17 @@ function buildAllWalls(t) {
   });
   wallMeshes._lobbyMat = lobbyWallMat;
   wallMeshes._seriesMat = seriesWallMat;
+  // Plain (un-patterned) variants — applied after placement to any wall face
+  // that carries paintings, so the art reads against a calm field instead of
+  // the wallpaper. Colours are kept in sync by applyTheme.
+  const lobbyWallPlainMat = new THREE.MeshStandardMaterial({
+    color: plainWallColorHex(false), roughness: 0.92, metalness: 0.0,
+  });
+  const seriesWallPlainMat = new THREE.MeshStandardMaterial({
+    color: plainWallColorHex(true), roughness: 0.95, metalness: 0.0,
+  });
+  wallMeshes._lobbyPlainMat = lobbyWallPlainMat;
+  wallMeshes._seriesPlainMat = seriesWallPlainMat;
 
   // Compute all unique wall segments. Each wall is described by:
   //   - axis: 'x' (vertical wall, runs along z) or 'z' (horizontal, runs along x)
@@ -2732,6 +2743,14 @@ function makeComicWallTexture(bgCss, lineCss) {
 // 'ink' = chalk lines on a near-black ground (inverted). 'comic' on the theme
 // object supplies the {floorBg, floorLine, wallBg, wallLine} CSS colors.
 function isComicTheme() { return theme === 'white' || theme === 'ink'; }
+// Parse a "#rrggbb" CSS string to a 0xRRGGBB number.
+function cssToHex(css) { return parseInt(css.replace('#', ''), 16); }
+// Flat (un-patterned) wall colour for the current theme — used on the faces of
+// walls that carry paintings so the art isn't competing with the wallpaper.
+function plainWallColorHex(isSeries) {
+  if (isComicTheme()) return cssToHex(T().comic.wallBg);
+  return isSeries ? T().wallSeries : T().wall;
+}
 function floorTextureFor(hex) {
   if (!isComicTheme()) return makeWoodFloorTexture(hex);
   const c = T().comic;
@@ -3133,6 +3152,34 @@ function placeAllPaintings() {
     const subset = ARTWORKS.filter(a => a.series === sid);
     if (subset.length === 0) continue;
     placeSeriesInRoom(room, subset, sid);
+  }
+}
+
+// After all paintings are placed, switch any wall FACE that carries art to the
+// plain (un-patterned) material — the wallpaper then reads only on doorway /
+// feature walls. Faces are matched by (axis, at, side); each frame group knows
+// its wall plane (wallX/wallZ) and the normal pointing into its room.
+function markPaintingWallsPlain() {
+  if (!wallMeshes._seriesPlainMat) return;
+  const faceKey = (axis, at, side) => axis + '|' + at.toFixed(2) + '|' + side;
+  const painted = new Set();
+  for (const fg of paintingFrames) {
+    const u = fg.userData;
+    const axis = (u.normalX !== 0) ? 'x' : 'z';
+    const at = (axis === 'x') ? u.wallX : u.wallZ;
+    const side = ((axis === 'x' ? u.normalX : u.normalZ) > 0) ? '+' : '-';
+    painted.add(faceKey(axis, at, side));
+  }
+  if (painted.size === 0) return;
+  const plainFor = (mat) =>
+    (mat === wallMeshes._seriesMat) ? wallMeshes._seriesPlainMat : wallMeshes._lobbyPlainMat;
+  for (const m of wallMeshes) {
+    if (!m.userData || !m.userData.isWall || !Array.isArray(m.material)) continue;
+    const axis = m.userData.axis, at = m.userData.at;
+    const posIdx = (axis === 'z') ? 4 : 0;   // visible +face index
+    const negIdx = (axis === 'z') ? 5 : 1;   // visible -face index
+    if (painted.has(faceKey(axis, at, '+'))) m.material[posIdx] = plainFor(m.material[posIdx]);
+    if (painted.has(faceKey(axis, at, '-'))) m.material[negIdx] = plainFor(m.material[negIdx]);
   }
 }
 
@@ -5255,6 +5302,9 @@ function applyTheme() {
     wallMeshes._seriesMat.map = seriesWallTextureFor(t);
     wallMeshes._seriesMat.needsUpdate = true;
   }
+  // Plain painting-wall variants — keep their flat colour in step with the theme.
+  if (wallMeshes._lobbyPlainMat) wallMeshes._lobbyPlainMat.color.setHex(plainWallColorHex(false));
+  if (wallMeshes._seriesPlainMat) wallMeshes._seriesPlainMat.color.setHex(plainWallColorHex(true));
 
   // Floors — regenerate textures based on theme. White mode uses the comic
   // tile pattern (flat, matte); dark mode uses warm wood plank.
@@ -6604,6 +6654,7 @@ async function boot() {
   initScene();
   buildGallery();
   placeAllPaintings();
+  markPaintingWallsPlain();
   buildIndex();
   wireUI();
   setNavMode('tap-pinch');   // default
