@@ -464,6 +464,35 @@ body { overscroll-behavior: none; }
   user-select: none; -webkit-user-select: none;
 }
 
+/* ─── Settings-export overlay ─── */
+.export-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(8, 7, 6, 0.72);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  padding: 24px;
+}
+.export-overlay.show { display: flex; }
+.export-box {
+  width: min(560px, 92vw);
+  background: rgba(20, 17, 13, 0.96);
+  border: 1px solid rgba(201, 169, 110, 0.3);
+  border-radius: 10px;
+  padding: 20px 22px;
+  font-family: var(--sans);
+  color: var(--ink);
+}
+.export-box h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink); }
+.export-box p { margin: 0 0 12px; font-size: 12px; line-height: 1.5; color: var(--ink-dim); }
+.export-box textarea {
+  width: 100%; height: 220px; resize: vertical;
+  background: rgba(0,0,0,0.45); color: #d8d2c4;
+  border: 1px solid rgba(201,169,110,0.22); border-radius: 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.45;
+  padding: 10px; box-sizing: border-box;
+}
+.export-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
 /* ─── Tiny joystick (only when nav mode requires it) ─── */
 .joy {
   position: fixed;
@@ -1237,6 +1266,27 @@ body { overscroll-behavior: none; }
   <div class="row" style="margin-top: 14px;">
     <button class="ghost-btn" id="show-tutorial">How to navigate ↗</button>
   </div>
+  <div class="row divider" style="margin-top: 14px;">
+    <label>Defaults</label>
+    <button class="ghost-btn" id="export-settings" style="margin-top:6px;">Export current as default JSON</button>
+    <button class="ghost-btn" id="reset-defaults" style="margin-top:8px;">Reset to saved defaults</button>
+    <p class="frame-hint">Arrange the room, global frame and each painting's frame
+      how you like, then export the JSON to set it as the site default.</p>
+  </div>
+</div>
+
+<div class="export-overlay" id="export-overlay">
+  <div class="export-box">
+    <h3>Default settings</h3>
+    <p>This captures the current gallery style, global frame, and every per‑painting
+      frame. Copy it (or download) to set as the site default.</p>
+    <textarea id="export-json" readonly spellcheck="false"></textarea>
+    <div class="export-actions">
+      <button class="nav-btn" id="export-copy">Copy</button>
+      <button class="nav-btn" id="export-download">Download</button>
+      <button class="nav-btn" id="export-close">Close</button>
+    </div>
+  </div>
 </div>
 
 <div class="bottom-hint" id="bottom-hint"></div>
@@ -1425,13 +1475,24 @@ const seriesLabels = [];
 
 let theme = 'dark';
 let lightingMul = 1.0;
+// ── Default page settings ──────────────────────────────────────────────
+// What a fresh visitor (no saved choices) loads with. Arrange everything in the
+// browser, hit "Export current as default JSON" in the gear panel, and paste the
+// result here to make it the site default for everyone.
+const DEFAULT_SETTINGS = {
+  theme: 'dark',
+  lighting: 1.0,
+  frameStyle: 'minimal',
+  frameColor: 'black',
+  framePerPainting: {},
+};
+theme = localStorage.getItem('theme') || DEFAULT_SETTINGS.theme;
+lightingMul = parseFloat(localStorage.getItem('lighting')) || DEFAULT_SETTINGS.lighting;
 // Frame settings — persisted to localStorage. Style: minimal | ornate | gothic.
 // Color: auto (theme-aware) | black | white | gilt.
 const frameSettings = {
-  // First load shows the minimal black frame (returning visitors keep their
-  // last choice via localStorage).
-  style: localStorage.getItem('frameStyle') || 'minimal',
-  color: localStorage.getItem('frameColor') || 'black',
+  style: localStorage.getItem('frameStyle') || DEFAULT_SETTINGS.frameStyle,
+  color: localStorage.getItem('frameColor') || DEFAULT_SETTINGS.frameColor,
 };
 
 // ── Per-painting frame overrides ── Keyed by art.file, each value is
@@ -1441,7 +1502,9 @@ const frameSettings = {
 // clears them all.
 let framePerPainting = {};
 try {
-  framePerPainting = JSON.parse(localStorage.getItem('framePerPainting') || '{}') || {};
+  const stored = localStorage.getItem('framePerPainting');
+  framePerPainting = stored ? (JSON.parse(stored) || {})
+                            : JSON.parse(JSON.stringify(DEFAULT_SETTINGS.framePerPainting));
 } catch (e) { framePerPainting = {}; }
 function saveFramePerPainting() {
   try { localStorage.setItem('framePerPainting', JSON.stringify(framePerPainting)); } catch (e) {}
@@ -5176,6 +5239,64 @@ function updatePaintNavVis() {
   el.classList.toggle('show', show);
 }
 
+/* ─── Settings export / defaults (owner workflow) ─── */
+// Snapshot of everything the page treats as a default: gallery style, lighting,
+// global frame, and every per-painting frame override.
+function currentSettingsObject() {
+  return {
+    theme: theme,
+    lighting: Math.round(lightingMul * 100) / 100,
+    frameStyle: frameSettings.style,
+    frameColor: frameSettings.color,
+    framePerPainting: framePerPainting,
+  };
+}
+function openSettingsExport() {
+  const ta = document.getElementById('export-json');
+  if (ta) ta.value = JSON.stringify(currentSettingsObject(), null, 2);
+  document.getElementById('export-overlay').classList.add('show');
+  const panel = document.getElementById('settings-panel');
+  if (panel) panel.classList.remove('show');
+  const gear = document.getElementById('settings-btn');
+  if (gear) gear.classList.remove('active');
+}
+function closeSettingsExport() {
+  document.getElementById('export-overlay').classList.remove('show');
+}
+function copySettingsExport() {
+  const ta = document.getElementById('export-json');
+  if (!ta) return;
+  ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+  const done = () => { const btn = document.getElementById('export-copy'); if (btn) { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1200); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ta.value).then(done).catch(() => { try { document.execCommand('copy'); done(); } catch (e) {} });
+  } else { try { document.execCommand('copy'); done(); } catch (e) {} }
+}
+function downloadSettingsExport() {
+  const ta = document.getElementById('export-json');
+  if (!ta) return;
+  const blob = new Blob([ta.value], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'gallery-defaults.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function resetToDefaults() {
+  ['theme', 'lighting', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
+    try { localStorage.removeItem(k); } catch (e) {}
+  });
+  location.reload();
+}
+// Reflect current settings in the gear panel's active states + slider.
+function syncSettingsUI() {
+  document.querySelectorAll('.nav-btn[data-theme]').forEach(b => b.classList.toggle('active', b.dataset.theme === theme));
+  document.querySelectorAll('.nav-btn[data-frame-style]').forEach(b => b.classList.toggle('active', b.dataset.frameStyle === frameSettings.style));
+  document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => b.classList.toggle('active', b.dataset.frameColor === frameSettings.color));
+  const ls = document.getElementById('lighting-slider');
+  if (ls) { ls.value = String(Math.round(lightingMul * 100)); const lv = document.getElementById('lighting-val'); if (lv) lv.textContent = ls.value + '%'; }
+}
+
 // Compute how far back the camera should stand to view this painting:
 // scaled to painting size — bigger paintings need more standoff.
 function computeSnapBackDistance(painting) {
@@ -5475,6 +5596,7 @@ function updateIntro(now) {
 function setTheme(newTheme) {
   if (theme === newTheme) return;
   theme = newTheme;
+  try { localStorage.setItem('theme', theme); } catch (e) {}
   applyTheme();
   document.querySelectorAll('.nav-btn[data-theme]').forEach(b =>
     b.classList.toggle('active', b.dataset.theme === theme));
@@ -5585,6 +5707,7 @@ function applyTheme() {
 
 function setLightingMul(mul) {
   lightingMul = mul;
+  try { localStorage.setItem('lighting', String(mul)); } catch (e) {}
   const t = T();
   if (lightingRefs.ambient) lightingRefs.ambient.intensity = t.ambient.intensity * mul;
   if (lightingRefs.hemi) lightingRefs.hemi.intensity = t.hemi.intensity * mul;
@@ -6509,6 +6632,20 @@ function showTutorial() {
 }
 
 function wireUI() {
+  // Defaults: export current settings as JSON + reset to saved defaults
+  const expBtn = document.getElementById('export-settings');
+  if (expBtn) expBtn.addEventListener('click', openSettingsExport);
+  const resetDef = document.getElementById('reset-defaults');
+  if (resetDef) resetDef.addEventListener('click', resetToDefaults);
+  const expCopy = document.getElementById('export-copy');
+  if (expCopy) expCopy.addEventListener('click', copySettingsExport);
+  const expDl = document.getElementById('export-download');
+  if (expDl) expDl.addEventListener('click', downloadSettingsExport);
+  const expClose = document.getElementById('export-close');
+  if (expClose) expClose.addEventListener('click', closeSettingsExport);
+  const expOv = document.getElementById('export-overlay');
+  if (expOv) expOv.addEventListener('click', (e) => { if (e.target.id === 'export-overlay') closeSettingsExport(); });
+
   // Prev/Next painting tour buttons
   const prevP = document.getElementById('prev-paint');
   const nextP = document.getElementById('next-paint');
@@ -6868,6 +7005,10 @@ async function boot() {
   markPaintingWallsPlain();
   buildIndex();
   wireUI();
+  // Reflect any saved/default theme, lighting and frame choices in the UI, and
+  // apply non-default lighting (the scene built with theme already).
+  syncSettingsUI();
+  if (lightingMul !== 1.0) setLightingMul(lightingMul);
   setNavMode('tap-pinch');   // default
   attachInputHandlers();
   // Position camera at intro start to avoid a wall-flash before intro animation
