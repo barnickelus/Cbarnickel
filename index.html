@@ -3390,6 +3390,23 @@ function addBoldOutline(mesh, colorHex, worldWidth) {
   return shell;
 }
 
+// Crisp edge lines (EdgesGeometry) — the silhouette hull can't draw convex
+// CREASES (e.g. where a frame's flat front meets its side), so we trace the
+// actual geometry edges too. thresholdDeg keeps only meaningful edges.
+const _edgeLineMats = {};
+function edgeLineMaterial(colorHex) {
+  if (!_edgeLineMats[colorHex]) _edgeLineMats[colorHex] = new THREE.LineBasicMaterial({ color: colorHex });
+  return _edgeLineMats[colorHex];
+}
+function addEdgeLines(mesh, colorHex, thresholdDeg) {
+  if (!mesh.geometry) return null;
+  const eg = new THREE.EdgesGeometry(mesh.geometry, thresholdDeg == null ? 25 : thresholdDeg);
+  const ls = new THREE.LineSegments(eg, edgeLineMaterial(colorHex));
+  ls.userData.isLineworkOutline = true;
+  mesh.add(ls);
+  return ls;
+}
+
 // Frames cast a soft fake shadow on the wall; in the (now dimmer) white cube we
 // deepen it so pieces sit off the wall more convincingly. Dark/Ink keep the base.
 function applyShadowOpacityForTheme(group) {
@@ -3538,7 +3555,9 @@ function buildFrame(pW, pH, isSeriesRoom, resolved) {
   if (lwGroup && activeFrame.style !== 'victorian') {
     for (let i = frameChildStart; i < group.children.length; i++) {
       const ch = group.children[i];
-      if (ch.isMesh) addBoldOutline(ch, lwGroup.line);
+      if (!ch.isMesh) continue;
+      addBoldOutline(ch, lwGroup.line);   // bold silhouette
+      addEdgeLines(ch, lwGroup.line);     // crisp creases (front/side edges)
     }
   }
   return group;
