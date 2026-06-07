@@ -1404,6 +1404,9 @@ const SNAP_VIEW_ANGLE = Math.PI / 5;
 
 /* ─── 2. Globals ─── */
 let scene, camera, renderer, raycaster;
+// Reusable floor-plane (y=0) + scratch vector for tap-to-move ray casting.
+const _floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const _floorHitVec = new THREE.Vector3();
 let canvas;
 let lastTime = 0;
 
@@ -5065,22 +5068,25 @@ function handleTap(clientX, clientY) {
     return;
   }
 
-  // No painting hit — step toward the tapped floor point (capped distance) so a
-  // tap nudges you a couple of intuitive steps into that area, not across the
-  // room. The idle magnetic-snap then gently turns you to any nearby art.
+  // No painting hit — step toward where the tap ray meets the floor PLANE
+  // (y=0), not just the visible floor meshes. The floor meshes stop at the wall,
+  // so mesh-only hits limited the move zone to below the floor/wall edge; the
+  // plane extends to the horizon, so any tap below the horizon nudges you a
+  // couple of steps that way. The idle magnetic-snap then turns you to nearby art.
   if (navMode === 'tap-any' || navMode === 'tap-pinch') {
-    const floorHits = raycaster.intersectObjects(floorMeshes, false);
-    if (floorHits.length > 0) {
-      const pt = floorHits[0].point;
+    const pt = raycaster.ray.intersectPlane(_floorPlane, _floorHitVec);
+    if (pt) {
       const dxf = pt.x - camera.position.x, dzf = pt.z - camera.position.z;
       const df = Math.hypot(dxf, dzf);
-      let tx = pt.x, tz = pt.z;
-      if (df > TAP_STEP_DISTANCE) {
-        tx = camera.position.x + (dxf / df) * TAP_STEP_DISTANCE;
-        tz = camera.position.z + (dzf / df) * TAP_STEP_DISTANCE;
+      if (df > 0.001) {
+        let tx = pt.x, tz = pt.z;
+        if (df > TAP_STEP_DISTANCE) {
+          tx = camera.position.x + (dxf / df) * TAP_STEP_DISTANCE;
+          tz = camera.position.z + (dzf / df) * TAP_STEP_DISTANCE;
+        }
+        const c = clampToRooms(tx, tz);
+        tapWalkTarget = { x: c.x, z: c.z };
       }
-      const c = clampToRooms(tx, tz);
-      tapWalkTarget = { x: c.x, z: c.z };
     }
   }
   // tap-art mode: tapping floor does nothing
