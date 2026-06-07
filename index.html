@@ -458,7 +458,9 @@ body { overscroll-behavior: none; }
   font-family: var(--sans);
   font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
   color: var(--ink-dim);
-  min-width: 76px; text-align: center;
+  min-width: 76px; max-width: 150px; text-align: center;
+  display: inline-block; vertical-align: middle;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   user-select: none; -webkit-user-select: none;
 }
 
@@ -4776,7 +4778,7 @@ function updateResetFramesBtn() {
 
 // Get the appropriate "first interaction" hint for the current nav mode
 function getNavHint() {
-  if (navMode === 'tap-pinch') return hasTouch ? 'pinch out to walk forward' : 'scroll wheel to walk · drag to look';
+  if (navMode === 'tap-pinch') return hasTouch ? 'tap or zoom out to move forward' : 'tap or scroll to move forward · drag to look';
   if (navMode === 'tap-art')   return 'tap a painting to approach it';
   if (navMode === 'tap-any')   return 'tap anywhere to walk';
   return hasTouch ? 'drag joystick to walk · drag screen to look' : 'wasd or arrows to walk · drag to look';
@@ -5086,28 +5088,59 @@ function travelToPainting(p) {
   startSnapTo(p);           // reuses the eased fly-to-viewing-spot tween
   updatePaintNavLabel();
 }
-// step = +1 (next) or -1 (prev), in catalog order.
-function gotoAdjacentPainting(step) {
+// Go to the painting physically to the viewer's LEFT or RIGHT along the wall.
+// dir: +1 = right (›), -1 = left (‹). Falls through to other walls, then wraps.
+function gotoAdjacentPainting(dir) {
   if (paintingMeshes.length === 0) return;
-  const indices = [...new Set(paintingMeshes.map(p => p.userData.artIndex))].sort((a, b) => a - b);
-  let pos = (focusedArtIndex == null) ? -1 : indices.indexOf(focusedArtIndex);
-  if (pos < 0) {
-    // No current focus — first press goes to the nearest piece.
-    const np = nearestPainting();
-    travelToPainting(np);
-    return;
+  const cur = (focusedArtIndex != null) ? paintingByArtIndex(focusedArtIndex) : null;
+  if (!cur || !cur.userData.outwardNormal) { travelToPainting(nearestPainting()); return; }
+  const n = cur.userData.outwardNormal;
+  // Viewer-right vector along the wall, derived from the wall's inward normal.
+  const rx = n.z, rz = -n.x;
+  const base = cur.position.x * rx + cur.position.z * rz;
+  const sOf = p => (p.position.x * rx + p.position.z * rz) - base;   // signed left/right offset
+  const dist = p => Math.hypot(p.position.x - cur.position.x, p.position.z - cur.position.z);
+  // Same wall = same facing AND same wall plane (so parallel walls in other
+  // rooms don't count).
+  const curPlane = cur.position.x * n.x + cur.position.z * n.z;
+  const sameWall = p => {
+    const pn = p.userData.outwardNormal;
+    if (!pn || (pn.x * n.x + pn.z * n.z) <= 0.9) return false;
+    return Math.abs((p.position.x * n.x + p.position.z * n.z) - curPlane) < 0.6;
+  };
+  // 1) nearest piece on the SAME wall in the requested direction
+  let pick = null, key = Infinity;
+  for (const p of paintingMeshes) {
+    if (p === cur || !sameWall(p)) continue;
+    const d = sOf(p) * dir;
+    if (d > 0.1 && d < key) { key = d; pick = p; }
   }
-  const nextPos = (pos + step + indices.length) % indices.length;
-  travelToPainting(paintingByArtIndex(indices[nextPos]));
+  // 2) else the physically nearest piece anywhere in that direction (hop walls)
+  if (!pick) {
+    for (const p of paintingMeshes) {
+      if (p === cur) continue;
+      if (sOf(p) * dir <= 0.1) continue;
+      const dd = dist(p);
+      if (dd < key) { key = dd; pick = p; }
+    }
+  }
+  // 3) else wrap: the farthest piece in the opposite direction (cycle around)
+  if (!pick) {
+    let big = -Infinity;
+    for (const p of paintingMeshes) {
+      if (p === cur) continue;
+      const opp = -(sOf(p) * dir);
+      if (opp > big) { big = opp; pick = p; }
+    }
+  }
+  if (pick) travelToPainting(pick);
 }
 function updatePaintNavLabel() {
   const el = document.getElementById('paint-nav-label');
   if (!el) return;
-  const total = new Set(paintingMeshes.map(p => p.userData.artIndex)).size;
   if (focusedArtIndex == null) { el.textContent = 'View art'; return; }
-  const indices = [...new Set(paintingMeshes.map(p => p.userData.artIndex))].sort((a, b) => a - b);
-  const n = indices.indexOf(focusedArtIndex) + 1;
-  el.textContent = (n > 0 ? n : 1) + ' / ' + total;
+  const art = ARTWORKS[focusedArtIndex];
+  el.textContent = (art && art.title) ? art.title : 'Artwork';
 }
 function updatePaintNavVis() {
   const el = document.getElementById('paint-nav');
