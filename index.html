@@ -1563,6 +1563,8 @@ let activeFrame = frameSettings;
 const VICTORIAN_GLB_URL = 'victorian-frame-textured.glb';
 let _victorianGeo = null;          // cached BufferGeometry
 let _victorianTexMat = null;       // cached PBR material from the GLB (polychrome paint)
+let _victorianLineTex = null;      // black-line-on-white edge map (Line Art)
+let _victorianLineTexDark = null;  // chalk-line-on-dark edge map (Line Art Dark)
 let _victorianBasePositions = null; // Float32Array of base vertex positions (for band-stretch)
 let _victorianLoadState = 'idle';  // idle | loading | ready | failed
 const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
@@ -3946,13 +3948,22 @@ function addVictorianMesh(group, pW, pH) {
   // polychrome paint (blue body / cream colonnettes / sage accents) via its PBR
   // material. Every other color (including the default) drops the texture and
   // uses a flat single-color material in that preset color/finish instead.
-  const useTexture = (group.userData.frameColor === 'painted') && _victorianTexMat;
+  const fc = group.userData.frameColor;
+  const isLineDark = (fc === 'linework-dark');
+  const isLine = (fc === 'linework' || isLineDark);
+  const lineTex = isLineDark ? _victorianLineTexDark : _victorianLineTex;
+  const useTexture = (fc === 'painted') && _victorianTexMat;
+  const useLineTex = isLine && lineTex;       // line art from the carved detail
   const srcMat = group.userData.frameMat;
   let mat;
   if (useTexture) {
     // Clone so each frame owns a disposable copy (maps are shared by reference,
     // which is fine — they're never mutated).
     mat = _victorianTexMat.clone();
+  } else if (useLineTex) {
+    // Flat paper/dark face carrying the edge-detected carving as ink/chalk lines
+    // — the line frame now matches "Painted" for ornamental detail.
+    mat = new THREE.MeshStandardMaterial({ map: lineTex, color: 0xffffff, roughness: 1.0, metalness: 0.0 });
   } else {
     mat = srcMat
       ? srcMat.clone()
@@ -3965,7 +3976,9 @@ function addVictorianMesh(group, pW, pH) {
   // a flat color, use that color a touch darker (a recessed liner).
   const panelColor = useTexture
     ? new THREE.Color(0x46556b)
-    : (srcMat ? srcMat.color.clone() : new THREE.Color(0x141210)).multiplyScalar(0.82);
+    : useLineTex
+      ? new THREE.Color(isLineDark ? 0x15140f : 0xf6f6f3)
+      : (srcMat ? srcMat.color.clone() : new THREE.Color(0x141210)).multiplyScalar(0.82);
 
   // TRUE 9-SLICE in both axes. The ornament (arch, spires, apron, side
   // borders) stays a CONSTANT real-world size for every painting — only the
@@ -4121,6 +4134,62 @@ function buildVictorianBackPanel(stretchXY, color) {
 }
 
 // Lazy-load the Victorian GLB once; populate all pending frames on success.
+// Derive Line-Art textures from the painted GLB baseColor map: a Sobel edge
+// pass turns the carved polychrome detail into black ink lines on paper (and a
+// chalk-on-dark variant), so the line Victorian carries the SAME ornament as
+// "Painted" instead of a blobby silhouette. UVs are shared with the GLB, so the
+// lines land exactly on the carving.
+function buildVictorianLineTextures(srcMap) {
+  try {
+    const img = srcMap && srcMap.image;
+    if (!img || !img.width) return;
+    const W = Math.min(img.width, 1024), H = Math.min(img.height, 1024);
+    const sc = document.createElement('canvas'); sc.width = W; sc.height = H;
+    const sctx = sc.getContext('2d');
+    sctx.drawImage(img, 0, 0, W, H);
+    const data = sctx.getImageData(0, 0, W, H).data;
+    const lum = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) lum[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    const at = (x, y) => lum[y * W + x];
+    const THRESH = 26;            // edge sensitivity (lower = more lines)
+    // Two output canvases: light (black on paper) + dark (chalk on near-black).
+    const lc = document.createElement('canvas'); lc.width = W; lc.height = H;
+    const dc = document.createElement('canvas'); dc.width = W; dc.height = H;
+    const lctx = lc.getContext('2d'), dctx = dc.getContext('2d');
+    lctx.fillStyle = '#f6f6f3'; lctx.fillRect(0, 0, W, H);
+    dctx.fillStyle = '#15140f'; dctx.fillRect(0, 0, W, H);
+    const lOut = lctx.getImageData(0, 0, W, H), dOut = dctx.getImageData(0, 0, W, H);
+    const lp = lOut.data, dp = dOut.data;
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const gx = -at(x-1,y-1) - 2*at(x-1,y) - at(x-1,y+1) + at(x+1,y-1) + 2*at(x+1,y) + at(x+1,y+1);
+        const gy = -at(x-1,y-1) - 2*at(x,y-1) - at(x+1,y-1) + at(x-1,y+1) + 2*at(x,y+1) + at(x+1,y+1);
+        const mag = Math.sqrt(gx * gx + gy * gy);
+        if (mag > THRESH) {
+          // ink strength scales a bit with edge magnitude for a hand-drawn feel
+          const k = Math.min(1, (mag - THRESH) / 90);
+          const o = (y * W + x) * 4;
+          lp[o] = 11; lp[o+1] = 11; lp[o+2] = 11; lp[o+3] = 255;                       // black ink
+          dp[o] = 236 - (1-k)*30; dp[o+1] = 231 - (1-k)*30; dp[o+2] = 218 - (1-k)*30; dp[o+3] = 255; // chalk
+        }
+      }
+    }
+    lctx.putImageData(lOut, 0, 0);
+    dctx.putImageData(dOut, 0, 0);
+    const mk = (cv) => {
+      const t = new THREE.CanvasTexture(cv);
+      t.wrapS = srcMap.wrapS; t.wrapT = srcMap.wrapT;
+      t.flipY = srcMap.flipY;
+      if (srcMap.repeat) t.repeat.copy(srcMap.repeat);
+      if (srcMap.offset) t.offset.copy(srcMap.offset);
+      t.anisotropy = 8; t.needsUpdate = true;
+      return t;
+    };
+    _victorianLineTex = mk(lc);
+    _victorianLineTexDark = mk(dc);
+  } catch (e) { /* tainted canvas or no image — fall back to silhouette only */ }
+}
+
 function loadVictorianMesh() {
   if (_victorianLoadState === 'loading' || _victorianLoadState === 'ready') return;
   if (typeof THREE.GLTFLoader === 'undefined') {
@@ -4144,6 +4213,8 @@ function loadVictorianMesh() {
           if (o.material) {
             _victorianTexMat = o.material;
             _victorianTexMat.side = THREE.FrontSide;
+            // Derive the line-art edge textures from the painted baseColor map.
+            if (_victorianTexMat.map) buildVictorianLineTextures(_victorianTexMat.map);
           }
         }
       });
