@@ -1258,6 +1258,9 @@ body { overscroll-behavior: none; }
       <button class="nav-btn" data-frame-color="ebony">Ebony</button>
       <button class="nav-btn" data-frame-color="sage">Sage</button>
       <button class="nav-btn" data-frame-color="ivory">Ivory</button>
+      <button class="nav-btn" data-frame-color="red">Red</button>
+      <button class="nav-btn" data-frame-color="blue">Blue</button>
+      <button class="nav-btn" data-frame-color="yellow">Yellow</button>
     </div>
     <p class="frame-hint">Sets the default for every painting. To frame a single
       piece, open it and use the picker below its details.</p>
@@ -3417,6 +3420,11 @@ const FRAME_COLOR_PRESETS = {
   ebony:        { body: 0x14121a, trim: 0xb8b9bb, accent: 0x4a5872, finish: 'matte' },
   sage:         { body: 0x7c8a6f, trim: 0xf2ead8, accent: 0xc89888, finish: 'matte' },
   ivory:        { body: 0xe8dcc4, trim: 0xfff8e4, accent: 0xc8a4a0, finish: 'matte' },
+  // Generic painted colors — body plus a lighter trim + darker accent so the
+  // Victorian style still reads multi-tone; other styles use the body only.
+  red:          { body: 0xb23a2e, trim: 0xd9685a, accent: 0x7a241b, finish: 'matte' },
+  blue:         { body: 0x2f5aa6, trim: 0x6f93c9, accent: 0x1c3768, finish: 'matte' },
+  yellow:       { body: 0xe3b743, trim: 0xf4d77e, accent: 0xa9821f, finish: 'matte' },
 };
 
 // Returns the preset to use, accounting for "auto" theme-aware defaults.
@@ -4810,6 +4818,7 @@ const FRAME_COLOR_OPTIONS = [
   ['gilt', 'Gilt'], ['bronze', 'Bronze'], ['silver', 'Silver'], ['walnut', 'Walnut'],
   ['oak', 'Oak'], ['pastel-blue', 'Pastel Blue'], ['ebony', 'Ebony'],
   ['sage', 'Sage'], ['ivory', 'Ivory'],
+  ['red', 'Red'], ['blue', 'Blue'], ['yellow', 'Yellow'],
 ];
 
 // Build the modal picker buttons once.
