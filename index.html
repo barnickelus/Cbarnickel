@@ -1223,6 +1223,10 @@ body { overscroll-behavior: none; }
       <button class="nav-btn" data-theme="duomo">Duomo</button>
     </div>
   </div>
+  <div class="row" style="display: flex; justify-content: space-between; align-items: center;">
+    <label style="margin-bottom: 0; flex: 1;">Neon sign</label>
+    <div class="toggle-switch" id="neon-toggle"></div>
+  </div>
   <div class="row divider">
     <label>Navigation</label>
     <div class="nav-grid">
@@ -1486,6 +1490,7 @@ let lightingMul = 1.0;
 const DEFAULT_SETTINGS = {
   theme: 'spotlight',
   lighting: 1.0,
+  neonTitle: false,
   frameStyle: 'ornate',
   frameColor: 'bronze',
   framePerPainting: {
@@ -1522,6 +1527,10 @@ const DEFAULT_SETTINGS = {
 };
 theme = localStorage.getItem('theme') || DEFAULT_SETTINGS.theme;
 lightingMul = parseFloat(localStorage.getItem('lighting')) || DEFAULT_SETTINGS.lighting;
+// Neon lobby sign ("C.BARNICKEL" as flickering neon tubes)
+let neonTitle = (localStorage.getItem('neonTitle') != null)
+  ? localStorage.getItem('neonTitle') === '1'
+  : !!DEFAULT_SETTINGS.neonTitle;
 // Frame settings — persisted to localStorage. Style: minimal | ornate | gothic.
 // Color: auto (theme-aware) | black | white | gilt.
 const frameSettings = {
@@ -2129,7 +2138,8 @@ function buildFloorsAndCeilings(t) {
     metalness: isComicTheme() ? 0.0 : 0.05,
   });
   const lobbyCeilMat = new THREE.MeshStandardMaterial({
-    color: t.ceiling,
+    color: theme === 'duomo' ? 0xffffff : t.ceiling,
+    map: ceilingTextureFor(),
     roughness: 1.0,
   });
   // Series rooms — dark wood floor in dark mode, comic tiles in line-art modes
@@ -2139,7 +2149,8 @@ function buildFloorsAndCeilings(t) {
     metalness: 0.0,
   });
   const seriesCeilMat = new THREE.MeshStandardMaterial({
-    color: t.ceilingSeries,
+    color: theme === 'duomo' ? 0xffffff : t.ceilingSeries,
+    map: ceilingTextureFor(),
     roughness: 1.0,
   });
   // Stash on the floor/ceiling arrays so applyTheme can update them
@@ -3119,9 +3130,70 @@ function plainWallColorHex(isSeries) {
   if (isComicTheme()) return cssToHex(t.comic.wallBg);
   return isSeries ? t.wallSeries : t.wall;
 }
+// Quadripartite rib-vault ceiling bay for the Duomo, seen from below: four
+// webbing cells divided by diagonal ribs, ringed by perimeter ribs (shared with
+// neighbouring bays when tiled), with a carved boss at the crossing.
+function makeVaultCeilingTexture() {
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  // Webbing ground — dark vault green-gray with a soft central lift (the
+  // spotlights below graze the crowns of the webs)
+  ctx.fillStyle = '#2f302a';
+  ctx.fillRect(0, 0, S, S);
+  const lift = ctx.createRadialGradient(S / 2, S / 2, S * 0.05, S / 2, S / 2, S * 0.62);
+  lift.addColorStop(0, 'rgba(122,116,100,0.30)');
+  lift.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = lift; ctx.fillRect(0, 0, S, S);
+  // Web mottling (stone plaster)
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * S, y = Math.random() * S, r = 5 + Math.random() * 18;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, Math.random() > 0.5 ? 'rgba(150,143,125,0.05)' : 'rgba(10,10,8,0.07)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+  }
+  // AO in the bay corners (webs plunge down toward the springing points)
+  for (const [cx, cy] of [[0, 0], [S, 0], [0, S], [S, S]]) {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * 0.42);
+    g.addColorStop(0, 'rgba(0,0,0,0.42)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+  }
+  // Rib painter: dark shadow under-stroke, stone body, bright crown line
+  function rib(x1, y1, x2, y2, w) {
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(12,12,10,0.85)'; ctx.lineWidth = w + 8;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.strokeStyle = '#6e685c'; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(196,188,168,0.55)'; ctx.lineWidth = Math.max(2, w * 0.28);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  // Perimeter ribs (half-width: shared with adjacent bays when the tile repeats)
+  rib(0, 0, S, 0, 10); rib(0, S, S, S, 10); rib(0, 0, 0, S, 10); rib(S, 0, S, S, 10);
+  // Diagonal ribs of the quadripartite bay
+  rib(0, 0, S, S, 13); rib(S, 0, 0, S, 13);
+  // Carved boss at the crossing
+  ctx.beginPath(); ctx.arc(S / 2, S / 2, 26, 0, Math.PI * 2);
+  ctx.fillStyle = '#5b564c'; ctx.fill();
+  ctx.strokeStyle = 'rgba(12,12,10,0.8)'; ctx.lineWidth = 5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(S / 2, S / 2, 13, 0, Math.PI * 2);
+  ctx.fillStyle = '#8a8272'; ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  tex.anisotropy = 8;
+  return tex;
+}
+
 // Themes whose wall/floor textures bake their own colours — the material tint
 // must stay white for these (a coloured tint would multiply the texture).
 function texturedWallTheme() { return isComicTheme() || theme === 'duomo'; }
+// Ceiling texture: only the Duomo bakes one (the rib-vault bays).
+function ceilingTextureFor() { return theme === 'duomo' ? makeVaultCeilingTexture() : null; }
 function floorTextureFor(hex) {
   if (theme === 'duomo') return makeDuomoFloorTexture();
   if (!isComicTheme()) return makeWoodFloorTexture(hex);
@@ -3158,6 +3230,42 @@ function makeLobbyTitleTexture() {
   c.width = 2048; c.height = 512;
   const ctx = c.getContext('2d');
   ctx.clearRect(0, 0, c.width, c.height);
+  if (neonTitle) {
+    // NEON SIGN — pink tube lettering with a cyan script tagline. Drawn as
+    // layered glows (wide halo → tight halo → hot core) around stroked text;
+    // the flicker itself is animated live on the mesh opacity each frame.
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const cx = c.width / 2, cy = c.height / 2 - 50;
+    ctx.font = '300 190px "Cormorant Garamond", Georgia, serif';
+    // Wide halo
+    ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 90;
+    ctx.strokeStyle = 'rgba(255,46,136,0.55)'; ctx.lineWidth = 10;
+    ctx.strokeText('C.BARNICKEL', cx, cy);
+    ctx.strokeText('C.BARNICKEL', cx, cy);
+    // Tight halo
+    ctx.shadowBlur = 28;
+    ctx.strokeStyle = 'rgba(255,80,160,0.9)'; ctx.lineWidth = 7;
+    ctx.strokeText('C.BARNICKEL', cx, cy);
+    // Hot tube core
+    ctx.shadowColor = '#ff8ec2'; ctx.shadowBlur = 10;
+    ctx.strokeStyle = '#fff0f7'; ctx.lineWidth = 3.5;
+    ctx.strokeText('C.BARNICKEL', cx, cy);
+    // Cyan "Artwork" tube script
+    const sy = c.height / 2 + 115;
+    ctx.font = 'italic 62px "Cormorant Garamond", Georgia, serif';
+    ctx.shadowColor = '#2fd4ff'; ctx.shadowBlur = 60;
+    ctx.strokeStyle = 'rgba(47,212,255,0.6)'; ctx.lineWidth = 6;
+    ctx.strokeText('Artwork', cx, sy);
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = '#e8fbff'; ctx.lineWidth = 2.5;
+    ctx.strokeText('Artwork', cx, sy);
+    ctx.shadowBlur = 0;
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    tex.anisotropy = 4;
+    return tex;
+  }
   ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
   ctx.shadowBlur = 14;
   ctx.shadowOffsetY = 4;
@@ -3515,6 +3623,52 @@ function buildTrackLighting(t) {
     }
   }
 }
+/* ─── Duomo 3D vault ribs ─── */
+// Real rib arches under the ceiling, present only in the Duomo theme:
+// transverse elliptical arches spanning each room's width (spaced along its
+// depth) plus a longitudinal ridge rib — together with the painted quadripartite
+// bays above they read as a Gothic vault. Built/removed on theme switch.
+const duomoVaultRibs = [];
+let _duomoRibMat = null;
+function _ribArch(spanFrom, spanTo, fixed, alongX, apexY, rise) {
+  // Half-ellipse from (spanFrom, apexY-rise) up to apex and back down.
+  const pts = [];
+  const half = (spanTo - spanFrom) / 2, mid = (spanFrom + spanTo) / 2;
+  for (let i = 0; i <= 24; i++) {
+    const a = Math.PI - (i / 24) * Math.PI;          // π → 0
+    const s = mid + Math.cos(a) * half;
+    const y = apexY - rise + Math.sin(a) * rise;
+    pts.push(alongX ? new THREE.Vector3(s, y, fixed) : new THREE.Vector3(fixed, y, s));
+  }
+  const curve = new THREE.CatmullRomCurve3(pts);
+  return new THREE.TubeGeometry(curve, 48, 0.055, 8, false);
+}
+function syncDuomoVaultRibs() {
+  if (theme === 'duomo' && duomoVaultRibs.length === 0 && scene) {
+    if (!_duomoRibMat) {
+      _duomoRibMat = new THREE.MeshStandardMaterial({ color: 0x6e685c, roughness: 0.92, metalness: 0.0 });
+    }
+    for (const id of Object.keys(ROOMS)) {
+      const r = ROOMS[id];
+      const rise = Math.min(1.05, r.h * 0.16);
+      const apex = r.h - 0.02;
+      // Transverse arches across the width, one per ~4m of depth (interior only)
+      const nT = Math.max(1, Math.round(r.d / 4) - 0);
+      for (let i = 1; i <= nT; i++) {
+        const z = r.cz - r.d / 2 + (i / (nT + 1)) * r.d;
+        const m = new THREE.Mesh(_ribArch(r.cx - r.w / 2, r.cx + r.w / 2, z, true, apex, rise), _duomoRibMat);
+        scene.add(m); duomoVaultRibs.push(m);
+      }
+      // Longitudinal ridge rib down the room's centre
+      const m2 = new THREE.Mesh(_ribArch(r.cz - r.d / 2, r.cz + r.d / 2, r.cx, false, apex, rise * 0.6), _duomoRibMat);
+      scene.add(m2); duomoVaultRibs.push(m2);
+    }
+  } else if (theme !== 'duomo' && duomoVaultRibs.length > 0) {
+    for (const m of duomoVaultRibs) { scene.remove(m); m.geometry.dispose(); }
+    duomoVaultRibs.length = 0;
+  }
+}
+
 /* ─── 7. Painting placement ─── */
 
 function placeAllPaintings() {
@@ -5562,6 +5716,7 @@ function currentSettingsObject() {
   return {
     theme: theme,
     lighting: Math.round(lightingMul * 100) / 100,
+    neonTitle: neonTitle,
     frameStyle: frameSettings.style,
     frameColor: frameSettings.color,
     framePerPainting: framePerPainting,
@@ -5599,7 +5754,7 @@ function downloadSettingsExport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function resetToDefaults() {
-  ['theme', 'lighting', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
+  ['theme', 'lighting', 'neonTitle', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
     try { localStorage.removeItem(k); } catch (e) {}
   });
   location.reload();
@@ -5607,6 +5762,8 @@ function resetToDefaults() {
 // Reflect current settings in the gear panel's active states + slider.
 function syncSettingsUI() {
   document.querySelectorAll('.nav-btn[data-theme]').forEach(b => b.classList.toggle('active', b.dataset.theme === theme));
+  const neonTg = document.getElementById('neon-toggle');
+  if (neonTg) neonTg.classList.toggle('on', neonTitle);
   document.querySelectorAll('.nav-btn[data-frame-style]').forEach(b => b.classList.toggle('active', b.dataset.frameStyle === frameSettings.style));
   document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => b.classList.toggle('active', b.dataset.frameColor === frameSettings.color));
   const ls = document.getElementById('lighting-slider');
@@ -5918,6 +6075,37 @@ function setTheme(newTheme) {
     b.classList.toggle('active', b.dataset.theme === theme));
 }
 
+/* ─── Neon lobby sign toggle + flicker ─── */
+function setNeonTitle(on) {
+  neonTitle = !!on;
+  try { localStorage.setItem('neonTitle', neonTitle ? '1' : '0'); } catch (e) {}
+  const tg = document.getElementById('neon-toggle');
+  if (tg) tg.classList.toggle('on', neonTitle);
+  if (lobbyTitleMesh) {
+    if (lobbyTitleMesh.material.map) lobbyTitleMesh.material.map.dispose();
+    lobbyTitleMesh.material.map = makeLobbyTitleTexture();
+    lobbyTitleMesh.material.opacity = neonTitle ? 1 : T().titleAlpha;
+    lobbyTitleMesh.material.needsUpdate = true;
+  }
+}
+// Flicker: a constant soft tube hum plus occasional dropout bursts (sometimes a
+// double-blink), like a sign with a tired transformer.
+const _neon = { level: 1, until: 0, next: 1200 };
+function updateNeonFlicker(now) {
+  if (!lobbyTitleMesh) return;
+  if (!neonTitle) return;
+  if (now >= _neon.next) {
+    _neon.level = 0.12 + Math.random() * 0.45;
+    _neon.until = now + 40 + Math.random() * 150;
+    // occasional quick double-blink: schedule the next event right after
+    _neon.next = now + (Math.random() < 0.3 ? 220 + Math.random() * 160
+                                            : 900 + Math.random() * 4200);
+  }
+  let lvl = (now < _neon.until) ? _neon.level : 1;
+  lvl *= 0.95 + 0.05 * Math.sin(now * 0.085) * Math.sin(now * 0.021);
+  lobbyTitleMesh.material.opacity = lvl;
+}
+
 function applyTheme() {
   const t = T();
   // Renderer background + fog
@@ -5962,8 +6150,20 @@ function applyTheme() {
     floorMeshes._seriesMat.needsUpdate = true;
   }
   // Ceilings
-  if (ceilingMeshes._lobbyMat) ceilingMeshes._lobbyMat.color.setHex(t.ceiling);
-  if (ceilingMeshes._seriesMat) ceilingMeshes._seriesMat.color.setHex(t.ceilingSeries);
+  if (ceilingMeshes._lobbyMat) {
+    ceilingMeshes._lobbyMat.color.setHex(theme === 'duomo' ? 0xffffff : t.ceiling);
+    if (ceilingMeshes._lobbyMat.map) ceilingMeshes._lobbyMat.map.dispose();
+    ceilingMeshes._lobbyMat.map = ceilingTextureFor();
+    ceilingMeshes._lobbyMat.needsUpdate = true;
+  }
+  if (ceilingMeshes._seriesMat) {
+    ceilingMeshes._seriesMat.color.setHex(theme === 'duomo' ? 0xffffff : t.ceilingSeries);
+    if (ceilingMeshes._seriesMat.map) ceilingMeshes._seriesMat.map.dispose();
+    ceilingMeshes._seriesMat.map = ceilingTextureFor();
+    ceilingMeshes._seriesMat.needsUpdate = true;
+  }
+  // Duomo 3D rib arches — real vault architecture, present only in that theme.
+  syncDuomoVaultRibs();
   // Plants — show only in dark mode
   setPlantsVisible(!!t.plants);
   // Architectural trim — regenerate wood texture for new theme
@@ -6994,10 +7194,14 @@ function wireUI() {
     setLightingMul(v / 100);
   });
 
-  // Gallery style selector (Dark / White / Ink)
+  // Gallery style selector (Dark / White / Ink / Spotlight / Duomo)
   document.querySelectorAll('.nav-btn[data-theme]').forEach(b => {
     b.addEventListener('click', () => setTheme(b.dataset.theme));
   });
+
+  // Neon sign toggle
+  const neonTg = document.getElementById('neon-toggle');
+  if (neonTg) neonTg.addEventListener('click', () => setNeonTitle(!neonTitle));
 
   // Nav mode buttons — only those with data-nav (other .nav-btn elements
   // are repurposed for frame style + color)
@@ -7296,6 +7500,9 @@ function animate() {
   // Gun smoke puffs (run regardless of weapon — smoke can outlive a weapon swap)
   if (activeSmoke.length > 0) updateGunSmoke(dt);
 
+  // Neon sign flicker (no-op unless the toggle is on)
+  updateNeonFlicker(now);
+
   renderer.render(scene, camera);
 }
 
@@ -7317,6 +7524,7 @@ async function boot() {
   }
   initScene();
   buildGallery();
+  syncDuomoVaultRibs();   // saved theme may be Duomo on first load
   placeAllPaintings();
   markPaintingWallsPlain();
   buildIndex();
