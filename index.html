@@ -1220,6 +1220,7 @@ body { overscroll-behavior: none; }
       <button class="nav-btn" data-theme="white">White</button>
       <button class="nav-btn" data-theme="ink">Ink</button>
       <button class="nav-btn" data-theme="spotlight">Spotlight</button>
+      <button class="nav-btn" data-theme="duomo">Duomo</button>
     </div>
   </div>
   <div class="row divider">
@@ -1812,6 +1813,36 @@ const THEMES = {
 THEMES.spotlight = Object.assign({}, THEMES.white, {
   paintingWall: '#17161d',
 });
+// Duomo mode — Milan-cathedral inspiration: gray ashlar stone walls, a dark
+// vault-like ceiling, dim cool ambience pierced by strong warm spotlights, and
+// the ornate rose/cream/black marble-inlay floor. Painting walls go plain dark
+// stone so the colour art glows like altarpieces.
+THEMES.duomo = {
+  bg: 0x1d1c19,
+  wall: 0x847e72,             // stone gray (ashlar texture bakes its own tones)
+  wallStrong: 0x6d675c,
+  wallSeries: 0x777166,
+  floor: 0xe9dfc8,            // marble cream (texture bakes the inlay)
+  floorSeries: 0xe9dfc8,
+  ceiling: 0x2b2c27,          // dark vault green-gray
+  ceilingSeries: 0x22231f,
+  trim: 0x7a7468,             // pale stone casings + baseboards
+  trimDark: 0x4e4a41,
+  wallpaperBase: null,
+  ambient: { color: 0xcdd2da, intensity: 0.38 },
+  hemi: { sky: 0x9aa0a8, ground: 0x2e2c26, intensity: 0.34 },
+  spot: { color: 0xffe2b0, intensity: 1.55 },
+  glow: { color: 0xffd9a0, intensity: 0.12 },
+  trackBar: 0x3a382f,
+  title: '#e8dcc0',           // warm candlelit cream on stone
+  titleAlpha: 0.95,
+  label: '#e8dcc0',
+  labelAlpha: 0.9,
+  fog: { color: 0x1d1c19, density: 0.010 },
+  rendererClear: 0x161512,
+  plants: false,
+  paintingWall: '#4a463e',    // plain dark warm stone behind the art
+};
 function T() { return THEMES[theme]; }
 
 /* ─── 4. Painting data ─── */
@@ -2153,13 +2184,13 @@ function buildAllWalls(t) {
   // in the comic themes. Comic textures bake their own bg+line colors, so the
   // material tint must be white there (else a dark wall hex hides the lines).
   const lobbyWallMat = new THREE.MeshStandardMaterial({
-    color: isComicTheme() ? 0xffffff : t.wall,
+    color: texturedWallTheme() ? 0xffffff : t.wall,
     map: lobbyWallTextureFor(t),
     roughness: 0.92,
     metalness: 0.0,
   });
   const seriesWallMat = new THREE.MeshStandardMaterial({
-    color: isComicTheme() ? 0xffffff : t.wallSeries,
+    color: texturedWallTheme() ? 0xffffff : t.wallSeries,
     map: seriesWallTextureFor(t),
     roughness: 0.95,
     metalness: 0.0,
@@ -2895,6 +2926,183 @@ function makeComicWallTexture(bgCss, lineCss) {
   return tex;
 }
 
+// ── Duomo (Milan-cathedral) textures ──
+// Marble inlay floor: 2×2 medallions per tile — alternating 8-petal rosettes in
+// black cusped rings and palmette-fan quatrefoils — dusty rose + cream + black,
+// with slate accents and rose corner diamonds. Seamless on the 512 tile.
+function makeDuomoFloorTexture() {
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const CREAM = '#e9dfc8', ROSE = '#c98d76', ROSE_D = '#a96a55',
+        BLACK = '#221d19', SLATE = '#8b8578', WHITE = '#f2ead6';
+  ctx.fillStyle = CREAM; ctx.fillRect(0, 0, size, size);
+  const cell = size / 2;
+  function rosette(cx, cy, R) {
+    ctx.strokeStyle = BLACK; ctx.lineWidth = R * 0.10;
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.92, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * R * 0.92, cy + Math.sin(a) * R * 0.92, R * 0.16, 0, Math.PI * 2);
+      ctx.fillStyle = BLACK; ctx.fill();
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(a);
+      ctx.beginPath();
+      ctx.moveTo(0, R * 0.15);
+      ctx.quadraticCurveTo(R * 0.28, R * 0.35, 0, R * 0.72);
+      ctx.quadraticCurveTo(-R * 0.28, R * 0.35, 0, R * 0.15);
+      ctx.closePath();
+      ctx.fillStyle = ROSE; ctx.fill();
+      ctx.strokeStyle = ROSE_D; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.15, 0, Math.PI * 2);
+    ctx.fillStyle = SLATE; ctx.fill();
+    ctx.strokeStyle = BLACK; ctx.lineWidth = 2; ctx.stroke();
+  }
+  function shellMedallion(cx, cy, R) {
+    ctx.fillStyle = BLACK;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * R * 0.55, cy + Math.sin(a) * R * 0.55, R * 0.42, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.62, 0, Math.PI * 2); ctx.fill();
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * R * 0.55, cy + Math.sin(a) * R * 0.55, R * 0.32, 0, Math.PI * 2);
+      ctx.fillStyle = WHITE; ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.52, 0, Math.PI * 2); ctx.fillStyle = WHITE; ctx.fill();
+    // Palmette fan radiating upward, clipped to the white interior
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      ctx.moveTo(cx + Math.cos(a) * R * 0.55 + R * 0.32, cy + Math.sin(a) * R * 0.55);
+      ctx.arc(cx + Math.cos(a) * R * 0.55, cy + Math.sin(a) * R * 0.55, R * 0.32, 0, Math.PI * 2);
+    }
+    ctx.moveTo(cx + R * 0.52, cy); ctx.arc(cx, cy, R * 0.52, 0, Math.PI * 2);
+    ctx.clip();
+    const fy = cy + R * 0.42;
+    for (let i = 0; i < 9; i++) {
+      const a = -Math.PI * 0.35 + (i / 8) * Math.PI * 0.7;
+      ctx.save(); ctx.translate(cx, fy); ctx.rotate(a + Math.PI);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(R * 0.13, R * 0.45, 0, R * 0.85);
+      ctx.quadraticCurveTo(-R * 0.13, R * 0.45, 0, 0);
+      ctx.closePath();
+      ctx.fillStyle = i % 2 ? ROSE : ROSE_D; ctx.fill();
+      ctx.strokeStyle = BLACK; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(cx, fy, R * 0.12, 0, Math.PI * 2); ctx.fillStyle = SLATE; ctx.fill();
+    ctx.strokeStyle = BLACK; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  }
+  // Per-cell double frames + corner dots
+  for (let gy = 0; gy < 2; gy++) {
+    for (let gx = 0; gx < 2; gx++) {
+      const ox = gx * cell, oy = gy * cell;
+      ctx.strokeStyle = SLATE; ctx.lineWidth = 4;
+      ctx.strokeRect(ox + cell * 0.08, oy + cell * 0.08, cell * 0.84, cell * 0.84);
+      ctx.strokeStyle = BLACK; ctx.lineWidth = 2.5;
+      ctx.strokeRect(ox + cell * 0.13, oy + cell * 0.13, cell * 0.74, cell * 0.74);
+      ctx.fillStyle = ROSE_D;
+      [[0.13, 0.13], [0.87, 0.13], [0.13, 0.87], [0.87, 0.87]].forEach(([fx, fy2]) => {
+        ctx.beginPath(); ctx.arc(ox + cell * fx, oy + cell * fy2, cell * 0.03, 0, Math.PI * 2); ctx.fill();
+      });
+      const mx = ox + cell / 2, my = oy + cell / 2, R = cell * 0.36;
+      if ((gx + gy) % 2 === 0) rosette(mx, my, R); else shellMedallion(mx, my, R);
+    }
+  }
+  // Black band grid + rose diamonds at intersections
+  ctx.strokeStyle = BLACK; ctx.lineWidth = 10;
+  for (let i = 0; i <= 2; i++) {
+    ctx.beginPath(); ctx.moveTo(i * cell, 0); ctx.lineTo(i * cell, size); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * cell); ctx.lineTo(size, i * cell); ctx.stroke();
+  }
+  for (let gx = 0; gx <= 2; gx++) {
+    for (let gy = 0; gy <= 2; gy++) {
+      const x = gx * cell, y = gy * cell, s = cell * 0.09;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = ROSE; ctx.fillRect(-s / 2, -s / 2, s, s);
+      ctx.strokeStyle = BLACK; ctx.lineWidth = 3; ctx.strokeRect(-s / 2, -s / 2, s, s);
+      ctx.restore();
+    }
+  }
+  // Subtle marble mottling
+  for (let i = 0; i < 250; i++) {
+    const x = Math.random() * size, y = Math.random() * size, r = 6 + Math.random() * 22;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(120,110,95,0.05)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(5, 5);
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Ashlar stone wall for the Duomo: coursed gray blocks with mortar joints and
+// gentle tonal variation, like the cathedral's pier masonry.
+function makeStoneWallTexture() {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  const rows = 6, courseH = c.height / rows;
+  for (let r = 0; r < rows; r++) {
+    const cols = 3;
+    const blockW = c.width / cols;
+    const offset = (r % 2) * blockW / 2;
+    for (let b = -1; b < cols + 1; b++) {
+      const x = b * blockW + offset;
+      const tone = 118 + Math.random() * 26;          // gray with slight warm cast
+      ctx.fillStyle = `rgb(${tone + 6}, ${tone + 2}, ${tone - 6})`;
+      ctx.fillRect(x, r * courseH, blockW, courseH);
+      // block shading: darker bottom edge, lighter top edge
+      ctx.fillStyle = 'rgba(0,0,0,0.10)';
+      ctx.fillRect(x, r * courseH + courseH - 4, blockW, 4);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(x, r * courseH, blockW, 3);
+      // mottling within the block
+      for (let i = 0; i < 12; i++) {
+        const mx2 = x + Math.random() * blockW, my2 = r * courseH + Math.random() * courseH;
+        const mr = 4 + Math.random() * 16;
+        const g = ctx.createRadialGradient(mx2, my2, 0, mx2, my2, mr);
+        const dk = Math.random() > 0.5;
+        g.addColorStop(0, dk ? 'rgba(40,36,30,0.07)' : 'rgba(230,225,210,0.06)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(x, r * courseH, blockW, courseH);
+      }
+    }
+    // mortar lines
+    ctx.strokeStyle = 'rgba(30,28,24,0.55)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(0, r * courseH); ctx.lineTo(c.width, r * courseH); ctx.stroke();
+    for (let b = 0; b < cols + 1; b++) {
+      const x = b * blockW + offset;
+      ctx.beginPath(); ctx.moveTo(x, r * courseH); ctx.lineTo(x, r * courseH + courseH); ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  tex.anisotropy = 8;
+  return tex;
+}
+
 // Theme-aware texture pickers used by both initial build and applyTheme.
 // Both comic themes draw the flat line art; 'white' = black ink on paper,
 // 'ink' = chalk lines on a near-black ground (inverted). 'comic' on the theme
@@ -2911,16 +3119,22 @@ function plainWallColorHex(isSeries) {
   if (isComicTheme()) return cssToHex(t.comic.wallBg);
   return isSeries ? t.wallSeries : t.wall;
 }
+// Themes whose wall/floor textures bake their own colours — the material tint
+// must stay white for these (a coloured tint would multiply the texture).
+function texturedWallTheme() { return isComicTheme() || theme === 'duomo'; }
 function floorTextureFor(hex) {
+  if (theme === 'duomo') return makeDuomoFloorTexture();
   if (!isComicTheme()) return makeWoodFloorTexture(hex);
   const c = T().comic;
   return makeComicTileFloorTexture(c.floorBg, c.floorLine);
 }
 function lobbyWallTextureFor(t) {
+  if (theme === 'duomo') return makeStoneWallTexture();
   if (isComicTheme()) return makeComicWallTexture(t.comic.wallBg, t.comic.wallLine);
   return t.wallpaperBase ? makeDamaskWallpaperTexture(t) : null;
 }
 function seriesWallTextureFor(t) {
+  if (theme === 'duomo') return makeStoneWallTexture();
   if (isComicTheme()) return makeComicWallTexture(t.comic.wallBg, t.comic.wallLine);
   return null;
 }
@@ -3447,6 +3661,8 @@ function getFramePreset(isSeriesRoom) {
   if (theme === 'ink') return FRAME_COLOR_PRESETS.ivory;
   // Spotlight auto — paintings hang on dark walls, so default to a light frame.
   if (theme === 'spotlight') return FRAME_COLOR_PRESETS.white;
+  // Duomo auto — gilt frames glow like altarpieces on the dark stone.
+  if (theme === 'duomo') return FRAME_COLOR_PRESETS.gilt;
   // Auto mode — theme + style aware
   if (activeFrame.style === 'victorian') {
     // Victorian looks best with painted multi-tone palettes
@@ -5712,13 +5928,13 @@ function applyTheme() {
   // Walls — update both lobby-side and series-side materials in place.
   // Lobby wall: also swap between damask wallpaper (dark) and flat (white).
   if (wallMeshes._lobbyMat) {
-    wallMeshes._lobbyMat.color.setHex(isComicTheme() ? 0xffffff : t.wall);
+    wallMeshes._lobbyMat.color.setHex(texturedWallTheme() ? 0xffffff : t.wall);
     if (wallMeshes._lobbyMat.map) wallMeshes._lobbyMat.map.dispose();
     wallMeshes._lobbyMat.map = lobbyWallTextureFor(t);
     wallMeshes._lobbyMat.needsUpdate = true;
   }
   if (wallMeshes._seriesMat) {
-    wallMeshes._seriesMat.color.setHex(isComicTheme() ? 0xffffff : t.wallSeries);
+    wallMeshes._seriesMat.color.setHex(texturedWallTheme() ? 0xffffff : t.wallSeries);
     if (wallMeshes._seriesMat.map) wallMeshes._seriesMat.map.dispose();
     wallMeshes._seriesMat.map = seriesWallTextureFor(t);
     wallMeshes._seriesMat.needsUpdate = true;
