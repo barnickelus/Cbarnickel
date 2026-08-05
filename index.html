@@ -3598,6 +3598,11 @@ function handleMirrorPush(hitPoint) {
     tapWalkTarget = { x: c.x, z: c.z, faceX: MIRROR_PX, faceZ: MIRROR_Z };
     return;
   }
+  // Use the push GESTURE to unlock/resume audio and pre-decode the reversed
+  // track, so the backwards music can actually sound when we cross (iOS
+  // requires AudioContext activation from within a user gesture).
+  ensureAudio();
+  if (localStorage.getItem('musicMuted') !== 'true') preloadReversedMusic();
   const now = performance.now();
   if (now - _mirrorPush.last > 6000) _mirrorPush.count = 0;
   _mirrorPush.last = now;
@@ -5884,6 +5889,13 @@ function handleTap(clientX, clientY) {
     }
   }
 
+  // Inside the mirror world, use any tap (a gesture) to retry the reversed
+  // soundtrack if it hasn't managed to start (iOS audio-unlock timing).
+  if (mirrorWorld && !_musicReversed.node && _musicStarted
+      && localStorage.getItem('musicMuted') !== 'true') {
+    setMirrorMusic(true);
+  }
+
   // The mirror — pushable
   if (mirrorMesh) {
     const mHits = raycaster.intersectObject(mirrorMesh, false);
@@ -7907,6 +7919,30 @@ function startBackgroundMusic() {
    through the shared AudioContext while the <audio> element is paused; leaving
    the mirror stops the node and resumes the normal track. */
 const _musicReversed = { buffer: null, node: null, gain: null, loading: false };
+// Fetch + decode + sample-reverse the track once. Called from the PUSH gesture
+// so the buffer is ready by the time the crossing completes.
+function preloadReversedMusic() {
+  if (_musicReversed.buffer || _musicReversed.loading) return;
+  const audio = document.getElementById('bg-music');
+  const ctx = ensureAudio();
+  if (!audio || !ctx) return;
+  _musicReversed.loading = true;
+  fetch(audio.currentSrc || audio.getAttribute('src'))
+    .then(r => r.arrayBuffer())
+    .then(ab => new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej)))
+    .then(buf => {
+      const rev = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+      for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+        const a = buf.getChannelData(ch), b = rev.getChannelData(ch);
+        for (let i = 0, n = buf.length; i < n; i++) b[i] = a[n - 1 - i];
+      }
+      _musicReversed.buffer = rev;
+      _musicReversed.loading = false;
+      // If we're already inside the mirror when the decode lands, start now
+      if (mirrorWorld) setMirrorMusic(true);
+    })
+    .catch(() => { _musicReversed.loading = false; });
+}
 function setMirrorMusic(reversed) {
   const audio = document.getElementById('bg-music');
   if (!audio) return;
@@ -7918,7 +7954,7 @@ function setMirrorMusic(reversed) {
     const ctx = ensureAudio();
     if (!ctx) return;
     const start = () => {
-      if (!mirrorWorld || _musicReversed.node) return;   // left already / double-start
+      if (!mirrorWorld || _musicReversed.node || !_musicReversed.buffer) return;
       const src = ctx.createBufferSource();
       src.buffer = _musicReversed.buffer;
       src.loop = true;
@@ -7932,23 +7968,13 @@ function setMirrorMusic(reversed) {
       _musicReversed.node = src;
       _musicReversed.gain = g;
     };
+    // iOS: the context only truly runs when resumed from a gesture; the pushes
+    // call ensureAudio() in-gesture, but belt-and-braces resume here too.
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(start).catch(() => {});
+    }
     if (_musicReversed.buffer) { start(); return; }
-    if (_musicReversed.loading) return;
-    _musicReversed.loading = true;
-    fetch(audio.currentSrc || audio.getAttribute('src'))
-      .then(r => r.arrayBuffer())
-      .then(ab => new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej)))
-      .then(buf => {
-        const rev = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
-        for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-          const a = buf.getChannelData(ch), b = rev.getChannelData(ch);
-          for (let i = 0, n = buf.length; i < n; i++) b[i] = a[n - 1 - i];
-        }
-        _musicReversed.buffer = rev;
-        _musicReversed.loading = false;
-        start();
-      })
-      .catch(() => { _musicReversed.loading = false; });
+    preloadReversedMusic();   // starts itself on decode if still inside
   } else {
     if (_musicReversed.node) {
       try { _musicReversed.node.stop(); } catch (e) {}
