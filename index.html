@@ -3449,9 +3449,21 @@ function applyMirrorFlip(on) {
 }
 // Expanding neon-white ripple rings on the mirror surface
 function spawnMirrorRipple(cy2, cz2, strength) {
-  const face = mirrorWorld ? 1 : -1;          // which side the viewer is on
-  for (let i = 0; i < Math.min(3, 1 + strength); i++) {
-    const geo = new THREE.RingGeometry(0.05, 0.085, 40);
+  // Soft splash flash at the touch point
+  const splash = new THREE.Mesh(
+    new THREE.CircleGeometry(0.16 + strength * 0.05, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0xdfeeff, transparent: true, opacity: 0.5,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+    })
+  );
+  splash.rotation.y = -Math.PI / 2;
+  splash.position.set(MIRROR_PX - 0.02, cy2, cz2);
+  splash.userData = { age: 0, grow: 0.9, life: 0.35 };
+  scene.add(splash);
+  mirrorRipples.push(splash);
+  for (let i = 0; i < Math.min(4, 1 + strength); i++) {
+    const geo = new THREE.RingGeometry(0.07, 0.115, 40);
     const mat = new THREE.MeshBasicMaterial({
       color: 0xcfe6ff, transparent: true, opacity: 0.85,
       side: THREE.DoubleSide, depthWrite: false,
@@ -3461,7 +3473,7 @@ function spawnMirrorRipple(cy2, cz2, strength) {
     ring.rotation.y = -Math.PI / 2;
     // NOTE: spawned via scene.add — if the world is flipped it joins the root,
     // so express position in UNFLIPPED coords (the mirror's own local frame).
-    ring.position.set(MIRROR_PX + (mirrorWorld ? -0.012 : 0.012) * 1, cy2, cz2);
+    ring.position.set(MIRROR_PX - 0.02, cy2, cz2);
     ring.userData = {
       age: -i * 0.09,                          // stagger successive rings
       grow: 1.1 + strength * 0.55,
@@ -3534,7 +3546,7 @@ function handleMirrorPush(hitPoint) {
     return;
   }
   const now = performance.now();
-  if (now - _mirrorPush.last > 2600) _mirrorPush.count = 0;
+  if (now - _mirrorPush.last > 4000) _mirrorPush.count = 0;
   _mirrorPush.last = now;
   _mirrorPush.count++;
   // express ripple centre in unflipped coords
@@ -3548,7 +3560,20 @@ function handleMirrorPush(hitPoint) {
   if (_mirrorPush.count >= need) {
     _mirrorPush.count = 0;
     startMirrorCross();
+  } else {
+    flashCustomHint(_mirrorPush.count === 1
+      ? 'the glass ripples… push again'
+      : 'it’s giving way — push harder', 2200);
   }
+}
+// Temporary custom text in the bottom hint bar (used by the mirror pushes).
+function flashCustomHint(text, ms) {
+  const hint = document.getElementById('bottom-hint');
+  if (!hint) return;
+  hint.textContent = text;
+  hint.classList.add('show');
+  clearTimeout(hintHideTimer);
+  hintHideTimer = setTimeout(() => hint.classList.remove('show'), ms || 2000);
 }
 
 function buildLobbyPlants() {
