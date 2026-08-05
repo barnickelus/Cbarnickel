@@ -3380,6 +3380,7 @@ const lobbyPlants = [];   // { group, mesh references for show/hide }
 let mirrorMesh = null;
 let MIRROR_PX = 0;        // world x of the mirror plane (set in buildMirror)
 let MIRROR_Z = 0;
+let MIRROR_W = 1.5, MIRROR_H = 2.3, MIRROR_Y = 1.75;
 function buildMirror() {
   const lobby = ROOMS.lobby;
   const wallX = lobby.cx + lobby.w / 2 - WALL_THICKNESS / 2;  // inner face of east wall
@@ -3393,11 +3394,89 @@ function buildMirror() {
   // Glass
   if (typeof THREE.Reflector !== 'undefined') {
     const mirRes = (typeof hasTouch !== 'undefined' && hasTouch) ? 512 : 1024;
+    // Custom Reflector shader: the ripple is a WARP of the reflected image
+    // itself (visible on any background), and each wave also radiates from
+    // four virtual sources mirrored across the frame edges — the reverberation
+    // bouncing off the frame.
+    const rippleShader = {
+      uniforms: {
+        color: { value: null },
+        tDiffuse: { value: null },
+        textureMatrix: { value: null },
+        uTime: { value: 0 },
+        uCount: { value: 0 },
+        uSize: { value: new THREE.Vector2(mw, mh) },
+        uRipples: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, -100, 0)) },
+      },
+      vertexShader: [
+        'uniform mat4 textureMatrix;',
+        'varying vec4 vUv;',
+        'varying vec2 vLuv;',
+        'void main() {',
+        '  vUv = textureMatrix * vec4( position, 1.0 );',
+        '  vLuv = uv;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );',
+        '}',
+      ].join('\n'),
+      fragmentShader: [
+        'uniform vec3 color;',
+        'uniform sampler2D tDiffuse;',
+        'uniform float uTime;',
+        'uniform int uCount;',
+        'uniform vec2 uSize;',
+        'uniform vec4 uRipples[8];',
+        'varying vec4 vUv;',
+        'varying vec2 vLuv;',
+        'float blendOverlay( float base, float blend ) {',
+        '  return( base < 0.5 ? ( 2.0 * base * blend ) : ( 1.0 - 2.0 * ( 1.0 - base ) * ( 1.0 - blend ) ) );',
+        '}',
+        'vec3 blendOverlay( vec3 base, vec3 blend ) {',
+        '  return vec3( blendOverlay( base.r, blend.r ), blendOverlay( base.g, blend.g ), blendOverlay( base.b, blend.b ) );',
+        '}',
+        'void main() {',
+        '  vec2 p = vLuv * uSize;',
+        '  vec2 duv = vec2( 0.0 );',
+        '  float glint = 0.0;',
+        '  for ( int i = 0; i < 8; i ++ ) {',
+        '    if ( i >= uCount ) break;',
+        '    vec4 r = uRipples[ i ];',
+        '    float t = uTime - r.z;',
+        '    if ( t < 0.0 || t > 3.0 ) continue;',
+        '    vec2 src = r.xy * uSize;',
+        '    float amp = r.w * exp( -t * 1.35 );',
+        '    for ( int k = 0; k < 5; k ++ ) {',
+        '      vec2 s = src;',
+        '      float a = amp;',
+        // virtual sources mirrored over each frame edge = frame reverberation
+        '      if ( k == 1 ) { s.x = -src.x; a *= 0.55; }',
+        '      else if ( k == 2 ) { s.x = 2.0 * uSize.x - src.x; a *= 0.55; }',
+        '      else if ( k == 3 ) { s.y = -src.y; a *= 0.55; }',
+        '      else if ( k == 4 ) { s.y = 2.0 * uSize.y - src.y; a *= 0.55; }',
+        '      vec2 rel = p - s;',
+        '      float d = length( rel );',
+        '      float front = t * 1.9;',
+        '      float g = exp( -pow( ( d - front ) * 5.0, 2.0 ) );',
+        '      duv += ( rel / max( d, 1e-4 ) ) * g * a * 0.085;',
+        '      glint += g * a;',
+        '    }',
+        '  }',
+        '  vec2 uv = vUv.xy / vUv.w + duv;',
+        '  vec4 base = texture2D( tDiffuse, uv );',
+        '  vec3 col = blendOverlay( base.rgb, color );',
+        // subtle bright + dark banding along the wavefront so it reads head-on
+        '  col += vec3( 0.13 ) * min( 1.0, glint );',
+        '  gl_FragColor = vec4( col, 1.0 );',
+        '  #include <tonemapping_fragment>',
+        '  #include <encodings_fragment>',
+        '}',
+      ].join('\n'),
+    };
     mirrorMesh = new THREE.Reflector(new THREE.PlaneGeometry(mw, mh), {
       clipBias: 0.003,
       textureWidth: mirRes,
       textureHeight: mirRes,
       color: 0x9aa0a0,
+      shader: rippleShader,
     });
   } else {
     mirrorMesh = new THREE.Mesh(
@@ -3410,6 +3489,7 @@ function buildMirror() {
   scene.add(mirrorMesh);
   MIRROR_PX = wallX - 0.075;
   MIRROR_Z = mz;
+  MIRROR_W = mw; MIRROR_H = mh; MIRROR_Y = my;
 }
 
 /* ─── The mirror world ───
@@ -3423,7 +3503,6 @@ let worldRoot = null;
 let mirrorWorld = false;
 const _mirrorPush = { count: 0, last: 0 };
 let mirrorCross = null;            // active crossing animation
-const mirrorRipples = [];
 
 // One-time: gather the existing scene into a flippable root, then redirect
 // future scene.add/remove through it so dynamic objects (frames, decals,
@@ -3447,42 +3526,18 @@ function applyMirrorFlip(on) {
   mirrorWorld = on;
   worldRoot.scale.x = on ? -1 : 1;
   worldRoot.position.x = on ? 2 * MIRROR_PX : 0;
+  // The soundtrack runs backwards on the other side
+  setMirrorMusic(on);
 }
-// Expanding neon-white ripple rings on the mirror surface
-function spawnMirrorRipple(cy2, cz2, strength) {
-  // Soft splash flash at the touch point
-  const splash = new THREE.Mesh(
-    new THREE.CircleGeometry(0.16 + strength * 0.05, 32),
-    new THREE.MeshBasicMaterial({
-      color: 0xdfeeff, transparent: true, opacity: 0.5,
-      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
-    })
-  );
-  splash.rotation.y = -Math.PI / 2;
-  splash.position.set(MIRROR_PX - 0.02, cy2, cz2);
-  splash.userData = { age: 0, grow: 0.9, life: 0.35 };
-  scene.add(splash);
-  mirrorRipples.push(splash);
-  for (let i = 0; i < Math.min(4, 1 + strength); i++) {
-    const geo = new THREE.RingGeometry(0.07, 0.115, 40);
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xcfe6ff, transparent: true, opacity: 0.85,
-      side: THREE.DoubleSide, depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const ring = new THREE.Mesh(geo, mat);
-    ring.rotation.y = -Math.PI / 2;
-    // NOTE: spawned via scene.add — if the world is flipped it joins the root,
-    // so express position in UNFLIPPED coords (the mirror's own local frame).
-    ring.position.set(MIRROR_PX - 0.02, cy2, cz2);
-    ring.userData = {
-      age: -i * 0.09,                          // stagger successive rings
-      grow: 1.1 + strength * 0.55,
-      life: 0.75 + strength * 0.2,
-    };
-    scene.add(ring);
-    mirrorRipples.push(ring);
-  }
+// Shader ripples: each push warps the reflected image, radiating from the
+// touch point and reverberating off the frame (virtual mirrored sources in the
+// Reflector fragment shader). Entries are (u, v, t0 seconds, amplitude).
+const _shaderRipples = [];
+function spawnMirrorRipple(hitY, hitZ, strength) {
+  const u = Math.max(0.06, Math.min(0.94, (hitZ - (MIRROR_Z - MIRROR_W / 2)) / MIRROR_W));
+  const v = Math.max(0.06, Math.min(0.94, (hitY - (MIRROR_Y - MIRROR_H / 2)) / MIRROR_H));
+  _shaderRipples.push({ u, v, t0: performance.now() / 1000, amp: 0.5 + strength * 0.3 });
+  if (_shaderRipples.length > 8) _shaderRipples.shift();
 }
 function startMirrorCross() {
   if (mirrorCross) return;
@@ -3496,21 +3551,18 @@ function startMirrorCross() {
   };
 }
 function updateMirrorFX(now, dt) {
-  // Ripple rings
-  for (let i = mirrorRipples.length - 1; i >= 0; i--) {
-    const r = mirrorRipples[i];
-    r.userData.age += dt;
-    const a = r.userData.age;
-    if (a < 0) continue;
-    const f = a / r.userData.life;
-    if (f >= 1) {
-      scene.remove(r); r.geometry.dispose(); r.material.dispose();
-      mirrorRipples.splice(i, 1);
-      continue;
+  // Upload active ripples to the mirror shader
+  const tSec = now / 1000;
+  while (_shaderRipples.length && tSec - _shaderRipples[0].t0 > 3.0) _shaderRipples.shift();
+  if (mirrorMesh && mirrorMesh.material && mirrorMesh.material.uniforms && mirrorMesh.material.uniforms.uRipples) {
+    const U = mirrorMesh.material.uniforms;
+    U.uTime.value = tSec;
+    U.uCount.value = Math.min(8, _shaderRipples.length);
+    for (let i = 0; i < 8; i++) {
+      const r = _shaderRipples[i];
+      if (r) U.uRipples.value[i].set(r.u, r.v, r.t0, r.amp);
+      else U.uRipples.value[i].set(0, 0, -100, 0);
     }
-    const sc = 1 + f * r.userData.grow * 14;
-    r.scale.set(sc, sc, 1);
-    r.material.opacity = 0.85 * (1 - f) * (1 - f);
   }
   // Crossing sequence: push with effort, then squeeze through
   if (mirrorCross) {
@@ -7850,9 +7902,79 @@ function startBackgroundMusic() {
   });
 }
 
+/* ─── Mirror-world music: the ambient track plays BACKWARDS inside ───
+   The mp3 is decoded once into a WebAudio buffer, sample-reversed, and looped
+   through the shared AudioContext while the <audio> element is paused; leaving
+   the mirror stops the node and resumes the normal track. */
+const _musicReversed = { buffer: null, node: null, gain: null, loading: false };
+function setMirrorMusic(reversed) {
+  const audio = document.getElementById('bg-music');
+  if (!audio) return;
+  const muted = localStorage.getItem('musicMuted') === 'true';
+  if (reversed) {
+    const wasPlaying = !audio.paused;
+    audio.pause();
+    if (muted || (!wasPlaying && !_musicStarted)) return;
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    const start = () => {
+      if (!mirrorWorld || _musicReversed.node) return;   // left already / double-start
+      const src = ctx.createBufferSource();
+      src.buffer = _musicReversed.buffer;
+      src.loop = true;
+      const g = ctx.createGain();
+      g.gain.value = 0.35;
+      src.connect(g); g.connect(ctx.destination);
+      // begin at the mirrored position of where the forward track paused
+      const dur = _musicReversed.buffer.duration;
+      const off = ((dur - (audio.currentTime % dur)) % dur) || 0;
+      src.start(0, off);
+      _musicReversed.node = src;
+      _musicReversed.gain = g;
+    };
+    if (_musicReversed.buffer) { start(); return; }
+    if (_musicReversed.loading) return;
+    _musicReversed.loading = true;
+    fetch(audio.currentSrc || audio.getAttribute('src'))
+      .then(r => r.arrayBuffer())
+      .then(ab => new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej)))
+      .then(buf => {
+        const rev = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+        for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+          const a = buf.getChannelData(ch), b = rev.getChannelData(ch);
+          for (let i = 0, n = buf.length; i < n; i++) b[i] = a[n - 1 - i];
+        }
+        _musicReversed.buffer = rev;
+        _musicReversed.loading = false;
+        start();
+      })
+      .catch(() => { _musicReversed.loading = false; });
+  } else {
+    if (_musicReversed.node) {
+      try { _musicReversed.node.stop(); } catch (e) {}
+      _musicReversed.node = null;
+      _musicReversed.gain = null;
+    }
+    if (!muted && _musicStarted) audio.play().catch(() => {});
+  }
+}
+
 function toggleMusic() {
   const audio = document.getElementById('bg-music');
   if (!audio) return;
+  // Inside the mirror world the button toggles the REVERSED stream
+  if (mirrorWorld) {
+    const willMute = !!_musicReversed.node;
+    localStorage.setItem('musicMuted', willMute ? 'true' : 'false');
+    updateMusicButtonState(willMute);
+    if (willMute) {
+      try { _musicReversed.node.stop(); } catch (e) {}
+      _musicReversed.node = null;
+    } else {
+      setMirrorMusic(true);
+    }
+    return;
+  }
   const willMute = !audio.paused && audio.currentTime > 0
     ? true                          // currently playing → user wants to mute
     : false;                        // currently paused → user wants to unmute
