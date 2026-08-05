@@ -3249,27 +3249,27 @@ function makeLobbyTitleTexture() {
     ctx.textBaseline = 'middle';
     const cx = c.width / 2, cy = c.height / 2 - 50;
     ctx.font = '300 190px "Cormorant Garamond", Georgia, serif';
-    // Wide halo
-    ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 90;
-    ctx.strokeStyle = 'rgba(255,46,136,0.55)'; ctx.lineWidth = 10;
+    // Wide halo — blue with a violet hint
+    ctx.shadowColor = '#5f63ff'; ctx.shadowBlur = 90;
+    ctx.strokeStyle = 'rgba(95,99,255,0.55)'; ctx.lineWidth = 10;
     ctx.strokeText('C.BARNICKEL', cx, cy);
     ctx.strokeText('C.BARNICKEL', cx, cy);
     // Tight halo
     ctx.shadowBlur = 28;
-    ctx.strokeStyle = 'rgba(255,80,160,0.9)'; ctx.lineWidth = 7;
+    ctx.strokeStyle = 'rgba(133,120,255,0.9)'; ctx.lineWidth = 7;
     ctx.strokeText('C.BARNICKEL', cx, cy);
     // Hot tube core
-    ctx.shadowColor = '#ff8ec2'; ctx.shadowBlur = 10;
-    ctx.strokeStyle = '#fff0f7'; ctx.lineWidth = 3.5;
+    ctx.shadowColor = '#a99eff'; ctx.shadowBlur = 10;
+    ctx.strokeStyle = '#eef0ff'; ctx.lineWidth = 3.5;
     ctx.strokeText('C.BARNICKEL', cx, cy);
-    // Cyan "Artwork" tube script
+    // Pinkish-red "Artwork" tube script
     const sy = c.height / 2 + 115;
     ctx.font = 'italic 62px "Cormorant Garamond", Georgia, serif';
-    ctx.shadowColor = '#2fd4ff'; ctx.shadowBlur = 60;
-    ctx.strokeStyle = 'rgba(47,212,255,0.6)'; ctx.lineWidth = 6;
+    ctx.shadowColor = '#ff3b5c'; ctx.shadowBlur = 60;
+    ctx.strokeStyle = 'rgba(255,59,92,0.65)'; ctx.lineWidth = 6;
     ctx.strokeText('Artwork', cx, sy);
     ctx.shadowBlur = 16;
-    ctx.strokeStyle = '#e8fbff'; ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#ffe9ed'; ctx.lineWidth = 2.5;
     ctx.strokeText('Artwork', cx, sy);
     ctx.shadowBlur = 0;
     const tex = new THREE.CanvasTexture(c);
@@ -3378,6 +3378,8 @@ const lobbyPlants = [];   // { group, mesh references for show/hide }
 // landing view, which faces north). Uses THREE.Reflector for true planar
 // reflections; falls back to a polished-metal panel if the script didn't load.
 let mirrorMesh = null;
+let MIRROR_PX = 0;        // world x of the mirror plane (set in buildMirror)
+let MIRROR_Z = 0;
 function buildMirror() {
   const lobby = ROOMS.lobby;
   const wallX = lobby.cx + lobby.w / 2 - WALL_THICKNESS / 2;  // inner face of east wall
@@ -3405,6 +3407,148 @@ function buildMirror() {
   mirrorMesh.rotation.y = -Math.PI / 2;      // face west, into the lobby
   mirrorMesh.position.set(wallX - 0.075, my, mz);
   scene.add(mirrorMesh);
+  MIRROR_PX = wallX - 0.075;
+  MIRROR_Z = mz;
+}
+
+/* ─── The mirror world ───
+   Push the mirror once and it ripples. Keep pushing — with visible effort —
+   and the POV squeezes THROUGH into the inverse gallery: the whole world is
+   reparented under a root group reflected about the mirror plane, so everything
+   reads backwards (titles, labels, layout) while the mirror itself, reflecting
+   the reflected world, shows the CORRECT version. Push again from inside to
+   come back. */
+let worldRoot = null;
+let mirrorWorld = false;
+const _mirrorPush = { count: 0, last: 0 };
+let mirrorCross = null;            // active crossing animation
+const mirrorRipples = [];
+
+// One-time: gather the existing scene into a flippable root, then redirect
+// future scene.add/remove through it so dynamic objects (frames, decals,
+// ripples) stay coherent with the flip.
+function ensureWorldRoot() {
+  if (worldRoot) return;
+  worldRoot = new THREE.Group();
+  const kids = [...scene.children];
+  for (const k of kids) worldRoot.add(k);
+  const addRaw = THREE.Object3D.prototype.add.bind(scene);
+  const removeRaw = THREE.Object3D.prototype.remove.bind(scene);
+  addRaw(worldRoot);
+  scene.add = function (...objs) { for (const o of objs) worldRoot.add(o); return scene; };
+  scene.remove = function (...objs) {
+    for (const o of objs) { worldRoot.remove(o); removeRaw(o); }
+    return scene;
+  };
+}
+function applyMirrorFlip(on) {
+  ensureWorldRoot();
+  mirrorWorld = on;
+  worldRoot.scale.x = on ? -1 : 1;
+  worldRoot.position.x = on ? 2 * MIRROR_PX : 0;
+}
+// Expanding neon-white ripple rings on the mirror surface
+function spawnMirrorRipple(cy2, cz2, strength) {
+  const face = mirrorWorld ? 1 : -1;          // which side the viewer is on
+  for (let i = 0; i < Math.min(3, 1 + strength); i++) {
+    const geo = new THREE.RingGeometry(0.05, 0.085, 40);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xcfe6ff, transparent: true, opacity: 0.85,
+      side: THREE.DoubleSide, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const ring = new THREE.Mesh(geo, mat);
+    ring.rotation.y = -Math.PI / 2;
+    // NOTE: spawned via scene.add — if the world is flipped it joins the root,
+    // so express position in UNFLIPPED coords (the mirror's own local frame).
+    ring.position.set(MIRROR_PX + (mirrorWorld ? -0.012 : 0.012) * 1, cy2, cz2);
+    ring.userData = {
+      age: -i * 0.09,                          // stagger successive rings
+      grow: 1.1 + strength * 0.55,
+      life: 0.75 + strength * 0.2,
+    };
+    scene.add(ring);
+    mirrorRipples.push(ring);
+  }
+}
+function startMirrorCross() {
+  if (mirrorCross) return;
+  tapWalkTarget = null;
+  snapTween = null;
+  const side = (camera.position.x < MIRROR_PX) ? -1 : 1;   // which side we start on
+  mirrorCross = {
+    start: performance.now(), dur: 1250, crossed: false, lastRipple: 0,
+    fromX: camera.position.x,
+    toX: MIRROR_PX - side * 0.42,                          // push through to the far side
+  };
+}
+function updateMirrorFX(now, dt) {
+  // Ripple rings
+  for (let i = mirrorRipples.length - 1; i >= 0; i--) {
+    const r = mirrorRipples[i];
+    r.userData.age += dt;
+    const a = r.userData.age;
+    if (a < 0) continue;
+    const f = a / r.userData.life;
+    if (f >= 1) {
+      scene.remove(r); r.geometry.dispose(); r.material.dispose();
+      mirrorRipples.splice(i, 1);
+      continue;
+    }
+    const sc = 1 + f * r.userData.grow * 14;
+    r.scale.set(sc, sc, 1);
+    r.material.opacity = 0.85 * (1 - f) * (1 - f);
+  }
+  // Crossing sequence: push with effort, then squeeze through
+  if (mirrorCross) {
+    const t = Math.min(1, (now - mirrorCross.start) / mirrorCross.dur);
+    // periodic heave-ripples while forcing through
+    if (now - mirrorCross.lastRipple > 210) {
+      mirrorCross.lastRipple = now;
+      spawnMirrorRipple(camera.position.y, camera.position.z, 2.4);
+    }
+    const from = mirrorCross.fromX, to = mirrorCross.toX;
+    // Effort curve: two strained shoves (setbacks) before it gives way
+    const eff = t - 0.13 * Math.sin(t * Math.PI * 3) * (1 - t);
+    if (!mirrorCross.crossed && t >= 0.66) {
+      mirrorCross.crossed = true;
+      applyMirrorFlip(!mirrorWorld);           // the world inverts around you
+      spawnMirrorRipple(camera.position.y, camera.position.z, 3.2);
+    }
+    camera.position.x = from + (to - from) * eff;
+    // strain shake
+    yaw += Math.sin(now * 0.09) * 0.0022 * (1 - t);
+    if (t >= 1) mirrorCross = null;
+    return true;                                // camera is owned by the sequence
+  }
+  return false;
+}
+function handleMirrorPush(hitPoint) {
+  if (mirrorCross) return;
+  const dx = camera.position.x - MIRROR_PX;
+  const dist = Math.abs(dx);
+  if (dist > 2.3 || Math.abs(camera.position.z - MIRROR_Z) > 1.7) {
+    // Too far to touch — walk to the mirror first
+    const c = clampToRooms(MIRROR_PX + (mirrorWorld ? 1.4 : -1.4), MIRROR_Z);
+    tapWalkTarget = { x: c.x, z: c.z, faceX: MIRROR_PX, faceZ: MIRROR_Z };
+    return;
+  }
+  const now = performance.now();
+  if (now - _mirrorPush.last > 2600) _mirrorPush.count = 0;
+  _mirrorPush.last = now;
+  _mirrorPush.count++;
+  // express ripple centre in unflipped coords
+  const ry = hitPoint ? hitPoint.y : camera.position.y;
+  const rz = hitPoint ? (mirrorWorld ? hitPoint.z : hitPoint.z) : MIRROR_Z;
+  spawnMirrorRipple(ry, rz, _mirrorPush.count);
+  // a little force feedback: the glass pushes back
+  const back = 0.06 * _mirrorPush.count;
+  camera.position.x += (dx > 0 ? 1 : -1) * back;
+  const need = mirrorWorld ? 2 : 3;            // easier to come home
+  if (_mirrorPush.count >= need) {
+    _mirrorPush.count = 0;
+    startMirrorCross();
+  }
 }
 
 function buildLobbyPlants() {
@@ -5651,6 +5795,15 @@ function handleTap(clientX, clientY) {
     }
   }
 
+  // The mirror — pushable
+  if (mirrorMesh) {
+    const mHits = raycaster.intersectObject(mirrorMesh, false);
+    if (mHits.length > 0) {
+      handleMirrorPush(mHits[0].point);
+      return;
+    }
+  }
+
   const paintingHits = raycaster.intersectObjects(paintingMeshes, false);
 
   if (navMode === 'classic') {
@@ -5661,6 +5814,21 @@ function handleTap(clientX, clientY) {
 
   if (paintingHits.length > 0) {
     const p = paintingHits[0].object;
+    if (mirrorWorld) {
+      // Inside the mirror: approach/open using WORLD coords (positions are
+      // local to the flipped root); skip the facing/tour machinery.
+      const wp = new THREE.Vector3();
+      p.getWorldPosition(wp);
+      const wd = Math.hypot(wp.x - camera.position.x, wp.z - camera.position.z);
+      if (wd < computeSnapBackDistance(p) + 0.6) { openModal(p.userData.artIndex); return; }
+      const step = Math.min(wd, TAP_STEP_DISTANCE);
+      const c = clampToRooms(
+        camera.position.x + ((wp.x - camera.position.x) / wd) * step,
+        camera.position.z + ((wp.z - camera.position.z) / wd) * step
+      );
+      tapWalkTarget = { x: c.x, z: c.z };
+      return;
+    }
     const dist = Math.hypot(p.position.x - camera.position.x, p.position.z - camera.position.z);
     // The "already at viewing position" threshold depends on this painting's
     // own snap distance (bigger paintings stand back further). If we're at
@@ -5739,6 +5907,7 @@ function travelToPainting(p) {
 // Go to the painting physically to the viewer's LEFT or RIGHT along the wall.
 // dir: +1 = right (›), -1 = left (‹). Falls through to other walls, then wraps.
 function gotoAdjacentPainting(dir) {
+  if (mirrorWorld) return;        // tour travel is disabled inside the mirror
   if (paintingMeshes.length === 0) return;
   const cur = (focusedArtIndex != null) ? paintingByArtIndex(focusedArtIndex) : null;
   if (!cur || !cur.userData.outwardNormal) { travelToPainting(nearestPainting()); return; }
@@ -5910,6 +6079,15 @@ function noteUserInput() {
 
 /* ─── Room/painting collision: clamp position to within rooms, blocking walls ─── */
 function clampToRooms(x, z) {
+  // In the mirror world every room is reflected about the mirror plane, so
+  // clamp in unflipped coordinates and reflect the result back.
+  if (mirrorWorld) {
+    const c = _clampToRoomsRaw(2 * MIRROR_PX - x, z);
+    return { x: 2 * MIRROR_PX - c.x, z: c.z, roomId: c.roomId };
+  }
+  return _clampToRoomsRaw(x, z);
+}
+function _clampToRoomsRaw(x, z) {
   const buf = PLAYER_BUFFER;
   // Find which room (or arch lane) the target point is in
   let inRoom = null;
@@ -5969,6 +6147,7 @@ function clampToRooms(x, z) {
 
 /* ─── Magnetic painting snap ─── */
 function findSnapCandidate() {
+  if (mirrorWorld) return null;   // positions are local-space; snap is disabled inside the mirror
   // Find painting nearest in the camera's forward cone, within trigger distance
   const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   let best = null, bestScore = Infinity;
@@ -6185,7 +6364,7 @@ function setNeonTitle(on) {
 // Glowing tube palms: pot in cyan, arcing leaves in green/pink neon, drawn with
 // the same layered-glow technique as the sign. Each plant is two crossed planes
 // so it reads from every angle.
-function makeNeonPlantTexture(leafColor, accentColor) {
+function makeNeonPlantTexture(kind, leafColor, accentColor) {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 512;
   const ctx = c.getContext('2d');
@@ -6206,21 +6385,58 @@ function makeNeonPlantTexture(leafColor, accentColor) {
     ctx.closePath();
   }, accentColor, 7);
   tube(() => { ctx.moveTo(80, 418); ctx.lineTo(176, 418); }, accentColor, 7);
-  // Stem
-  tube(() => { ctx.moveTo(128, 418); ctx.quadraticCurveTo(124, 330, 128, 260); }, leafColor, 7);
-  // Arcing palm leaves from the stem top
-  const top = { x: 128, y: 262 };
-  const leaves = [
-    [-100, -90, -170, -40], [100, -90, 170, -40],
-    [-70, -120, -130, -120], [70, -120, 130, -120],
-    [-30, -140, -50, -190], [30, -140, 50, -190],
-    [0, -150, 0, -210],
-  ];
-  for (const [c1x, c1y, ex, ey] of leaves) {
-    tube(() => {
-      ctx.moveTo(top.x, top.y);
-      ctx.quadraticCurveTo(top.x + c1x, top.y + c1y, top.x + ex, top.y + ey);
-    }, leafColor, 6);
+  if (kind === 'cactus') {
+    // Saguaro: trunk + two arms, with spine ticks
+    tube(() => { ctx.moveTo(128, 418); ctx.lineTo(128, 140); ctx.arc(128, 128, 12, Math.PI, 0, false); }, leafColor, 12);
+    tube(() => { ctx.moveTo(128, 320); ctx.quadraticCurveTo(70, 318, 68, 260); ctx.lineTo(68, 210); }, leafColor, 10);
+    tube(() => { ctx.moveTo(128, 270); ctx.quadraticCurveTo(186, 268, 188, 220); ctx.lineTo(188, 178); }, leafColor, 10);
+    for (let i = 0; i < 9; i++) {
+      const y = 170 + i * 26;
+      tube(() => { ctx.moveTo(112, y); ctx.lineTo(104, y - 7); }, accentColor, 2.5);
+      tube(() => { ctx.moveTo(144, y + 12); ctx.lineTo(152, y + 5); }, accentColor, 2.5);
+    }
+  } else if (kind === 'monstera') {
+    // Broad split leaves on arcing stems
+    const stems = [ [-58, -120, -96, -170], [52, -110, 96, -160], [-16, -140, -30, -220], [30, -150, 44, -232] ];
+    for (const [c1x, c1y, ex, ey] of stems) {
+      tube(() => { ctx.moveTo(128, 418); ctx.quadraticCurveTo(128 + c1x, 300 + c1y, 128 + ex, 300 + ey); }, accentColor, 4);
+      const lx = 128 + ex, ly = 300 + ey;
+      // heart-shaped leaf outline with two side notches
+      tube(() => {
+        ctx.moveTo(lx, ly + 26);
+        ctx.bezierCurveTo(lx - 40, ly + 18, lx - 40, ly - 26, lx, ly - 30);
+        ctx.bezierCurveTo(lx + 40, ly - 26, lx + 40, ly + 18, lx, ly + 26);
+      }, leafColor, 5);
+      tube(() => { ctx.moveTo(lx - 30, ly - 6); ctx.lineTo(lx - 10, ly - 2); }, leafColor, 3);
+      tube(() => { ctx.moveTo(lx + 30, ly + 6); ctx.lineTo(lx + 10, ly + 2); }, leafColor, 3);
+    }
+  } else if (kind === 'fern') {
+    // Many fine arcs sweeping from the crown, alternating sides
+    tube(() => { ctx.moveTo(128, 418); ctx.lineTo(128, 360); }, accentColor, 5);
+    for (let i = 0; i < 11; i++) {
+      const a = -Math.PI * 0.5 + (i - 5) * 0.24;
+      const ex = 128 + Math.sin(a) * 150, ey = 350 + Math.cos(a) * -180 - 40;
+      tube(() => {
+        ctx.moveTo(128, 358);
+        ctx.quadraticCurveTo(128 + Math.sin(a) * 40, 300, ex, ey);
+      }, leafColor, 3.5);
+    }
+  } else {
+    // Palm (default): stem + arcing fronds
+    tube(() => { ctx.moveTo(128, 418); ctx.quadraticCurveTo(124, 330, 128, 260); }, leafColor, 7);
+    const top = { x: 128, y: 262 };
+    const leaves = [
+      [-100, -90, -170, -40], [100, -90, 170, -40],
+      [-70, -120, -130, -120], [70, -120, 130, -120],
+      [-30, -140, -50, -190], [30, -140, 50, -190],
+      [0, -150, 0, -210],
+    ];
+    for (const [c1x, c1y, ex, ey] of leaves) {
+      tube(() => {
+        ctx.moveTo(top.x, top.y);
+        ctx.quadraticCurveTo(top.x + c1x, top.y + c1y, top.x + ex, top.y + ey);
+      }, leafColor, 6);
+    }
   }
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
@@ -6231,13 +6447,13 @@ const neonPlantMeshes = [];
 function syncNeonPlants() {
   if (neonPlants && neonPlantMeshes.length === 0 && scene) {
     const spots = [
-      { x: -7.8, z: -4.6, leaf: '#39ff8c', acc: '#2fd4ff' },   // NW: green/cyan
-      { x: +7.8, z: -4.6, leaf: '#ff2e88', acc: '#2fd4ff' },   // NE: pink/cyan
-      { x: -7.8, z: +4.6, leaf: '#ff2e88', acc: '#ffe94d' },   // SW: pink/yellow
-      { x: +7.8, z: +4.6, leaf: '#39ff8c', acc: '#ff2e88' },   // SE: green/pink
+      { x: -7.8, z: -4.6, kind: 'palm',     leaf: '#39ff8c', acc: '#2fd4ff' },  // NW
+      { x: +7.8, z: -4.6, kind: 'monstera', leaf: '#ff2e88', acc: '#2fd4ff' },  // NE
+      { x: -7.8, z: +4.6, kind: 'fern',     leaf: '#2fd4ff', acc: '#ffe94d' },  // SW
+      { x: +7.8, z: +4.6, kind: 'cactus',   leaf: '#39ff8c', acc: '#ff2e88' },  // SE
     ];
     for (const s of spots) {
-      const tex = makeNeonPlantTexture(s.leaf, s.acc);
+      const tex = makeNeonPlantTexture(s.kind, s.leaf, s.acc);
       const mat = new THREE.MeshBasicMaterial({
         map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false,
       });
@@ -7630,6 +7846,9 @@ function animate() {
 
   if (intro.active) {
     updateIntro(now);
+  } else if (mirrorCross) {
+    // The crossing sequence owns the camera (handled in updateMirrorFX below)
+    timeSinceInput = 0;
   } else if (snapTween) {
     updateSnap(now);
     timeSinceInput += dt;
@@ -7689,6 +7908,8 @@ function animate() {
 
   // Neon sign flicker (no-op unless the toggle is on)
   updateNeonFlicker(now);
+  // Mirror ripples + push-through sequence
+  updateMirrorFX(now, dt);
 
   renderer.render(scene, camera);
 }
