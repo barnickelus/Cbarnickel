@@ -1227,6 +1227,10 @@ body { overscroll-behavior: none; }
     <label style="margin-bottom: 0; flex: 1;">Neon sign</label>
     <div class="toggle-switch" id="neon-toggle"></div>
   </div>
+  <div class="row" style="display: flex; justify-content: space-between; align-items: center;">
+    <label style="margin-bottom: 0; flex: 1;">Neon plants</label>
+    <div class="toggle-switch" id="neon-plants-toggle"></div>
+  </div>
   <div class="row divider">
     <label>Navigation</label>
     <div class="nav-grid">
@@ -1436,6 +1440,8 @@ body { overscroll-behavior: none; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <!-- GLTFLoader for the Victorian mesh frame (cdnjs lacks the r128 loaders dir, unpkg has it) -->
 <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<!-- Reflector for the lobby wall mirror (real planar reflections) -->
+<script src="https://unpkg.com/three@0.128.0/examples/js/objects/Reflector.js"></script>
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
@@ -1491,6 +1497,7 @@ const DEFAULT_SETTINGS = {
   theme: 'spotlight',
   lighting: 1.0,
   neonTitle: false,
+  neonPlants: false,
   frameStyle: 'ornate',
   frameColor: 'bronze',
   framePerPainting: {
@@ -1531,6 +1538,10 @@ lightingMul = parseFloat(localStorage.getItem('lighting')) || DEFAULT_SETTINGS.l
 let neonTitle = (localStorage.getItem('neonTitle') != null)
   ? localStorage.getItem('neonTitle') === '1'
   : !!DEFAULT_SETTINGS.neonTitle;
+// Neon plants (glowing tube palms in the lobby corners)
+let neonPlants = (localStorage.getItem('neonPlants') != null)
+  ? localStorage.getItem('neonPlants') === '1'
+  : !!DEFAULT_SETTINGS.neonPlants;
 // Frame settings — persisted to localStorage. Style: minimal | ornate | gothic.
 // Color: auto (theme-aware) | black | white | gilt.
 const frameSettings = {
@@ -3362,6 +3373,40 @@ function makePlaqueTexture(label, sub) {
    only in dark mode (per IMG_8312 vibe — Victorian-warm gallery with houseplants).
    Each plant is a planter pot + a few crossed leaf planes that catch light. */
 const lobbyPlants = [];   // { group, mesh references for show/hide }
+/* ─── Lobby wall mirror ─── */
+// A tall framed mirror on the lobby's EAST wall (to the right of the intro
+// landing view, which faces north). Uses THREE.Reflector for true planar
+// reflections; falls back to a polished-metal panel if the script didn't load.
+let mirrorMesh = null;
+function buildMirror() {
+  const lobby = ROOMS.lobby;
+  const wallX = lobby.cx + lobby.w / 2 - WALL_THICKNESS / 2;  // inner face of east wall
+  const mz = 2.8, my = 1.75;                                   // beside the spawn, eye-ish height
+  const mw = 1.5, mh = 2.3;
+  // Frame — a simple dark surround, proud of the wall
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2b2723, roughness: 0.55, metalness: 0.25 });
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.07, mh + 0.24, mw + 0.24), frameMat);
+  frame.position.set(wallX - 0.035, my, mz);
+  scene.add(frame);
+  // Glass
+  if (typeof THREE.Reflector !== 'undefined') {
+    mirrorMesh = new THREE.Reflector(new THREE.PlaneGeometry(mw, mh), {
+      clipBias: 0.003,
+      textureWidth: 1024,
+      textureHeight: 1024,
+      color: 0x9aa0a0,
+    });
+  } else {
+    mirrorMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(mw, mh),
+      new THREE.MeshStandardMaterial({ color: 0xc8cdd0, metalness: 1.0, roughness: 0.05 })
+    );
+  }
+  mirrorMesh.rotation.y = -Math.PI / 2;      // face west, into the lobby
+  mirrorMesh.position.set(wallX - 0.075, my, mz);
+  scene.add(mirrorMesh);
+}
+
 function buildLobbyPlants() {
   const lobby = ROOMS.lobby;
   // Plant positions — set in from each corner so they don't block sightlines
@@ -3643,25 +3688,70 @@ function _ribArch(spanFrom, spanTo, fixed, alongX, apexY, rise) {
   const curve = new THREE.CatmullRomCurve3(pts);
   return new THREE.TubeGeometry(curve, 48, 0.055, 8, false);
 }
+let _duomoCorniceMat = null;
 function syncDuomoVaultRibs() {
   if (theme === 'duomo' && duomoVaultRibs.length === 0 && scene) {
     if (!_duomoRibMat) {
       _duomoRibMat = new THREE.MeshStandardMaterial({ color: 0x6e685c, roughness: 0.92, metalness: 0.0 });
+      _duomoCorniceMat = new THREE.MeshStandardMaterial({ color: 0x7b7568, roughness: 0.88, metalness: 0.0 });
     }
+    const add = (mesh) => { scene.add(mesh); duomoVaultRibs.push(mesh); };
     for (const id of Object.keys(ROOMS)) {
       const r = ROOMS[id];
       const rise = Math.min(1.05, r.h * 0.16);
       const apex = r.h - 0.02;
-      // Transverse arches across the width, one per ~4m of depth (interior only)
-      const nT = Math.max(1, Math.round(r.d / 4) - 0);
+      const springY = apex - rise;                     // where the rib lands
+      // ── Cornice — a two-step stone entablature ringing the room where the
+      // ashlar courses hand off to the vault, so wall→ceiling reads as one
+      // built structure instead of a hard 90° seam.
+      const cH = 0.26, cD = 0.13;                      // main crown band
+      const bH = 0.09, bD = 0.07;                      // slimmer bed mould below
+      const bandY = r.h - cH / 2, bedY = r.h - cH - bH / 2 - 0.02;
+      // north & south walls (run along x)
+      for (const sz of [-1, 1]) {
+        const z = r.cz + sz * (r.d / 2 - cD / 2 - 0.02);
+        let m = new THREE.Mesh(new THREE.BoxGeometry(r.w, cH, cD), _duomoCorniceMat);
+        m.position.set(r.cx, bandY, z); add(m);
+        m = new THREE.Mesh(new THREE.BoxGeometry(r.w, bH, bD), _duomoCorniceMat);
+        m.position.set(r.cx, bedY, r.cz + sz * (r.d / 2 - bD / 2 - 0.02)); add(m);
+      }
+      // east & west walls (run along z)
+      for (const sx of [-1, 1]) {
+        const x = r.cx + sx * (r.w / 2 - cD / 2 - 0.02);
+        let m = new THREE.Mesh(new THREE.BoxGeometry(cD, cH, r.d), _duomoCorniceMat);
+        m.position.set(x, bandY, r.cz); add(m);
+        m = new THREE.Mesh(new THREE.BoxGeometry(bD, bH, r.d), _duomoCorniceMat);
+        m.position.set(r.cx + sx * (r.w / 2 - bD / 2 - 0.02), bedY, r.cz); add(m);
+      }
+      // ── Transverse arches across the width, one per ~4m of depth, each
+      // landing on a carved corbel with a respond shaft carrying the line of
+      // the rib down the ashlar — the eloquent merge from vault to brick.
+      const nT = Math.max(1, Math.round(r.d / 4));
       for (let i = 1; i <= nT; i++) {
         const z = r.cz - r.d / 2 + (i / (nT + 1)) * r.d;
-        const m = new THREE.Mesh(_ribArch(r.cx - r.w / 2, r.cx + r.w / 2, z, true, apex, rise), _duomoRibMat);
-        scene.add(m); duomoVaultRibs.push(m);
+        add(new THREE.Mesh(_ribArch(r.cx - r.w / 2, r.cx + r.w / 2, z, true, apex, rise), _duomoRibMat));
+        for (const sx of [-1, 1]) {
+          const x = r.cx + sx * (r.w / 2 - 0.09);
+          // corbel: tapered six-sided cone under the springing point
+          const corbel = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.035, 0.30, 6), _duomoRibMat);
+          corbel.position.set(x, springY - 0.13, z);
+          add(corbel);
+          // respond shaft: slim engaged column from the corbel down the wall
+          const shaftTop = springY - 0.28, shaftBot = 3.15;
+          if (shaftTop > shaftBot + 0.2) {
+            const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.09, shaftTop - shaftBot, 0.09), _duomoCorniceMat);
+            shaft.position.set(r.cx + sx * (r.w / 2 - 0.045), (shaftTop + shaftBot) / 2, z);
+            add(shaft);
+            // shaft base cap
+            const cap = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.07, 0.14), _duomoRibMat);
+            cap.position.set(r.cx + sx * (r.w / 2 - 0.07), shaftBot - 0.035, z);
+            add(cap);
+          }
+        }
       }
-      // Longitudinal ridge rib down the room's centre
-      const m2 = new THREE.Mesh(_ribArch(r.cz - r.d / 2, r.cz + r.d / 2, r.cx, false, apex, rise * 0.6), _duomoRibMat);
-      scene.add(m2); duomoVaultRibs.push(m2);
+      // Longitudinal ridge rib down the room's centre (no corbels — its ends
+      // meet the cornice above archways/title walls)
+      add(new THREE.Mesh(_ribArch(r.cz - r.d / 2, r.cz + r.d / 2, r.cx, false, apex, rise * 0.6), _duomoRibMat));
     }
   } else if (theme !== 'duomo' && duomoVaultRibs.length > 0) {
     for (const m of duomoVaultRibs) { scene.remove(m); m.geometry.dispose(); }
@@ -5717,6 +5807,7 @@ function currentSettingsObject() {
     theme: theme,
     lighting: Math.round(lightingMul * 100) / 100,
     neonTitle: neonTitle,
+    neonPlants: neonPlants,
     frameStyle: frameSettings.style,
     frameColor: frameSettings.color,
     framePerPainting: framePerPainting,
@@ -5754,7 +5845,7 @@ function downloadSettingsExport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function resetToDefaults() {
-  ['theme', 'lighting', 'neonTitle', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
+  ['theme', 'lighting', 'neonTitle', 'neonPlants', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
     try { localStorage.removeItem(k); } catch (e) {}
   });
   location.reload();
@@ -5764,6 +5855,8 @@ function syncSettingsUI() {
   document.querySelectorAll('.nav-btn[data-theme]').forEach(b => b.classList.toggle('active', b.dataset.theme === theme));
   const neonTg = document.getElementById('neon-toggle');
   if (neonTg) neonTg.classList.toggle('on', neonTitle);
+  const plantTg = document.getElementById('neon-plants-toggle');
+  if (plantTg) plantTg.classList.toggle('on', neonPlants);
   document.querySelectorAll('.nav-btn[data-frame-style]').forEach(b => b.classList.toggle('active', b.dataset.frameStyle === frameSettings.style));
   document.querySelectorAll('.nav-btn[data-frame-color]').forEach(b => b.classList.toggle('active', b.dataset.frameColor === frameSettings.color));
   const ls = document.getElementById('lighting-slider');
@@ -6088,6 +6181,98 @@ function setNeonTitle(on) {
     lobbyTitleMesh.material.needsUpdate = true;
   }
 }
+/* ─── Neon plants ─── */
+// Glowing tube palms: pot in cyan, arcing leaves in green/pink neon, drawn with
+// the same layered-glow technique as the sign. Each plant is two crossed planes
+// so it reads from every angle.
+function makeNeonPlantTexture(leafColor, accentColor) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 256, 512);
+  ctx.lineCap = 'round';
+  function tube(pathFn, color, w) {
+    ctx.shadowColor = color; ctx.shadowBlur = 26;
+    ctx.strokeStyle = color; ctx.globalAlpha = 0.55; ctx.lineWidth = w + 5;
+    ctx.beginPath(); pathFn(); ctx.stroke();
+    ctx.shadowBlur = 10; ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(1.6, w * 0.4);
+    ctx.beginPath(); pathFn(); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  // Pot (trapezoid) + rim in the accent colour
+  tube(() => {
+    ctx.moveTo(88, 420); ctx.lineTo(168, 420); ctx.lineTo(158, 490); ctx.lineTo(98, 490);
+    ctx.closePath();
+  }, accentColor, 7);
+  tube(() => { ctx.moveTo(80, 418); ctx.lineTo(176, 418); }, accentColor, 7);
+  // Stem
+  tube(() => { ctx.moveTo(128, 418); ctx.quadraticCurveTo(124, 330, 128, 260); }, leafColor, 7);
+  // Arcing palm leaves from the stem top
+  const top = { x: 128, y: 262 };
+  const leaves = [
+    [-100, -90, -170, -40], [100, -90, 170, -40],
+    [-70, -120, -130, -120], [70, -120, 130, -120],
+    [-30, -140, -50, -190], [30, -140, 50, -190],
+    [0, -150, 0, -210],
+  ];
+  for (const [c1x, c1y, ex, ey] of leaves) {
+    tube(() => {
+      ctx.moveTo(top.x, top.y);
+      ctx.quadraticCurveTo(top.x + c1x, top.y + c1y, top.x + ex, top.y + ey);
+    }, leafColor, 6);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  tex.anisotropy = 4;
+  return tex;
+}
+const neonPlantMeshes = [];
+function syncNeonPlants() {
+  if (neonPlants && neonPlantMeshes.length === 0 && scene) {
+    const spots = [
+      { x: -7.8, z: -4.6, leaf: '#39ff8c', acc: '#2fd4ff' },   // NW: green/cyan
+      { x: +7.8, z: -4.6, leaf: '#ff2e88', acc: '#2fd4ff' },   // NE: pink/cyan
+      { x: -7.8, z: +4.6, leaf: '#ff2e88', acc: '#ffe94d' },   // SW: pink/yellow
+      { x: +7.8, z: +4.6, leaf: '#39ff8c', acc: '#ff2e88' },   // SE: green/pink
+    ];
+    for (const s of spots) {
+      const tex = makeNeonPlantTexture(s.leaf, s.acc);
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false,
+      });
+      const g = new THREE.Group();
+      for (const ry of [0, Math.PI / 2]) {
+        const p = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 2.3), mat);
+        p.rotation.y = ry;
+        g.add(p);
+      }
+      g.position.set(s.x, 1.15, s.z);
+      g.rotation.y = Math.random() * Math.PI;
+      scene.add(g);
+      neonPlantMeshes.push(g);
+    }
+  } else if (!neonPlants && neonPlantMeshes.length > 0) {
+    for (const g of neonPlantMeshes) {
+      scene.remove(g);
+      g.children.forEach(ch => { ch.geometry.dispose(); });
+      if (g.children[0]) {
+        const m = g.children[0].material;
+        if (m.map) m.map.dispose();
+        m.dispose();
+      }
+    }
+    neonPlantMeshes.length = 0;
+  }
+}
+function setNeonPlants(on) {
+  neonPlants = !!on;
+  try { localStorage.setItem('neonPlants', neonPlants ? '1' : '0'); } catch (e) {}
+  const tg = document.getElementById('neon-plants-toggle');
+  if (tg) tg.classList.toggle('on', neonPlants);
+  syncNeonPlants();
+}
+
 // Flicker: a constant soft tube hum plus occasional dropout bursts (sometimes a
 // double-blink), like a sign with a tired transformer.
 const _neon = { level: 1, until: 0, next: 1200 };
@@ -7202,6 +7387,8 @@ function wireUI() {
   // Neon sign toggle
   const neonTg = document.getElementById('neon-toggle');
   if (neonTg) neonTg.addEventListener('click', () => setNeonTitle(!neonTitle));
+  const plantTg = document.getElementById('neon-plants-toggle');
+  if (plantTg) plantTg.addEventListener('click', () => setNeonPlants(!neonPlants));
 
   // Nav mode buttons — only those with data-nav (other .nav-btn elements
   // are repurposed for frame style + color)
@@ -7525,6 +7712,8 @@ async function boot() {
   initScene();
   buildGallery();
   syncDuomoVaultRibs();   // saved theme may be Duomo on first load
+  syncNeonPlants();       // saved neon-plants preference
+  buildMirror();
   placeAllPaintings();
   markPaintingWallsPlain();
   buildIndex();
