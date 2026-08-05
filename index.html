@@ -3392,10 +3392,11 @@ function buildMirror() {
   scene.add(frame);
   // Glass
   if (typeof THREE.Reflector !== 'undefined') {
+    const mirRes = (typeof hasTouch !== 'undefined' && hasTouch) ? 512 : 1024;
     mirrorMesh = new THREE.Reflector(new THREE.PlaneGeometry(mw, mh), {
       clipBias: 0.003,
-      textureWidth: 1024,
-      textureHeight: 1024,
+      textureWidth: mirRes,
+      textureHeight: mirRes,
       color: 0x9aa0a0,
     });
   } else {
@@ -3546,7 +3547,7 @@ function handleMirrorPush(hitPoint) {
     return;
   }
   const now = performance.now();
-  if (now - _mirrorPush.last > 4000) _mirrorPush.count = 0;
+  if (now - _mirrorPush.last > 6000) _mirrorPush.count = 0;
   _mirrorPush.last = now;
   _mirrorPush.count++;
   // express ripple centre in unflipped coords
@@ -5728,7 +5729,18 @@ function onTouchEnd(e) {
   }
   for (const t of e.changedTouches) {
     if (touchLook && t.identifier === touchLook.id) {
-      if (touchLook.moved < 10) handleTap(t.clientX, t.clientY);
+      if (touchLook.moved < 10) {
+        handleTap(t.clientX, t.clientY);
+      } else if (touchLook.moved < 46 && mirrorMesh) {
+        // A firm "push" on the glass often rolls the finger past the tap
+        // threshold — if it still lands on the mirror, treat it as a push.
+        const nx = (t.clientX / window.innerWidth) * 2 - 1;
+        const ny = -(t.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera({ x: nx, y: ny }, camera);
+        if (raycaster.intersectObject(mirrorMesh, false).length > 0) {
+          handleMirrorPush(raycaster.intersectObject(mirrorMesh, false)[0].point);
+        }
+      }
       touchLook = null;
     }
   }
