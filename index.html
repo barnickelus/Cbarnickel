@@ -8360,6 +8360,20 @@ async function boot() {
         pitch = 0;
         camera.rotation.set(0, yaw, 0);
         flashCustomHint('back through the paint…', 2600);
+        // Backwards music should be playing on this side. A fresh page load has
+        // no gesture, so try immediately (works where the origin is trusted)
+        // and rearm on the first gesture for strict autoplay policies (iOS).
+        preloadReversedMusic();
+        const kickReverse = () => {
+          if (!mirrorWorld) return;
+          ensureAudio();
+          if (!_musicReversed.node && localStorage.getItem('musicMuted') !== 'true') {
+            setMirrorMusic(true);
+          }
+        };
+        kickReverse();
+        ['pointerdown', 'touchstart', 'keydown'].forEach(ev =>
+          addEventListener(ev, kickReverse, { passive: true }));
         // One-shot: drop the ?return flag so a later refresh boots normally
         try { history.replaceState(null, '', location.pathname); } catch (e) {}
       }, 250);
