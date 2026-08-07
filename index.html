@@ -3075,98 +3075,73 @@ function makeDuomoFloorTexture() {
   return tex;
 }
 
-// Ashlar stone wall for the Duomo — one full wall height per tile (v repeat 1).
-// Graded composition per the reference: a dentil course + tight small blocks
-// under the cornice, plain standard ashlar through the middle, a carved
-// running-scroll frieze near the base, and heavy plinth blocks at the bottom.
-// Canvas top = wall top (CanvasTexture flipY).
+// Ashlar stone wall for the Duomo — irregular coursed masonry, per the
+// cathedral stonework reference: course HEIGHTS vary (thin bands against tall
+// blocks), block WIDTHS vary within each course, and some courses split into
+// two half-height rows for a stretch. One colour family throughout — no bands,
+// no ornament — so nothing reads as decoration over doorways. Full wall height
+// per tile (v repeat 1) so the coursing never visibly repeats vertically.
 function makeStoneWallTexture() {
   const W = 512, H = 1024;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
-  function blockRow(y, h, cols, offset, toneBase, toneVar, jitterW) {
-    const bw = W / cols;
-    for (let b = -1; b < cols + 1; b++) {
-      const jw = (Math.random() - 0.5) * bw * jitterW;
-      const x = b * bw + offset + jw;
-      const tone = toneBase + Math.random() * toneVar;
-      ctx.fillStyle = `rgb(${tone + 6}, ${tone + 2}, ${tone - 6})`;
-      ctx.fillRect(x, y, bw, h);
-      ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, y + h - 3, bw, 3);
-      ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, bw, 2.5);
-      for (let i = 0; i < 6; i++) {
-        const mx = x + Math.random() * bw, my = y + Math.random() * h, mr = 3 + Math.random() * 12;
-        const g = ctx.createRadialGradient(mx, my, 0, mx, my, mr);
-        const dk = Math.random() > 0.5;
-        g.addColorStop(0, dk ? 'rgba(40,36,30,0.07)' : 'rgba(230,225,210,0.06)');
-        g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g; ctx.fillRect(x, y, bw, h);
+  ctx.fillStyle = '#787264';
+  ctx.fillRect(0, 0, W, H);
+  function drawBlock(x, y, bw, bh) {
+    const tone = 112 + Math.random() * 30;
+    ctx.fillStyle = `rgb(${tone + 6}, ${tone + 2}, ${tone - 6})`;
+    ctx.fillRect(x, y, bw, bh);
+    // weathered mottling
+    const n = Math.max(3, (bw * bh) / 2400 | 0);
+    for (let i = 0; i < n; i++) {
+      const mx = x + Math.random() * bw, my = y + Math.random() * bh, mr = 3 + Math.random() * 14;
+      const g = ctx.createRadialGradient(mx, my, 0, mx, my, mr);
+      const dk = Math.random() > 0.5;
+      g.addColorStop(0, dk ? 'rgba(40,36,30,0.08)' : 'rgba(230,225,210,0.07)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(x, y, bw, bh);
+    }
+    // face shading
+    ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, y + bh - 3, bw, 3);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, bw, 2.5);
+    // vertical joints
+    ctx.strokeStyle = 'rgba(30,28,24,0.55)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + bh); ctx.stroke();
+  }
+  // run one course of blocks with varied widths across the full width
+  function course(y, h) {
+    let x = -20 - Math.random() * 60;
+    while (x < W) {
+      const bw = 70 + Math.random() * 190;
+      if (h > 55 && Math.random() < 0.22) {
+        // split this stretch into two thin stacked blocks (photo detail)
+        const h1 = h * (0.4 + Math.random() * 0.2);
+        drawBlock(x, y, bw, h1);
+        drawBlock(x, y + h1, bw, h - h1);
+        ctx.strokeStyle = 'rgba(30,28,24,0.5)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x, y + h1); ctx.lineTo(x + bw, y + h1); ctx.stroke();
+      } else {
+        drawBlock(x, y, bw, h);
       }
-      ctx.strokeStyle = 'rgba(30,28,24,0.55)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + h); ctx.stroke();
+      x += bw;
     }
     ctx.strokeStyle = 'rgba(30,28,24,0.55)'; ctx.lineWidth = 2.2;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  ctx.fillStyle = '#787264'; ctx.fillRect(0, 0, W, H);
+  // irregular course heights: thin bands mixed among medium and tall courses
   let y = 0;
-  // Under-cornice dentil course
-  const dentH = 26;
-  ctx.fillStyle = '#6b665a'; ctx.fillRect(0, 0, W, dentH);
-  for (let x = 0; x < W; x += 32) {
-    ctx.fillStyle = '#7e7869'; ctx.fillRect(x + 5, 4, 20, dentH - 8);
-    ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(x + 5, 4, 20, 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(x + 5, dentH - 6, 20, 2);
+  while (y < H) {
+    const r = Math.random();
+    let h;
+    if (r < 0.22) h = 26 + Math.random() * 20;        // thin band
+    else if (r < 0.62) h = 58 + Math.random() * 28;   // medium
+    else h = 92 + Math.random() * 34;                 // tall
+    if (H - y < 40) h = H - y;                        // close out the tile
+    else h = Math.min(h, H - y);
+    course(y, h);
+    y += h;
   }
-  ctx.strokeStyle = 'rgba(25,23,19,0.7)'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(0, dentH); ctx.lineTo(W, dentH); ctx.stroke();
-  y = dentH;
-  // Two tight upper courses
-  blockRow(y, 44, 5, 10, 116, 20, 0.10); y += 44;
-  blockRow(y, 48, 4, 80, 120, 22, 0.12); y += 48;
-  // Plain middle — standard courses, mild size/tone variation
-  const midRows = [86, 90, 84, 92, 88, 86, 100, 102];
-  for (let i = 0; i < midRows.length; i++) {
-    blockRow(y, midRows[i], 3, (i % 2) * 85 + ((Math.random() * 20) | 0), 120, 24, 0.06);
-    y += midRows[i];
-  }
-  // Carved running-scroll frieze near the base
-  const frH = 88, fy = y;
-  ctx.fillStyle = '#6e6859'; ctx.fillRect(0, fy, W, frH);
-  ctx.strokeStyle = 'rgba(25,23,19,0.8)'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(0, fy); ctx.lineTo(W, fy); ctx.stroke();
-  function carved(pathFn) {
-    ctx.strokeStyle = 'rgba(30,27,22,0.85)'; ctx.lineWidth = 5; ctx.lineCap = 'round';
-    ctx.beginPath(); pathFn(0); ctx.stroke();
-    ctx.strokeStyle = 'rgba(215,208,190,0.35)'; ctx.lineWidth = 2;
-    ctx.beginPath(); pathFn(2.5); ctx.stroke();
-  }
-  const cyF = fy + frH / 2, step = 128;
-  for (let sx = 0; sx < W; sx += step) {
-    carved((o) => {
-      for (let a = 0; a < Math.PI * 2.2; a += 0.12) {
-        const r = 6 + a * 7;
-        const px = sx + 40 + Math.cos(a + Math.PI * 0.9) * r;
-        const py = cyF + o + Math.sin(a + Math.PI * 0.9) * r * 0.85;
-        if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-    });
-    carved((o) => {
-      ctx.moveTo(sx + 68, cyF - 16 + o);
-      ctx.quadraticCurveTo(sx + 96, cyF - 30 + o, sx + 118, cyF - 8 + o);
-      ctx.quadraticCurveTo(sx + 128, cyF + 2 + o, sx + step + 12, cyF - 14 + o);
-    });
-    carved((o) => {
-      ctx.moveTo(sx + 96, cyF + 8 + o);
-      ctx.quadraticCurveTo(sx + 108, cyF + 26 + o, sx + 92, cyF + 30 + o);
-    });
-  }
-  ctx.strokeStyle = 'rgba(25,23,19,0.8)'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(0, fy + frH); ctx.lineTo(W, fy + frH); ctx.stroke();
-  y = fy + frH;
-  // Plinth at the bottom — one heavy course
-  blockRow(y, H - y, 2, 40, 100, 16, 0.05);
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
