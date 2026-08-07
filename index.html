@@ -8360,6 +8360,8 @@ async function boot() {
         pitch = 0;
         camera.rotation.set(0, yaw, 0);
         flashCustomHint('back through the paint…', 2600);
+        // One-shot: drop the ?return flag so a later refresh boots normally
+        try { history.replaceState(null, '', location.pathname); } catch (e) {}
       }, 250);
     }, 250);
   }
