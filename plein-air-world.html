@@ -161,7 +161,8 @@
 
 <div id="stat"><b id="fps">—</b> fps<br><span id="cnt">0</span> added<br><span id="pos">0,0</span></div>
 
-<a id="leave" href="index.html">← leave the painting</a>
+<a id="leave" href="index.html?return=painting">← return to the gallery</a>
+<div id="ret-fade" style="position:fixed;inset:0;z-index:70;background:#e9e3d3;opacity:0;pointer-events:none;transition:opacity .5s ease;"></div>
 
 <div id="touch">
   <div id="stick"><div id="nub"></div></div>
@@ -995,6 +996,76 @@ document.getElementById("thaze").onclick = e => {
 };
 
 /* =========================================================================
+   THE RETURN FRAME
+   A picture frame standing just behind the spawn point. Its canvas shows the
+   view OUT of the painting — the gallery you left, captured at the moment you
+   fell through (handed over in sessionStorage). Walk back through it and you
+   are returned to that spot in the gallery. The horizontal flip of standing on
+   this side of the canvas is given by the plane's 180° turn, so the (mirror-
+   world) capture reads correctly from here.
+   ========================================================================= */
+let returnFrame = null, _retPrevZ = null, _retArmed = 0, _returning = false;
+const RET_X = 4, RET_Z = 254.5;
+function galleryViewTexture(){
+  const data = (()=>{ try{ return sessionStorage.getItem('portalGalleryView'); }catch(e){ return null; } })();
+  if(data){
+    const tex = new THREE.TextureLoader().load(data);
+    tex.anisotropy = 4;
+    return tex;
+  }
+  // fallback: a dim gallery-dark glow, for anyone who arrives without crossing
+  const c = document.createElement('canvas'); c.width = 256; c.height = 384;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(128, 200, 20, 128, 200, 300);
+  g.addColorStop(0, '#3a332b'); g.addColorStop(1, '#151210');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 384);
+  ctx.strokeStyle = 'rgba(233,227,211,0.18)'; ctx.lineWidth = 6;
+  ctx.strokeRect(52, 60, 152, 264);
+  return new THREE.CanvasTexture(c);
+}
+function buildReturnFrame(){
+  if(returnFrame){ scene.remove(returnFrame); returnFrame = null; }
+  const g = new THREE.Group();
+  const groundY = terrainHeight(RET_X, RET_Z);
+  const W = 2.3, H = 3.1;
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(W + 0.3, H + 0.3, 0.16),
+    new THREE.MeshLambertMaterial({ color: 0x2b2723, flatShading: true }));
+  g.add(frame);
+  const canvasM = new THREE.Mesh(new THREE.PlaneGeometry(W, H),
+    new THREE.MeshBasicMaterial({ map: galleryViewTexture() }));
+  canvasM.rotation.y = Math.PI;      // face the spawn (looking back the way you came)
+  canvasM.position.z = -0.085;
+  g.add(canvasM);
+  // a faint cool glow seeping around the frame edge — the gallery light
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(W + 0.9, H + 0.9),
+    new THREE.MeshBasicMaterial({ color: 0xbfd2e6, transparent: true, opacity: 0.16,
+      side: THREE.DoubleSide, depthWrite: false }));
+  glow.rotation.y = Math.PI;
+  glow.position.z = -0.14;
+  g.add(glow);
+  g.position.set(RET_X, groundY + H / 2 + 0.35, RET_Z);
+  scene.add(g);
+  returnFrame = g;
+  _retPrevZ = null;
+  _retArmed = clock.elapsedTime + 2.5;   // don't trigger while spawning
+}
+function checkReturnFrame(){
+  if(!returnFrame || _returning) return;
+  const t = clock.elapsedTime;
+  const z = camera.position.z, x = camera.position.x;
+  if(_retPrevZ !== null && t > _retArmed
+     && Math.abs(x - RET_X) < (2.3/2 + 0.6)
+     && _retPrevZ < RET_Z && z >= RET_Z){
+    _returning = true;
+    toast("back through the frame…");
+    const f = document.getElementById("ret-fade");
+    if(f) f.style.opacity = "1";
+    setTimeout(() => { window.location.href = "index.html?return=painting"; }, 520);
+  }
+  _retPrevZ = z;
+}
+
+/* =========================================================================
    WIND — the sound of standing in the painting.
    Two loops of filtered noise (a deep rush and a thin whistle) with slow
    LFO gusts. Starts on load where allowed; any first gesture unlocks it.
@@ -1083,6 +1154,7 @@ function buildWorld(seedStr){
   steps.push(["stepping into the frame", () => {
     camera.position.set(4, terrainHeight(4,248)+EYE, 248);
     yaw = 0; pitch = -0.14; vy = 0;
+    buildReturnFrame();
     resize();
   }]);
   runSteps(0);
@@ -1171,6 +1243,8 @@ function tick(){
     grabbed.position.lerp(tmp, Math.min(1, dt*9));
     grabbed.rotation.y += dt*0.55;
   }
+
+  checkReturnFrame();
 
   if(sky){ sky.material.uniforms.uTime.value = t; sky.position.copy(camera.position); }
   if(waterMesh) waterMesh.material.uniforms.uTime.value = t;
