@@ -78,6 +78,12 @@
     border:1px solid rgba(233,227,211,.35);background:rgba(20,26,32,.32);
     padding:8px 12px;}
   #leave:hover{background:rgba(233,227,211,.9);color:var(--ink);}
+  #flybtn{position:fixed;z-index:35;left:16px;bottom:18px;
+    font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;
+    color:rgba(233,227,211,.85);text-shadow:0 1px 4px rgba(0,0,0,.7);
+    border:1px solid rgba(233,227,211,.35);background:rgba(20,26,32,.32);
+    padding:8px 16px;cursor:pointer;flex:none;}
+  #flybtn.on{background:rgba(233,227,211,.9);color:var(--ink);}
 
   #cross{position:fixed;z-index:20;left:50%;top:50%;width:18px;height:18px;
     margin:-9px 0 0 -9px;pointer-events:none;opacity:.75;}
@@ -109,68 +115,9 @@
   <div id="lmsg">toning the board…</div>
 </div>
 
-<div id="cross"></div>
-
-<div id="panel">
-  <div id="ptitle">
-    <h2>Plein Air</h2><em>−</em>
-  </div>
-  <div class="credit">oil on board → walkable, undated</div>
-  <div class="body">
-    <div>
-      <span class="lbl">Site</span>
-      <div class="row">
-        <input id="seed" value="valley" spellcheck="false">
-        <button id="regen" style="flex:0 0 66px">Paint</button>
-      </div>
-    </div>
-
-    <div>
-      <span class="lbl">Add to the scene — aim at the ground</span>
-      <div class="row">
-        <button class="prop on" data-p="0">Oak</button>
-        <button class="prop" data-p="1">Cypress</button>
-        <button class="prop" data-p="2">Brush</button>
-      </div>
-      <div class="row" style="margin-top:5px">
-        <button class="prop" data-p="3">Rock</button>
-        <button class="prop" data-p="4">Barn</button>
-        <button id="undo">Scrape</button>
-      </div>
-    </div>
-
-    <div>
-      <span class="lbl">Working the surface</span>
-      <div class="row" style="margin-bottom:5px"><span id="pass">1 — underpainting</span></div>
-      <div class="row"><button id="refine">Another pass</button></div>
-    </div>
-
-    <div class="row">
-      <button id="tpaint" class="on">Impasto</button>
-      <button id="tcanvas" class="on">Canvas</button>
-      <button id="thaze" class="on">Haze</button>
-    </div>
-
-    <div class="keys">
-      <b>WASD</b> walk · <b>Shift</b> stride · <b>Space</b> step up<br>
-      <b>Drag</b> to look · <b>Click</b> to place<br>
-      <b>Right-click</b> or <b>G</b> to lift and carry
-    </div>
-  </div>
-</div>
-
-<div id="stat"><b id="fps">—</b> fps<br><span id="cnt">0</span> added<br><span id="pos">0,0</span></div>
-
 <a id="leave" href="index.html?return=painting">← return to the gallery</a>
+<button id="flybtn">Fly</button>
 <div id="ret-fade" style="position:fixed;inset:0;z-index:70;background:#e9e3d3;opacity:0;pointer-events:none;transition:opacity .5s ease;"></div>
-
-<div id="touch">
-  <div id="stick"><div id="nub"></div></div>
-  <div id="tbtns">
-    <button id="tplace">Place</button>
-    <button id="tgrab">Lift</button>
-  </div>
-</div>
 
 <div id="toast"></div>
 
@@ -625,11 +572,6 @@ function scatterAll(density){
 /* =========================================================================
    PLACEABLE PROPS
    ========================================================================= */
-const PROP_NAMES = ["Oak","Cypress","Brush","Rock","Barn"];
-let propType = 0, propGeos = null;
-const placed = [];
-let grabbed = null;
-
 function initPropGeos(){
   propGeos = {
     oak: lumpGeometry(1, 0.78),
@@ -641,19 +583,6 @@ function initPropGeos(){
 }
 function lam(hex){ return new THREE.MeshLambertMaterial({color:hex, flatShading:true}); }
 
-function buildBarn(){
-  const g = new THREE.Group();
-  const w = 5.5 + rnd()*3, dp = 8 + rnd()*5, h = 3.4 + rnd()*1.6;
-  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, dp), lam(0xeceee6));
-  body.position.y = h*0.5; g.add(body);
-  const roof = new THREE.Mesh(new THREE.CylinderGeometry(w*0.72, w*0.72, dp*1.03, 3, 1), lam(0x8d5f4a));
-  roof.rotation.z = Math.PI/2; roof.rotation.y = Math.PI/2;
-  roof.position.y = h + w*0.30; g.add(roof);
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1.5, h*0.55, 0.2), lam(0x3a4148));
-  door.position.set(0, h*0.28, dp*0.5+0.08); g.add(door);
-  g.userData.lift = 0;
-  return g;
-}
 function buildTree(hex){
   const g = new THREE.Group();
   const s = 2.4 + rnd()*4.2;
@@ -665,39 +594,6 @@ function buildTree(hex){
   g.userData.lift = 0;
   return g;
 }
-
-function makeProp(type, x, z){
-  const h = terrainHeight(x,z);
-  let obj;
-  if(type === 4){ obj = buildBarn(); obj.rotation.y = rnd()*Math.PI*2; }
-  else if(type === 0){ obj = buildTree(SCRUB[(rnd()*SCRUB.length)|0]); }
-  else if(type === 1){
-    const s = 2.6 + rnd()*4.4;
-    obj = new THREE.Mesh(propGeos.cyp, lam(rnd()<0.5 ? 0x1f2a3c : 0x24331f));
-    obj.scale.set(s*0.34, s, s*0.34);
-    obj.rotation.set((rnd()-0.5)*0.08, rnd()*6.3, (rnd()-0.5)*0.08);
-    obj.userData.lift = s*2.05;
-  } else if(type === 2){
-    const s = 1.4 + rnd()*2.4;
-    obj = new THREE.Mesh(propGeos.brush, lam(BRUSHC[(rnd()*BRUSHC.length)|0]));
-    obj.scale.set(s*1.1, s*0.6, s*1.1);
-    obj.rotation.set(rnd()*0.5, rnd()*6.3, rnd()*0.5);
-    obj.userData.lift = s*0.24;
-  } else {
-    const s = 1.4 + rnd()*3.0;
-    obj = new THREE.Mesh(propGeos.rock, lam([0xa08e72,0x8a7a60,0x6f6a5e,0xb5a184][(rnd()*4)|0]));
-    obj.scale.set(s, s*0.55, s*0.9);
-    obj.rotation.set(rnd()*3, rnd()*6, rnd()*3);
-    obj.userData.lift = s*0.26;
-  }
-  obj.position.set(x, h + (obj.userData.lift||0), z);
-  obj.userData.isProp = true;
-  scene.add(obj);
-  placed.push(obj);
-  updateCount();
-  return obj;
-}
-function settle(o){ o.position.y = terrainHeight(o.position.x, o.position.z) + (o.userData.lift||0); }
 
 let fixtures = [];
 function buildFixtures(){
@@ -718,20 +614,12 @@ function buildFixtures(){
   });
   fixtures.forEach(o => scene.add(o));
 }
-function undoProp(){
-  const o = placed.pop();
-  if(!o){ toast("nothing to scrape back"); return; }
-  scene.remove(o);
-  if(grabbed === o) grabbed = null;
-  updateCount();
-}
-
 /* =========================================================================
    RENDERER / SCENE
    ========================================================================= */
 const FOG = new THREE.Color(0xc2d3dc);
 let renderer, scene, camera, clock, terrainMesh, waterMesh, sky;
-let refinePass = 1, hazeOn = true, paintOn = true, canvasOn = true;
+
 
 renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:"high-performance"});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -820,25 +708,68 @@ function buildPost(){
 }
 
 /* =========================================================================
-   CONTROLS
+   CONTROLS — the same language as the gallery:
+   tap (or scroll / pinch-out) to move forward · drag to look · Fly toggle.
+   WASD still works. No placing, no lifting — you are here to walk the paint.
    ========================================================================= */
 const keys = {};
 let yaw = 0, pitch = -0.10, vy = 0, grounded = true;
+let flying = false, glide = null;
 let dragging=false, lastX=0, lastY=0, dragMoved=0;
-const touchMove = {x:0,y:0};
-let stickActive=false, stickId=-1, stickOrigin={x:0,y:0};
-const lookTouch = {};
+const touches = {};
+let pinchPrev = null;
+
+function setFly(on){
+  flying = on; vy = 0; glide = null;
+  const b = document.getElementById("flybtn");
+  if(b) b.classList.toggle("on", on);
+  toast(on ? "flying — look where you want to go" : "back on foot");
+}
+document.getElementById("flybtn").onclick = () => setFly(!flying);
 
 addEventListener("keydown", e => {
   keys[e.code] = true;
-  if(e.code === "KeyG") toggleGrab();
-  if(e.code === "Backspace"){ undoProp(); e.preventDefault(); }
+  if(e.code === "KeyF") setFly(!flying);
   if(e.code === "Space") e.preventDefault();
 });
 addEventListener("keyup", e => { keys[e.code] = false; });
 
 const cv = renderer.domElement;
 cv.addEventListener("contextmenu", e => e.preventDefault());
+
+/* one gallery-style "step toward where you pointed" */
+function stepToward(cx, cy){
+  if(!terrainMesh) return;
+  const r = castFrom(cx, cy);
+  if(flying){
+    // glide a stretch along the aim — vertical included
+    const d = r.ray.direction;
+    glide = { x: camera.position.x + d.x*46, y: camera.position.y + d.y*46,
+              z: camera.position.z + d.z*46, fly: true };
+    return;
+  }
+  const hit = r.intersectObject(terrainMesh, false)[0];
+  if(!hit) return;
+  const dx = hit.point.x - camera.position.x, dz = hit.point.z - camera.position.z;
+  const d = Math.hypot(dx, dz);
+  if(d < 0.6) return;
+  const step = Math.min(d, 10);         // a stride, not a teleport
+  glide = { x: camera.position.x + dx/d*step, z: camera.position.z + dz/d*step, fly: false };
+}
+/* forward motion shared by wheel + pinch: view direction (flat when walking) */
+const _dirTmp = new THREE.Vector3();
+function forwardMove(m){
+  glide = null;
+  if(flying){
+    camera.getWorldDirection(_dirTmp);
+    camera.position.addScaledVector(_dirTmp, m);
+  } else {
+    camera.position.x += -Math.sin(yaw)*m;
+    camera.position.z += -Math.cos(yaw)*m;
+  }
+}
+
+/* mouse: drag to look, click to step, wheel to move */
 cv.addEventListener("pointerdown", e => {
   if(e.pointerType === "touch") return;
   dragging = true; dragMoved = 0; lastX = e.clientX; lastY = e.clientY;
@@ -855,58 +786,55 @@ cv.addEventListener("pointermove", e => {
 cv.addEventListener("pointerup", e => {
   if(e.pointerType === "touch") return;
   dragging = false;
-  if(dragMoved < 6){ if(e.button === 2) toggleGrab(); else placeAtCrosshair(); }
+  if(dragMoved < 6) stepToward(e.clientX, e.clientY);
 });
-
-const stick = document.getElementById("stick"), nub = document.getElementById("nub");
-stick.addEventListener("touchstart", e => {
-  const t = e.changedTouches[0];
-  stickActive = true; stickId = t.identifier;
-  const r = stick.getBoundingClientRect();
-  stickOrigin = {x:r.left+r.width/2, y:r.top+r.height/2};
+cv.addEventListener("wheel", e => {
   e.preventDefault();
+  forwardMove(-e.deltaY * 0.03);
 }, {passive:false});
+
+/* touch: drag to look, tap to step, pinch-out to move forward */
+function touchCount(){ return Object.keys(touches).length; }
+function pinchDist(){
+  const ids = Object.keys(touches);
+  if(ids.length < 2) return null;
+  const a = touches[ids[0]], b2 = touches[ids[1]];
+  return Math.hypot(a.x-b2.x, a.y-b2.y);
+}
 cv.addEventListener("touchstart", e => {
   for(const t of e.changedTouches)
-    lookTouch[t.identifier] = {x:t.clientX,y:t.clientY,sx:t.clientX,sy:t.clientY,t:Date.now()};
+    touches[t.identifier] = {x:t.clientX, y:t.clientY, sx:t.clientX, sy:t.clientY, t:Date.now(), moved:0};
+  if(touchCount() >= 2) pinchPrev = pinchDist();
 }, {passive:true});
 addEventListener("touchmove", e => {
   for(const t of e.changedTouches){
-    if(stickActive && t.identifier === stickId){
-      let dx = t.clientX-stickOrigin.x, dy = t.clientY-stickOrigin.y;
-      const len = Math.hypot(dx,dy), max = 46;
-      if(len > max){ dx = dx/len*max; dy = dy/len*max; }
-      nub.style.transform = `translate(${dx}px,${dy}px)`;
-      touchMove.x = dx/max; touchMove.y = dy/max;
-      e.preventDefault();
-    } else {
-      const p = lookTouch[t.identifier];
-      if(p){
-        yaw -= (t.clientX-p.x)*0.0041;
-        pitch = Math.max(-1.35, Math.min(1.25, pitch - (t.clientY-p.y)*0.0041));
-        p.x = t.clientX; p.y = t.clientY;
-      }
+    const p = touches[t.identifier];
+    if(!p) continue;
+    p.moved += Math.abs(t.clientX-p.x) + Math.abs(t.clientY-p.y);
+    if(touchCount() < 2){
+      yaw -= (t.clientX-p.x)*0.0041;
+      pitch = Math.max(-1.35, Math.min(1.25, pitch - (t.clientY-p.y)*0.0041));
     }
+    p.x = t.clientX; p.y = t.clientY;
+  }
+  if(touchCount() >= 2){
+    e.preventDefault();
+    const d = pinchDist();
+    if(pinchPrev !== null && d !== null) forwardMove((d - pinchPrev) * 0.06);
+    pinchPrev = d;
   }
 }, {passive:false});
 addEventListener("touchend", e => {
   for(const t of e.changedTouches){
-    if(stickActive && t.identifier === stickId){
-      stickActive=false; stickId=-1; touchMove.x=0; touchMove.y=0;
-      nub.style.transform = "translate(0,0)";
-    }
-    const p = lookTouch[t.identifier];
+    const p = touches[t.identifier];
     if(p){
-      if(Math.abs(t.clientX-p.sx)+Math.abs(t.clientY-p.sy) < 10 && Date.now()-p.t < 350)
-        placeAtCrosshair(t.clientX, t.clientY);
-      delete lookTouch[t.identifier];
+      if(touchCount() === 1 && p.moved < 12 && Date.now()-p.t < 350)
+        stepToward(t.clientX, t.clientY);
+      delete touches[t.identifier];
     }
   }
+  if(touchCount() < 2) pinchPrev = null;
 }, {passive:true});
-
-if("ontouchstart" in window) document.getElementById("touch").style.display = "block";
-document.getElementById("tplace").onclick = () => placeAtCrosshair();
-document.getElementById("tgrab").onclick = () => toggleGrab();
 
 /* ---------- raycasting ---------- */
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
@@ -915,28 +843,6 @@ function castFrom(cx, cy){
   else ndc.set((cx/innerWidth)*2-1, -(cy/innerHeight)*2+1);
   ray.setFromCamera(ndc, camera);
   return ray;
-}
-function placeAtCrosshair(cx, cy){
-  if(grabbed){ dropGrabbed(); return; }
-  if(!terrainMesh) return;
-  const hit = castFrom(cx,cy).intersectObject(terrainMesh, false)[0];
-  if(!hit){ toast("aim at the ground"); return; }
-  if(hit.point.distanceTo(camera.position) > 200){ toast("too far into the haze"); return; }
-  makeProp(propType, hit.point.x, hit.point.z);
-  toast(PROP_NAMES[propType] + " placed");
-}
-function toggleGrab(){
-  if(grabbed){ dropGrabbed(); return; }
-  const hits = castFrom().intersectObjects(placed, true);
-  if(!hits.length){ toast("nothing to lift"); return; }
-  let o = hits[0].object;
-  while(o && !o.userData.isProp) o = o.parent;
-  if(!o){ toast("nothing to lift"); return; }
-  grabbed = o; toast("carrying — click to set down");
-}
-function dropGrabbed(){
-  if(!grabbed) return;
-  settle(grabbed); grabbed = null; toast("set down");
 }
 
 /* =========================================================================
@@ -948,53 +854,6 @@ function toast(m){
   clearTimeout(toast._t);
   toast._t = setTimeout(()=>{ t.style.opacity = 0; }, 1400);
 }
-function updateCount(){ document.getElementById("cnt").textContent = placed.length; }
-
-const PASS_NAMES = ["underpainting","blocking in","half-tones","accents","impasto","glazing","final touches"];
-function passLabel(n){ return n + " — " + PASS_NAMES[Math.min(n-1, PASS_NAMES.length-1)]; }
-
-document.querySelectorAll(".prop").forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll(".prop").forEach(x => x.classList.remove("on"));
-    b.classList.add("on");
-    propType = parseInt(b.dataset.p, 10);
-  };
-});
-document.getElementById("undo").onclick = undoProp;
-document.getElementById("ptitle").onclick = () => {
-  const p = document.getElementById("panel");
-  p.classList.toggle("closed");
-  p.querySelector("em").textContent = p.classList.contains("closed") ? "+" : "−";
-};
-document.getElementById("regen").onclick = () => {
-  buildWorld(document.getElementById("seed").value.trim() || "valley");
-};
-document.getElementById("refine").onclick = () => {
-  refinePass++;
-  document.getElementById("pass").textContent = passLabel(refinePass);
-  const k = refinePass - 1;
-  rnd = mulberry32(SEED + refinePass*7919);
-  scatterAll(Math.min(2.4, 1 + k*0.36));
-  const u = terrainMesh.material.uniforms;
-  u.uStroke.value  = Math.max(0.52, 1.0 - k*0.11);
-  u.uBroken.value  = Math.min(0.80, 0.30 + k*0.11);
-  u.uImpasto.value = Math.min(1.55, 0.70 + k*0.17);
-  toast("pass " + refinePass + " — " + PASS_NAMES[Math.min(k, PASS_NAMES.length-1)]);
-};
-document.getElementById("tpaint").onclick = e => {
-  paintOn = !paintOn; e.target.classList.toggle("on", paintOn);
-  postMat.uniforms.uPaint.value = paintOn ? 1 : 0;
-};
-document.getElementById("tcanvas").onclick = e => {
-  canvasOn = !canvasOn; e.target.classList.toggle("on", canvasOn);
-  postMat.uniforms.uCanvas.value = canvasOn ? 1 : 0;
-};
-document.getElementById("thaze").onclick = e => {
-  hazeOn = !hazeOn; e.target.classList.toggle("on", hazeOn);
-  scene.fog.density = hazeOn ? 0.0026 : 0.0004;
-  terrainMesh.material.uniforms.uFogDensity.value = scene.fog.density;
-};
-
 /* =========================================================================
    THE RETURN FRAME
    A picture frame standing just behind the spawn point. Its canvas shows the
@@ -1120,21 +979,14 @@ function clearWorld(){
   if(waterMesh) scene.remove(waterMesh);
   instanced.forEach(m => { scene.remove(m); m.geometry.dispose(); });
   instanced.length = 0;
-  placed.forEach(o => scene.remove(o));
-  placed.length = 0;
   fixtures.forEach(o => scene.remove(o));
   fixtures = [];
-  grabbed = null;
-  updateCount();
 }
 
 const steps = [];
 function buildWorld(seedStr){
   SEED = strSeed(seedStr) % 100000;
   rnd = mulberry32(SEED);
-  refinePass = 1;
-  document.getElementById("pass").textContent = passLabel(1);
-
   showLoader();
   clearWorld();
 
@@ -1170,6 +1022,7 @@ function hideLoader(){
   document.querySelector("#bar i").style.width = "100%";
   const l = document.getElementById("loader");
   setTimeout(()=>{ l.style.opacity=0; setTimeout(()=>{ l.style.display="none"; }, 800); }, 260);
+  setTimeout(()=>{ toast("tap or scroll to move forward · drag to look · fly below"); }, 1200);
 }
 
 (function(){
@@ -1198,8 +1051,7 @@ function resize(){
 }
 addEventListener("resize", resize);
 
-let fpsAcc=0, fpsN=0, fpsT=0;
-const fwd = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3();
+const fwd = new THREE.Vector3(), rightV = new THREE.Vector3();
 
 function tick(){
   requestAnimationFrame(tick);
@@ -1214,34 +1066,61 @@ function tick(){
   if(keys.KeyS || keys.ArrowDown) mz += 1;
   if(keys.KeyA || keys.ArrowLeft) mx -= 1;
   if(keys.KeyD || keys.ArrowRight) mx += 1;
-  mx += touchMove.x; mz += touchMove.y;
   const len = Math.hypot(mx,mz);
   if(len > 1){ mx/=len; mz/=len; }
+  if(mx !== 0 || mz !== 0) glide = null;      // hands on the wheel cancel the glide
 
   const speed = (keys.ShiftLeft || keys.ShiftRight ? 44 : 15) * dt;
   fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
-  right.set(Math.cos(yaw), 0, -Math.sin(yaw));
-  camera.position.addScaledVector(fwd, -mz*speed);
-  camera.position.addScaledVector(right, mx*speed);
+  rightV.set(Math.cos(yaw), 0, -Math.sin(yaw));
+
+  if(flying){
+    // forward follows the LOOK direction — aim up to climb, down to dive
+    camera.getWorldDirection(_dirTmp);
+    camera.position.addScaledVector(_dirTmp, -mz*speed);
+    camera.position.addScaledVector(rightV, mx*speed);
+    if(keys.Space) camera.position.y += speed;
+    if(keys.KeyC)  camera.position.y -= speed;
+  } else {
+    camera.position.addScaledVector(fwd, -mz*speed);
+    camera.position.addScaledVector(rightV, mx*speed);
+  }
+
+  // the gallery-style tap glide
+  if(glide){
+    const gx = glide.x - camera.position.x;
+    const gz = glide.z - camera.position.z;
+    const gy = glide.fly ? (glide.y - camera.position.y) : 0;
+    const gd = Math.sqrt(gx*gx + gz*gz + gy*gy);
+    if(gd < 0.8) glide = null;
+    else {
+      const sp = 20*dt;
+      camera.position.x += gx/gd*sp;
+      camera.position.z += gz/gd*sp;
+      if(glide.fly) camera.position.y += gy/gd*sp;
+    }
+  }
 
   const r = Math.hypot(camera.position.x, camera.position.z);
   if(r > EDGE){ camera.position.x *= EDGE/r; camera.position.z *= EDGE/r; }
 
   const ground = terrainHeight(camera.position.x, camera.position.z) + EYE;
-  if(grounded && keys.Space){ vy = 12.5; grounded = false; }
-  vy -= 32*dt;
-  camera.position.y += vy*dt;
-  if(camera.position.y <= ground){
-    camera.position.y += (ground - camera.position.y)*Math.min(1, dt*16);
-    if(vy < 0){ vy = 0; grounded = true; }
-    if(Math.abs(camera.position.y - ground) < 0.05) camera.position.y = ground;
-  } else grounded = false;
-
-  if(grabbed){
-    tmp.copy(camera.position).addScaledVector(fwd, 10)
-       .add(new THREE.Vector3(0, -2.2 + Math.sin(t*2.3)*0.16, 0));
-    grabbed.position.lerp(tmp, Math.min(1, dt*9));
-    grabbed.rotation.y += dt*0.55;
+  if(flying){
+    // free flight: just never clip the paint, and keep under the sky
+    if(camera.position.y < ground - 1.5) camera.position.y = ground - 1.5;
+    if(camera.position.y < terrainHeight(camera.position.x, camera.position.z) + 0.8)
+      camera.position.y = terrainHeight(camera.position.x, camera.position.z) + 0.8;
+    camera.position.y = Math.min(camera.position.y, 420);
+    vy = 0; grounded = false;
+  } else {
+    if(grounded && keys.Space){ vy = 12.5; grounded = false; }
+    vy -= 32*dt;
+    camera.position.y += vy*dt;
+    if(camera.position.y <= ground){
+      camera.position.y += (ground - camera.position.y)*Math.min(1, dt*16);
+      if(vy < 0){ vy = 0; grounded = true; }
+      if(Math.abs(camera.position.y - ground) < 0.05) camera.position.y = ground;
+    } else grounded = false;
   }
 
   checkReturnFrame();
@@ -1255,20 +1134,12 @@ function tick(){
   renderer.setRenderTarget(null);
   postMat.uniforms.tD.value = rt.texture;
   renderer.render(postScene, postCam);
-
-  fpsAcc += 1/Math.max(dt,0.0001); fpsN++;
-  if(t - fpsT > 0.5){
-    document.getElementById("fps").textContent = Math.round(fpsAcc/fpsN);
-    document.getElementById("pos").textContent =
-      Math.round(camera.position.x) + "," + Math.round(camera.position.z);
-    fpsAcc=0; fpsN=0; fpsT=t;
-  }
 }
 
 initPropGeos();
 buildPost();
 resize();
-buildWorld(document.getElementById("seed").value);
+buildWorld("valley");
 tick();
 </script>
 </body>
