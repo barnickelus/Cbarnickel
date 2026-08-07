@@ -3075,52 +3075,102 @@ function makeDuomoFloorTexture() {
   return tex;
 }
 
-// Ashlar stone wall for the Duomo: coursed gray blocks with mortar joints and
-// gentle tonal variation, like the cathedral's pier masonry.
+// Ashlar stone wall for the Duomo — one full wall height per tile (v repeat 1).
+// Graded composition per the reference: a dentil course + tight small blocks
+// under the cornice, plain standard ashlar through the middle, a carved
+// running-scroll frieze near the base, and heavy plinth blocks at the bottom.
+// Canvas top = wall top (CanvasTexture flipY).
 function makeStoneWallTexture() {
+  const W = 512, H = 1024;
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
+  c.width = W; c.height = H;
   const ctx = c.getContext('2d');
-  const rows = 6, courseH = c.height / rows;
-  for (let r = 0; r < rows; r++) {
-    const cols = 3;
-    const blockW = c.width / cols;
-    const offset = (r % 2) * blockW / 2;
+  function blockRow(y, h, cols, offset, toneBase, toneVar, jitterW) {
+    const bw = W / cols;
     for (let b = -1; b < cols + 1; b++) {
-      const x = b * blockW + offset;
-      const tone = 118 + Math.random() * 26;          // gray with slight warm cast
+      const jw = (Math.random() - 0.5) * bw * jitterW;
+      const x = b * bw + offset + jw;
+      const tone = toneBase + Math.random() * toneVar;
       ctx.fillStyle = `rgb(${tone + 6}, ${tone + 2}, ${tone - 6})`;
-      ctx.fillRect(x, r * courseH, blockW, courseH);
-      // block shading: darker bottom edge, lighter top edge
-      ctx.fillStyle = 'rgba(0,0,0,0.10)';
-      ctx.fillRect(x, r * courseH + courseH - 4, blockW, 4);
-      ctx.fillStyle = 'rgba(255,255,255,0.06)';
-      ctx.fillRect(x, r * courseH, blockW, 3);
-      // mottling within the block
-      for (let i = 0; i < 12; i++) {
-        const mx2 = x + Math.random() * blockW, my2 = r * courseH + Math.random() * courseH;
-        const mr = 4 + Math.random() * 16;
-        const g = ctx.createRadialGradient(mx2, my2, 0, mx2, my2, mr);
+      ctx.fillRect(x, y, bw, h);
+      ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, y + h - 3, bw, 3);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, bw, 2.5);
+      for (let i = 0; i < 6; i++) {
+        const mx = x + Math.random() * bw, my = y + Math.random() * h, mr = 3 + Math.random() * 12;
+        const g = ctx.createRadialGradient(mx, my, 0, mx, my, mr);
         const dk = Math.random() > 0.5;
         g.addColorStop(0, dk ? 'rgba(40,36,30,0.07)' : 'rgba(230,225,210,0.06)');
         g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(x, r * courseH, blockW, courseH);
+        ctx.fillStyle = g; ctx.fillRect(x, y, bw, h);
       }
+      ctx.strokeStyle = 'rgba(30,28,24,0.55)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + h); ctx.stroke();
     }
-    // mortar lines
-    ctx.strokeStyle = 'rgba(30,28,24,0.55)';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.moveTo(0, r * courseH); ctx.lineTo(c.width, r * courseH); ctx.stroke();
-    for (let b = 0; b < cols + 1; b++) {
-      const x = b * blockW + offset;
-      ctx.beginPath(); ctx.moveTo(x, r * courseH); ctx.lineTo(x, r * courseH + courseH); ctx.stroke();
-    }
+    ctx.strokeStyle = 'rgba(30,28,24,0.55)'; ctx.lineWidth = 2.2;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
+  ctx.fillStyle = '#787264'; ctx.fillRect(0, 0, W, H);
+  let y = 0;
+  // Under-cornice dentil course
+  const dentH = 26;
+  ctx.fillStyle = '#6b665a'; ctx.fillRect(0, 0, W, dentH);
+  for (let x = 0; x < W; x += 32) {
+    ctx.fillStyle = '#7e7869'; ctx.fillRect(x + 5, 4, 20, dentH - 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(x + 5, 4, 20, 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(x + 5, dentH - 6, 20, 2);
+  }
+  ctx.strokeStyle = 'rgba(25,23,19,0.7)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, dentH); ctx.lineTo(W, dentH); ctx.stroke();
+  y = dentH;
+  // Two tight upper courses
+  blockRow(y, 44, 5, 10, 116, 20, 0.10); y += 44;
+  blockRow(y, 48, 4, 80, 120, 22, 0.12); y += 48;
+  // Plain middle — standard courses, mild size/tone variation
+  const midRows = [86, 90, 84, 92, 88, 86, 100, 102];
+  for (let i = 0; i < midRows.length; i++) {
+    blockRow(y, midRows[i], 3, (i % 2) * 85 + ((Math.random() * 20) | 0), 120, 24, 0.06);
+    y += midRows[i];
+  }
+  // Carved running-scroll frieze near the base
+  const frH = 88, fy = y;
+  ctx.fillStyle = '#6e6859'; ctx.fillRect(0, fy, W, frH);
+  ctx.strokeStyle = 'rgba(25,23,19,0.8)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, fy); ctx.lineTo(W, fy); ctx.stroke();
+  function carved(pathFn) {
+    ctx.strokeStyle = 'rgba(30,27,22,0.85)'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.beginPath(); pathFn(0); ctx.stroke();
+    ctx.strokeStyle = 'rgba(215,208,190,0.35)'; ctx.lineWidth = 2;
+    ctx.beginPath(); pathFn(2.5); ctx.stroke();
+  }
+  const cyF = fy + frH / 2, step = 128;
+  for (let sx = 0; sx < W; sx += step) {
+    carved((o) => {
+      for (let a = 0; a < Math.PI * 2.2; a += 0.12) {
+        const r = 6 + a * 7;
+        const px = sx + 40 + Math.cos(a + Math.PI * 0.9) * r;
+        const py = cyF + o + Math.sin(a + Math.PI * 0.9) * r * 0.85;
+        if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+    });
+    carved((o) => {
+      ctx.moveTo(sx + 68, cyF - 16 + o);
+      ctx.quadraticCurveTo(sx + 96, cyF - 30 + o, sx + 118, cyF - 8 + o);
+      ctx.quadraticCurveTo(sx + 128, cyF + 2 + o, sx + step + 12, cyF - 14 + o);
+    });
+    carved((o) => {
+      ctx.moveTo(sx + 96, cyF + 8 + o);
+      ctx.quadraticCurveTo(sx + 108, cyF + 26 + o, sx + 92, cyF + 30 + o);
+    });
+  }
+  ctx.strokeStyle = 'rgba(25,23,19,0.8)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, fy + frH); ctx.lineTo(W, fy + frH); ctx.stroke();
+  y = fy + frH;
+  // Plinth at the bottom — one heavy course
+  blockRow(y, H - y, 2, 40, 100, 16, 0.05);
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 2);
+  tex.repeat.set(3, 1);
   tex.anisotropy = 8;
   return tex;
 }
