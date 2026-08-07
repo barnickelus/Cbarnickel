@@ -3812,6 +3812,20 @@ function updatePaintingFX(now, dt) {
   }
   if (t >= 1) {
     paintingCross = null;
+    // Capture what the painting "sees": the gallery from its own position.
+    // The screen is already faded to linen, so this repose is invisible.
+    try {
+      camera.position.set(wp.x + nx * 0.35, wp.y, wp.z + nz * 0.35);
+      const lookYaw = Math.atan2(-nx, -nz);
+      camera.rotation.set(0, lookYaw, 0);
+      renderer.render(scene, camera);
+      const src = renderer.domElement;
+      const tw = 1024, th2 = Math.round(1024 * src.height / src.width);
+      const cc = document.createElement('canvas');
+      cc.width = tw; cc.height = th2;
+      cc.getContext('2d').drawImage(src, 0, 0, tw, th2);
+      sessionStorage.setItem('portalGalleryView', cc.toDataURL('image/jpeg', 0.72));
+    } catch (e) { /* capture is a nicety — never block the crossing */ }
     window.location.href = WORLD_URL;
   }
   return true;
@@ -8324,6 +8338,31 @@ async function boot() {
   markPaintingWallsPlain();
   buildIndex();
   wireUI();
+  // ── Returning from inside the painting? Skip the intro, slip back into the
+  // mirror world, and stand where the canvas hangs — as if stepping out of it.
+  const _ret = new URLSearchParams(location.search).get('return') === 'painting';
+  if (_ret) {
+    introHasPlayed = true;
+    setTimeout(() => {
+      enterGallery();
+      endIntro();
+      const iv = setInterval(() => {
+        const m = paintingPortalMesh();
+        if (!m) return;               // its texture is still loading
+        clearInterval(iv);
+        applyMirrorFlip(true);
+        const wp = new THREE.Vector3();
+        m.getWorldPosition(wp);
+        const n = m.userData.outwardNormal || { x: 0, z: 1 };
+        const nx = -n.x, nz = n.z;    // mirrored outward normal
+        camera.position.set(wp.x + nx * 1.7, PLAYER_HEIGHT, wp.z + nz * 1.7);
+        yaw = Math.atan2(-nx, -nz);   // forward = mirrored outward normal → into the room
+        pitch = 0;
+        camera.rotation.set(0, yaw, 0);
+        flashCustomHint('back through the paint…', 2600);
+      }, 250);
+    }, 250);
+  }
   // Reflect any saved/default theme, lighting and frame choices in the UI, and
   // apply non-default lighting (the scene built with theme already).
   syncSettingsUI();
