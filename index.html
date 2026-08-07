@@ -1301,6 +1301,8 @@ body { overscroll-behavior: none; }
   </div>
 </div>
 
+<div id="world-fade" style="position:fixed;inset:0;z-index:200;background:#e9e3d3;opacity:0;pointer-events:none;transition:opacity .55s ease;"></div>
+
 <div class="bottom-hint" id="bottom-hint"></div>
 
 <div class="paint-nav" id="paint-nav">
@@ -3553,6 +3555,8 @@ function applyMirrorFlip(on) {
   worldRoot.position.x = on ? 2 * MIRROR_PX : 0;
   // The soundtrack runs backwards on the other side
   setMirrorMusic(on);
+  // Leaving the mirror puts the portal painting back to normal
+  if (!on) restorePaintingPortal();
 }
 // Shader ripples: each push warps the reflected image, radiating from the
 // touch point and reverberating off the frame (virtual mirrored sources in the
@@ -3649,6 +3653,170 @@ function handleMirrorPush(hitPoint) {
       : 'it’s giving way — push harder', 2200);
   }
 }
+/* ─── The painting portal ───
+   Deep in the mirror world, ONE painting is a door. Push it three times — the
+   paint itself ripples (same wave + frame-reverb math as the mirror, warping
+   the canvas texture) — and you fall through into a walkable 3D version of the
+   painting, wind and all. */
+const WORLD_PAINTING = '09-arch-beach-heights.jpg';
+const WORLD_URL = 'plein-air-world.html';
+const _paintPush = { count: 0, last: 0 };
+const _paintRipples = [];
+let _paintPortal = null;        // { mesh, origMat, mat }
+let paintingCross = null;
+
+function paintingRippleMaterial(map, pw, ph) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      map: { value: map },
+      uTime: { value: 0 },
+      uCount: { value: 0 },
+      uSize: { value: new THREE.Vector2(pw, ph) },
+      uRipples: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, -100, 0)) },
+    },
+    vertexShader: [
+      'varying vec2 vUv;',
+      'void main() {',
+      '  vUv = uv;',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );',
+      '}',
+    ].join('\n'),
+    fragmentShader: [
+      'uniform sampler2D map;',
+      'uniform float uTime;',
+      'uniform int uCount;',
+      'uniform vec2 uSize;',
+      'uniform vec4 uRipples[8];',
+      'varying vec2 vUv;',
+      'void main() {',
+      '  vec2 p = vUv * uSize;',
+      '  vec2 duv = vec2( 0.0 );',
+      '  float glint = 0.0;',
+      '  for ( int i = 0; i < 8; i ++ ) {',
+      '    if ( i >= uCount ) break;',
+      '    vec4 r = uRipples[ i ];',
+      '    float t = uTime - r.z;',
+      '    if ( t < 0.0 || t > 3.0 ) continue;',
+      '    vec2 src = r.xy * uSize;',
+      '    float amp = r.w * exp( -t * 1.35 );',
+      '    for ( int k = 0; k < 5; k ++ ) {',
+      '      vec2 s = src;',
+      '      float a = amp;',
+      '      if ( k == 1 ) { s.x = -src.x; a *= 0.55; }',
+      '      else if ( k == 2 ) { s.x = 2.0 * uSize.x - src.x; a *= 0.55; }',
+      '      else if ( k == 3 ) { s.y = -src.y; a *= 0.55; }',
+      '      else if ( k == 4 ) { s.y = 2.0 * uSize.y - src.y; a *= 0.55; }',
+      '      vec2 rel = p - s;',
+      '      float d = length( rel );',
+      '      float front = t * 1.9;',
+      '      float g = exp( -pow( ( d - front ) * 5.0, 2.0 ) );',
+      '      duv += ( rel / max( d, 1e-4 ) ) * g * a * 0.085;',
+      '      glint += g * a;',
+      '    }',
+      '  }',
+      '  vec2 uv2 = clamp( vUv + duv / uSize, 0.0, 1.0 );',
+      '  vec4 base = texture2D( map, uv2 );',
+      '  base.rgb += vec3( 0.13 ) * min( 1.0, glint );',
+      '  gl_FragColor = base;',
+      '}',
+    ].join('\n'),
+  });
+}
+function isPortalPainting(mesh) {
+  const art = ARTWORKS[mesh.userData.artIndex];
+  return !!art && art.file === WORLD_PAINTING;
+}
+function paintingPortalMesh() {
+  return paintingMeshes.find(isPortalPainting) || null;
+}
+function spawnPaintingRipple(u, v, strength) {
+  _paintRipples.push({ u, v, t0: performance.now() / 1000, amp: 0.5 + strength * 0.3 });
+  if (_paintRipples.length > 8) _paintRipples.shift();
+}
+function handlePaintingPush(mesh, uv) {
+  if (paintingCross || mirrorCross) return;
+  ensureAudio();                                   // gesture: unlock audio for later
+  // Swap in the ripple material on first touch (original restored on mirror exit)
+  if (!_paintPortal || _paintPortal.mesh !== mesh) {
+    const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
+    const pw = bb.max.x - bb.min.x, ph = bb.max.y - bb.min.y;
+    _paintPortal = {
+      mesh,
+      origMat: mesh.material,
+      mat: paintingRippleMaterial(mesh.material.map, pw, ph),
+    };
+    mesh.material = _paintPortal.mat;
+  }
+  const now = performance.now();
+  if (now - _paintPush.last > 6000) _paintPush.count = 0;
+  _paintPush.last = now;
+  _paintPush.count++;
+  spawnPaintingRipple(uv ? uv.x : 0.5, uv ? uv.y : 0.5, _paintPush.count);
+  if (_paintPush.count >= 3) {
+    _paintPush.count = 0;
+    tapWalkTarget = null;
+    snapTween = null;
+    paintingCross = { start: now, dur: 1500, mesh, faded: false, lastRipple: 0 };
+    flashCustomHint('falling into the painting…', 2400);
+  } else {
+    flashCustomHint(_paintPush.count === 1
+      ? 'the paint stirs… push again'
+      : 'the surface is giving — push through', 2200);
+  }
+}
+function restorePaintingPortal() {
+  if (_paintPortal) {
+    _paintPortal.mesh.material = _paintPortal.origMat;
+    _paintPortal.mat.dispose();
+    _paintPortal = null;
+  }
+  _paintRipples.length = 0;
+}
+function updatePaintingFX(now, dt) {
+  // ripple uniforms
+  const tSec = now / 1000;
+  while (_paintRipples.length && tSec - _paintRipples[0].t0 > 3.0) _paintRipples.shift();
+  if (_paintPortal) {
+    const U = _paintPortal.mat.uniforms;
+    U.uTime.value = tSec;
+    U.uCount.value = Math.min(8, _paintRipples.length);
+    for (let i = 0; i < 8; i++) {
+      const r = _paintRipples[i];
+      if (r) U.uRipples.value[i].set(r.u, r.v, r.t0, r.amp);
+      else U.uRipples.value[i].set(0, 0, -100, 0);
+    }
+  }
+  if (!paintingCross) return false;
+  const t = Math.min(1, (now - paintingCross.start) / paintingCross.dur);
+  if (now - paintingCross.lastRipple > 200) {
+    paintingCross.lastRipple = now;
+    spawnPaintingRipple(0.5, 0.5, 2.6);
+  }
+  // press INTO the canvas with effort, along its facing direction
+  const mesh = paintingCross.mesh;
+  const wp = new THREE.Vector3();
+  mesh.getWorldPosition(wp);
+  const n = mesh.userData.outwardNormal || { x: 0, z: 1 };
+  const nx = mirrorWorld ? -n.x : n.x, nz = n.z;
+  const from = 1.5, to = 0.45;
+  const eff = t - 0.13 * Math.sin(t * Math.PI * 3) * (1 - t);
+  const back = from + (to - from) * eff;
+  camera.position.x = wp.x + nx * back;
+  camera.position.z = wp.z + nz * back;
+  yaw = Math.atan2(-(-nx), -(-nz)) + Math.sin(now * 0.09) * 0.0022 * (1 - t);
+  camera.position.y += (wp.y - camera.position.y) * Math.min(1, dt * 3);
+  if (t >= 0.72 && !paintingCross.faded) {
+    paintingCross.faded = true;
+    const f = document.getElementById('world-fade');
+    if (f) f.style.opacity = '1';
+  }
+  if (t >= 1) {
+    paintingCross = null;
+    window.location.href = WORLD_URL;
+  }
+  return true;
+}
+
 // Temporary custom text in the bottom hint bar (used by the mirror pushes).
 function flashCustomHint(text, ms) {
   const hint = document.getElementById('bottom-hint');
@@ -5946,6 +6114,11 @@ function handleTap(clientX, clientY) {
       const wp = new THREE.Vector3();
       p.getWorldPosition(wp);
       const wd = Math.hypot(wp.x - camera.position.x, wp.z - camera.position.z);
+      // The portal painting: within reach, taps PUSH instead of opening the modal
+      if (isPortalPainting(p) && wd < 3.2) {
+        handlePaintingPush(p, paintingHits[0].uv);
+        return;
+      }
       if (wd < computeSnapBackDistance(p) + 0.6) { openModal(p.userData.artIndex); return; }
       const step = Math.min(wd, TAP_STEP_DISTANCE);
       const c = clampToRooms(
@@ -8056,8 +8229,8 @@ function animate() {
 
   if (intro.active) {
     updateIntro(now);
-  } else if (mirrorCross) {
-    // The crossing sequence owns the camera (handled in updateMirrorFX below)
+  } else if (mirrorCross || paintingCross) {
+    // A crossing sequence owns the camera (handled in the FX updaters below)
     timeSinceInput = 0;
   } else if (snapTween) {
     updateSnap(now);
@@ -8120,6 +8293,8 @@ function animate() {
   updateNeonFlicker(now);
   // Mirror ripples + push-through sequence
   updateMirrorFX(now, dt);
+  // Painting-portal ripples + fall-in sequence
+  updatePaintingFX(now, dt);
 
   renderer.render(scene, camera);
 }
