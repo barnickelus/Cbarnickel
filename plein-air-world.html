@@ -789,9 +789,15 @@ cv.addEventListener("pointerup", e => {
   dragging = false;
   if(dragMoved < 6) stepToward(e.clientX, e.clientY);
 });
+let wheelImpulse = 0;
 cv.addEventListener("wheel", e => {
   e.preventDefault();
-  forwardMove(-e.deltaY * 0.03);
+  const scale = (e.deltaMode === 1) ? 24 : (e.deltaMode === 2) ? 400 : 1;
+  let dy = e.deltaY * scale;
+  if(e.ctrlKey) dy *= 3.2;                     // trackpad pinch-zoom walks too
+  dy = Math.max(-90, Math.min(90, dy));
+  wheelImpulse += -dy * 0.02;
+  wheelImpulse = Math.max(-16, Math.min(16, wheelImpulse));
 }, {passive:false});
 
 /* touch: drag to look, tap to step, pinch-out to move forward */
@@ -1065,11 +1071,23 @@ function tick(){
   let mx=0, mz=0;
   if(keys.KeyW || keys.ArrowUp) mz -= 1;
   if(keys.KeyS || keys.ArrowDown) mz += 1;
-  if(keys.KeyA || keys.ArrowLeft) mx -= 1;
-  if(keys.KeyD || keys.ArrowRight) mx += 1;
+  if(keys.KeyA) mx -= 1;
+  if(keys.KeyD) mx += 1;
   const len = Math.hypot(mx,mz);
   if(len > 1){ mx/=len; mz/=len; }
   if(mx !== 0 || mz !== 0) glide = null;      // hands on the wheel cancel the glide
+
+  // arrows / Q / E turn in place — same as the gallery
+  const tl = keys.ArrowLeft || keys.KeyQ, tr = keys.ArrowRight || keys.KeyE;
+  if(tl || tr) yaw += ((tl?1:0) - (tr?1:0)) * 1.9 * dt;
+
+  // smoothed trackpad/wheel walking
+  if(wheelImpulse !== 0){
+    const step = wheelImpulse * Math.min(1, dt*10);
+    if(Math.abs(step) > 0.0005) forwardMove(step);
+    wheelImpulse -= step;
+    if(Math.abs(wheelImpulse) < 0.005) wheelImpulse = 0;
+  }
 
   const speed = (keys.ShiftLeft || keys.ShiftRight ? 44 : 15) * dt;
   fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
