@@ -5857,7 +5857,7 @@ function updateResetFramesBtn() {
 
 // Get the appropriate "first interaction" hint for the current nav mode
 function getNavHint() {
-  if (navMode === 'tap-pinch') return hasTouch ? 'tap or zoom out to move forward' : 'tap or scroll to move forward · drag to look';
+  if (navMode === 'tap-pinch') return hasTouch ? 'tap or zoom out to move forward' : 'click where you want to go · scroll or \u2191\u2193 to walk · \u2190\u2192 to turn';
   if (navMode === 'tap-art')   return 'tap a painting to approach it';
   if (navMode === 'tap-any')   return 'tap anywhere to walk';
   return hasTouch ? 'drag joystick to walk · drag screen to look' : 'wasd or arrows to walk · drag to look';
@@ -5923,12 +5923,23 @@ function onMouseUp(e) {
   mouseLook = null;
 }
 
+// Trackpad-friendly walking: wheel events feed an IMPULSE that the render loop
+// eases out, instead of stepping the camera per event — Mac inertial scrolling
+// stops lurching, and per-event clamping keeps momentum flicks from launching
+// you across the room. A macOS trackpad pinch arrives as ctrl+wheel and maps to
+// walking too (pinch out = walk forward, matching the touch gesture).
+let wheelImpulse = 0;
 function onWheel(e) {
   if (intro.active) return;
   if (navMode !== 'tap-pinch') return;
   e.preventDefault();
-  const stepM = -e.deltaY * 0.005;
-  walkAlongView(stepM, 0);
+  const scale = (e.deltaMode === 1) ? 24 : (e.deltaMode === 2) ? 400 : 1;
+  let dy = e.deltaY * scale;
+  if (e.ctrlKey) dy *= 3.2;                    // trackpad pinch-zoom → stronger stride
+  dy = Math.max(-90, Math.min(90, dy));        // tame inertial spikes
+  wheelImpulse += -dy * 0.004;
+  wheelImpulse = Math.max(-3.2, Math.min(3.2, wheelImpulse));   // momentum cap
+  tapWalkTarget = null;
   noteUserInput();
 }
 
@@ -6015,19 +6026,25 @@ function onKeyDown(e) {
   const k = e.key.toLowerCase();
   if (k === 'w' || e.key === 'ArrowUp') keys.w = true;
   if (k === 's' || e.key === 'ArrowDown') keys.s = true;
-  if (k === 'a' || e.key === 'ArrowLeft') keys.a = true;
-  if (k === 'd' || e.key === 'ArrowRight') keys.d = true;
+  if (k === 'a') keys.a = true;
+  if (k === 'd') keys.d = true;
+  // Laptop-friendly turning: arrows (and Q/E) rotate in place — no drag needed
+  if (e.key === 'ArrowLeft' || k === 'q') keys.tl = true;
+  if (e.key === 'ArrowRight' || k === 'e') keys.tr = true;
+  if (e.key.startsWith('Arrow')) e.preventDefault();
   if (k === 'escape') {
     closeAllOverlays();
   }
-  if (keys.w || keys.a || keys.s || keys.d) noteUserInput();
+  if (keys.w || keys.a || keys.s || keys.d || keys.tl || keys.tr) noteUserInput();
 }
 function onKeyUp(e) {
   const k = e.key.toLowerCase();
   if (k === 'w' || e.key === 'ArrowUp') keys.w = false;
   if (k === 's' || e.key === 'ArrowDown') keys.s = false;
-  if (k === 'a' || e.key === 'ArrowLeft') keys.a = false;
-  if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
+  if (k === 'a') keys.a = false;
+  if (k === 'd') keys.d = false;
+  if (e.key === 'ArrowLeft' || k === 'q') keys.tl = false;
+  if (e.key === 'ArrowRight' || k === 'e') keys.tr = false;
 }
 
 /* Joystick */
@@ -8275,6 +8292,20 @@ function animate() {
       camera.position.z = c.z;
       currentRoomId = c.roomId;
       noteUserInput();
+    }
+
+    // Turn keys — arrows / Q / E rotate in place at a steady rate
+    if (keys.tl || keys.tr) {
+      yaw += ((keys.tl ? 1 : 0) - (keys.tr ? 1 : 0)) * 1.9 * dt;
+      noteUserInput();
+    }
+
+    // Consume the wheel impulse with an ease-out — smooth trackpad walking
+    if (wheelImpulse !== 0) {
+      const step = wheelImpulse * Math.min(1, dt * 10);
+      if (Math.abs(step) > 0.00005) walkAlongView(step, 0);
+      wheelImpulse -= step;
+      if (Math.abs(wheelImpulse) < 0.001) wheelImpulse = 0;
     }
 
     // Magnetic snap — when idle near a painting
