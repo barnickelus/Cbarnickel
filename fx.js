@@ -116,7 +116,7 @@ const FX = (() => {
   // by an UnrealBloomPass; only its pure-glow target is added back, so the
   // tubes themselves keep their exact baked look and just gain a halo.
   const NEON_LAYER = 5;
-  const BLOOM_STRENGTH = 1.1;
+  const BLOOM_STRENGTH = 0.8;
   let maskRT = null, bloomPass = null, depthMat = null;
   const _clear = new THREE.Color();
   const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _box = new THREE.Box3();
@@ -224,8 +224,12 @@ const FX = (() => {
   }
   float fxH(vec2 uv) {
     float hi = fxLum(texture2D(bumpMap, uv).rgb);
-    float lo = fxLum(texture2D(bumpMap, uv, 3.5).rgb);
-    return (hi - lo) + fxWeave * fxWeaveH(uv);
+    float lo = fxLum(texture2D(bumpMap, uv, 1.5).rgb);
+    // Fine band only, soft-clipped: a stroke's ridge counts, a face's
+    // silhouette or a sky/hill edge can't dominate the relief.
+    float d = hi - lo;
+    d = d / (1.0 + abs(d) * 8.0);
+    return d + fxWeave * fxWeaveH(uv);
   }
   vec2 dHdxy_fwd() {
     vec2 dSTdx = dFdx(vUv);
@@ -247,7 +251,7 @@ const FX = (() => {
   }
 #endif
 `;
-  const SURFACE = { relief: 0.005, rake: 1.9, weave: 0.18, threadsPerM: 900, roughness: 0.46, env: 0.12 };
+  const SURFACE = { relief: 0.009, rake: 1.2, weave: 0.18, threadsPerM: 900, roughness: 0.56, env: 0.08 };
 
   function applySurface(p) {
     const m = p.material;
@@ -307,12 +311,11 @@ const FX = (() => {
 
   /* ─── Floor reflection ─── */
   // One Reflector plane spans every room's footprint just above the floors;
-  // walls occlude it naturally. It's alpha-blended over the floor by a Fresnel
-  // weight — a polished floor trades diffuse for specular, so the dark room
-  // shows in it as much as the bright art and neon: faint looking straight
-  // down, strong at grazing angles. Rendered at reduced resolution and softened with a
+  // walls occlude it naturally. Fresnel-weighted (faint underfoot, strong at
+  // grazing angles) and only partly replaces the floor, so the lit marble
+  // keeps its brightness while neon and art glint in it. Rendered at reduced resolution and softened with a
   // small disk blur so it reads as polish, not a mirror.
-  const REFLECT_STRENGTH = { duomo: 1.0, dark: 0.45 };   // others: matte, off
+  const REFLECT_STRENGTH = { duomo: 1.3, dark: 0.6 };   // others: matte, off
   const FloorReflectShader = {
     uniforms: {
       color: { value: null },
@@ -342,7 +345,7 @@ const FX = (() => {
         vec2 uv = vUvR.xy / vUvR.w;
         vec3 v = normalize(cameraPosition - vWorld);
         float cosT = clamp(v.y, 0.0, 1.0);
-        float fres = 0.2 + 0.8 * pow(1.0 - cosT, 3.0);
+        float fres = 0.04 + 0.96 * pow(1.0 - cosT, 5.0);
         // Blur grows with distance to the reflected point (contact-hardening-ish)
         float r = blur * (0.6 + 0.4 * (1.0 - cosT));
         vec3 acc = texture2D(tDiffuse, uv).rgb * 0.2;
@@ -356,7 +359,11 @@ const FX = (() => {
         acc += texture2D(tDiffuse, uv + vec2(-r, -r) * 0.7).rgb * 0.1;
         // Fade with distance so it sits under the gallery's fog
         float fog = exp(-length(cameraPosition - vWorld) * 0.045);
-        gl_FragColor = vec4(acc, clamp(strength * fres * fog, 0.0, 1.0));
+        // Premultiplied: floor * (1 - 0.35k) + reflection * k. Bright things
+        // (neon, lit art) show at full weight; the dark room only dims the
+        // marble a little, so its spot pools stay bright.
+        float k = clamp(strength * fres * fog, 0.0, 1.0);
+        gl_FragColor = vec4(acc * k, k * 0.35);
       }`,
   };
   let floorRefl = null;
@@ -383,7 +390,9 @@ const FX = (() => {
     refl.renderOrder = 1;
     const m = refl.material;
     m.transparent = true;
-    m.blending = THREE.NormalBlending;
+    m.blending = THREE.CustomBlending;
+    m.blendSrc = THREE.OneFactor;
+    m.blendDst = THREE.OneMinusSrcAlphaFactor;
     m.depthWrite = false;
     // Only the main camera drives the reflection. Seen from any other camera
     // (the wall mirror's virtual view) the texture would be misaligned, so
@@ -449,8 +458,10 @@ const FX = (() => {
       void main() {
         vec3 v = normalize(vView);
         float edge = abs(dot(normalize(vN), v));          // 1 = looking through the core
-        float core = pow(edge, 2.2);
-        float along = smoothstep(0.0, 0.35, vAlong) * (0.35 + 0.65 * vAlong);
+        float core = pow(edge, 3.0);
+        // Peak mid-beam: fades into the wall at one end and out before the
+        // lamp at the other, so no light hangs against the ceiling.
+        float along = smoothstep(0.0, 0.35, vAlong) * (1.0 - smoothstep(0.45, 0.8, vAlong));
         float nearFade = smoothstep(0.4, 2.2, length(vView));  // don't fog the lens
         float drift = 0.85 + 0.15 * sin(vLocal.y * 3.0 + time * 0.4 + vLocal.x * 5.0);
         float a = core * along * nearFade * drift * strength;
@@ -469,7 +480,7 @@ const FX = (() => {
       varying float vA;
       void main() {
         float t = fract(seed.x + time * 0.004 * (0.5 + seed.y));   // slow fall along the beam
-        float along = mix(0.18, 0.98, t);
+        float along = mix(0.4, 0.98, t);
         vec3 up = abs(axis.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
         vec3 u = normalize(cross(axis, up)), w = cross(axis, u);
         float ang = seed.z * 6.2832 + time * 0.05 * (seed.y - 0.5);
@@ -479,7 +490,7 @@ const FX = (() => {
         vec4 mv = viewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
         float dist = -mv.z;
-        gl_PointSize = pr * clamp(26.0 / dist, 1.0, 5.0);
+        gl_PointSize = pr * clamp(30.0 / dist, 2.0, 6.0);
         float tw = 0.55 + 0.45 * sin(time * (0.8 + seed.x * 1.7) + seed.z * 20.0);
         float edgeFade = smoothstep(0.0, 0.12, t) * smoothstep(1.0, 0.85, t);
         vA = tw * edgeFade * smoothstep(0.5, 1.6, dist) * (1.0 - smoothstep(6.0, 12.0, dist));
@@ -491,7 +502,7 @@ const FX = (() => {
       void main() {
         vec2 d = gl_PointCoord - 0.5;
         float r = dot(d, d) * 4.0;
-        float a = exp(-r * 3.0) * vA * strength;
+        float a = exp(-r * 4.5) * vA * strength;
         gl_FragColor = vec4(color * a, 1.0);
       }`,
   };
@@ -502,7 +513,7 @@ const FX = (() => {
     group.name = 'fx-atmos';
     const beams = [];
     const spots = lightingRefs.spots;
-    const MOTES = 22;
+    const MOTES = 14;
     const seeds = [], apexes = [], axes = [], dimsArr = [], pos = [];
     for (const sp of spots) {
       const a = sp.position, b = sp.target.position;
@@ -584,7 +595,7 @@ const FX = (() => {
     }
     if (atmos.dust) {
       atmos.dust.material.uniforms.time.value = t;
-      atmos.dust.material.uniforms.strength.value = 0.55 * k * lightingMul;
+      atmos.dust.material.uniforms.strength.value = 0.28 * k * lightingMul;
     }
   }
 
@@ -711,8 +722,8 @@ const FX = (() => {
   }
 
   /* ─── Film: vignette + grain overlay ─── */
-  const VIGNETTE = { duomo: 0.55, dark: 0.5, spotlight: 0.5, white: 0.16, ink: 0.14 };
-  let filmEl = null, filmTheme = null;
+  const VIGNETTE = { duomo: 0.34, dark: 0.32, spotlight: 0.32, white: 0.12, ink: 0.1 };
+  let filmEl = null, grainEl = null, filmTheme = null;
   function buildFilm() {
     const n = document.createElement('canvas');
     n.width = n.height = 160;
@@ -726,30 +737,37 @@ const FX = (() => {
     ctx.putImageData(img, 0, 0);
     const css = document.createElement('style');
     css.textContent = `
-      #fx-film { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+      /* Two siblings of the canvas, not one wrapper: a positioned, z-indexed
+         wrapper is its own stacking context, and a blend mode inside it would
+         blend against the (transparent) wrapper instead of the canvas. */
+      #fx-film, #fx-grain { position: fixed; z-index: 1; pointer-events: none; }
+      #fx-film { inset: 0; }
       #fx-film .vig { position: absolute; inset: 0;
-        background: radial-gradient(ellipse 78% 72% at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,var(--vig, .5)) 100%); }
+        background: radial-gradient(ellipse 95% 92% at 50% 45%, rgba(0,0,0,0) 62%, rgba(0,0,0,var(--vig, .35)) 100%); }
       /* overlay blend: mid-grey noise is an identity, so grain adds texture
          without pulling blacks up or whites down (plain alpha would flatten) */
-      #fx-film .grain { position: absolute; inset: -160px; opacity: .07; mix-blend-mode: overlay;
+      #fx-grain { inset: -160px; opacity: .05; mix-blend-mode: overlay;
         background-image: url(${n.toDataURL()});
         animation: fx-grain .5s steps(1) infinite; }
       @keyframes fx-grain {
         0% { transform: translate(0, 0); } 17% { transform: translate(-53px, 31px); }
         33% { transform: translate(41px, -67px); } 50% { transform: translate(-97px, -13px); }
         67% { transform: translate(71px, 89px); } 83% { transform: translate(-23px, 113px); } }
-      @media (prefers-reduced-motion: reduce) { #fx-film .grain { animation: none; } }`;
+      @media (prefers-reduced-motion: reduce) { #fx-grain { animation: none; } }`;
     document.head.appendChild(css);
     filmEl = document.createElement('div');
     filmEl.id = 'fx-film';
-    filmEl.innerHTML = '<div class="vig"></div><div class="grain"></div>';
+    filmEl.innerHTML = '<div class="vig"></div>';
+    grainEl = document.createElement('div');
+    grainEl.id = 'fx-grain';
     const stage = document.getElementById('stage');
+    stage.parentNode.insertBefore(grainEl, stage.nextSibling);
     stage.parentNode.insertBefore(filmEl, stage.nextSibling);
   }
   function syncFilm() {
     if (settings.film && !filmEl) buildFilm();
     if (!filmEl) return;
-    filmEl.style.display = settings.film ? '' : 'none';
+    filmEl.style.display = grainEl.style.display = settings.film ? '' : 'none';
     if (filmTheme !== theme) {
       filmTheme = theme;
       filmEl.style.setProperty('--vig', String(VIGNETTE[theme] != null ? VIGNETTE[theme] : 0.45));
