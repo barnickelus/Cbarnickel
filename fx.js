@@ -8,8 +8,10 @@
    Shares the core script's global bindings (scene, camera, renderer, theme,
    paintingMeshes, ...) — classic scripts share one global lexical scope.
 
+   The post pipeline (MSAA target + final composite) runs only while bloom
+   is on; everything else draws in the normal scene pass.
+
    Features (keys of FX.settings, persisted to localStorage 'fx'):
-     post     — post-processing pipeline (MSAA render target + final passes)
      surface  — paintings read as physical objects: brush-stroke relief lifted
                 from each image's own fine detail, linen weave, varnish sheen
      reflect  — polished floor: a soft, Fresnel-weighted planar reflection
@@ -34,7 +36,6 @@ const FX = (() => {
 
   // Defaults: full stack on desktop; GPU-heavy features off on touch/small screens.
   const DEFAULTS = {
-    post: !lowTier,
     surface: true,
     reflect: !lowTier,
     bloom: !lowTier,
@@ -52,10 +53,6 @@ const FX = (() => {
   const settings = Object.assign({}, DEFAULTS, lowTier ? {} : siteDefaults, saved);
   if (q === 'off') Object.keys(settings).forEach(k => settings[k] = false);
   if (q === 'on') Object.keys(settings).forEach(k => settings[k] = true);
-
-  function persist() {
-    try { localStorage.setItem('fx', JSON.stringify(settings)); } catch (e) {}
-  }
 
   /* ─── Post-processing pipeline ─── */
   let composer = null;
@@ -708,7 +705,7 @@ const FX = (() => {
   }
 
   /* ─── Film: vignette + grain overlay ─── */
-  const VIGNETTE = { duomo: 0.55, dark: 0.55, spotlight: 0.5, white: 0.22, ink: 0.18 };
+  const VIGNETTE = { duomo: 0.55, dark: 0.5, spotlight: 0.5, white: 0.16, ink: 0.14 };
   let filmEl = null, filmTheme = null;
   function buildFilm() {
     const n = document.createElement('canvas');
@@ -718,7 +715,7 @@ const FX = (() => {
     for (let i = 0; i < img.data.length; i += 4) {
       const v = (Math.random() * 255) | 0;
       img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-      img.data[i + 3] = 22;
+      img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
     const css = document.createElement('style');
@@ -726,7 +723,9 @@ const FX = (() => {
       #fx-film { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
       #fx-film .vig { position: absolute; inset: 0;
         background: radial-gradient(ellipse 78% 72% at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,var(--vig, .5)) 100%); }
-      #fx-film .grain { position: absolute; inset: -160px; opacity: .55;
+      /* overlay blend: mid-grey noise is an identity, so grain adds texture
+         without pulling blacks up or whites down (plain alpha would flatten) */
+      #fx-film .grain { position: absolute; inset: -160px; opacity: .07; mix-blend-mode: overlay;
         background-image: url(${n.toDataURL()});
         animation: fx-grain .5s steps(1) infinite; }
       @keyframes fx-grain {
@@ -773,7 +772,7 @@ const FX = (() => {
   const PLANT_GLOW = [   // [signX, signZ, colour]
     [-1, -1, 0x39ff8c], [1, -1, 0xff2e88], [-1, 1, 0x2fd4ff], [1, 1, 0x39ff8c],
   ];
-  const SPILL = { duomo: 1.0, dark: 0.8, spotlight: 1.0, white: 0.35, ink: 0.35 };
+  const SPILL = { duomo: 1.0, dark: 0.8, spotlight: 0.45, white: 0.35, ink: 0.8 };
   const spill = { group: null, plants: [], title: [] };
   function spillPlane(w, h, color, pos, rotY, rotX) {
     const m = new THREE.ShaderMaterial({
@@ -831,6 +830,7 @@ const FX = (() => {
   function init() {
     if (ready) return;
     ready = true;
+    buildUI();
     window.addEventListener('resize', () => {
       if (composer) composer.setSize(window.innerWidth, window.innerHeight);
       resizeReflector();
@@ -840,13 +840,14 @@ const FX = (() => {
 
   function render(dt, now) {
     init();
+    governor(now || performance.now());
     syncSurfaces();
     syncReflector();
     syncAtmos(now || performance.now());
     syncContact();
     syncFilm();
     syncSpill();
-    if (settings.post) {
+    if (settings.bloom) {
       if (!composer) composer = buildComposer();
       if (composer) {
         const on = settings.bloom ? renderBloom() : 0;
@@ -859,12 +860,77 @@ const FX = (() => {
     renderer.render(scene, camera);
   }
 
+  /* ─── Quality governor ─── */
+  // Watches real frame times once the visitor is inside. If the device can't
+  // hold ~40fps for a few seconds, it sheds the costliest effects in order —
+  // only ones the visitor hasn't set by hand, never re-enabling (no
+  // oscillation), and only for this session.
+  const SHED_ORDER = ['reflect', 'bloom', 'atmos', 'surface'];
+  const gov = { acc: 0, frames: 0, slow: 0, last: 0 };
+  function governor(now) {
+    if (typeof entered === 'undefined' || !entered || document.hidden) { gov.last = 0; return; }
+    if (gov.last) {
+      const dtm = now - gov.last;
+      if (dtm < 250) { gov.acc += dtm; gov.frames++; }   // ignore tab-switch gaps
+    }
+    gov.last = now;
+    if (gov.acc < 1000) return;
+    const fps = gov.frames * 1000 / gov.acc;
+    gov.acc = 0; gov.frames = 0;
+    gov.slow = fps < 40 ? gov.slow + 1 : 0;
+    if (gov.slow < 3) return;
+    gov.slow = 0;
+    const k = SHED_ORDER.find(f => settings[f] && !(f in saved));
+    if (!k) return;
+    settings[k] = false;
+    syncUI();
+    if (window.console) console.info('[fx] low frame rate — turned off', k);
+  }
+
+  /* ─── Settings UI (injected into the gear panel) ─── */
+  const LABELS = [
+    ['reflect', 'Floor reflections'],
+    ['bloom',   'Neon glow'],
+    ['spill',   'Neon light on walls'],
+    ['atmos',   'Light beams + dust'],
+    ['surface', 'Paint texture'],
+    ['contact', 'Contact shadows'],
+    ['film',    'Film grain + vignette'],
+  ];
+  function buildUI() {
+    const panel = document.getElementById('settings-panel');
+    const anchor = document.getElementById('neon-plants-toggle');
+    if (!panel || !anchor) return;
+    const after = anchor.closest('.row');
+    const wrap = document.createElement('div');
+    wrap.className = 'row divider';
+    wrap.id = 'fx-settings';
+    wrap.innerHTML = '<label>Visual effects</label>' + LABELS.map(([k, t]) =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+         <span style="font-size:12px;opacity:.85;">${t}</span>
+         <div class="toggle-switch" data-fx="${k}"></div></div>`).join('');
+    after.parentNode.insertBefore(wrap, after.nextSibling);
+    wrap.querySelectorAll('[data-fx]').forEach(el => {
+      el.addEventListener('click', () => set(el.dataset.fx, !settings[el.dataset.fx]));
+    });
+    syncUI();
+  }
+  function syncUI() {
+    document.querySelectorAll('#fx-settings [data-fx]').forEach(el => {
+      el.classList.toggle('on', !!settings[el.dataset.fx]);
+    });
+  }
+
   function set(key, on) {
     if (!(key in settings)) return;
     settings[key] = !!on;
-    persist();
+    saved[key] = settings[key];
+    try { localStorage.setItem('fx', JSON.stringify(saved)); } catch (e) {}
+    syncUI();
   }
 
-  return { settings, render, set, lowTier, _debug: () => ({ floorRefl, composer }) };
+  // Explicit choices only — what "Export current as default JSON" should carry.
+  function exportable() { return Object.assign({}, settings); }
+  return { settings, render, set, exportable, lowTier };
 })();
 window.FX = FX;

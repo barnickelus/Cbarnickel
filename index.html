@@ -6317,6 +6317,7 @@ function currentSettingsObject() {
     frameStyle: frameSettings.style,
     frameColor: frameSettings.color,
     framePerPainting: framePerPainting,
+    ...(window.FX ? { fx: FX.exportable() } : {}),
   };
 }
 function openSettingsExport() {
@@ -6351,7 +6352,7 @@ function downloadSettingsExport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function resetToDefaults() {
-  ['theme', 'lighting', 'neonTitle', 'neonPlants', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
+  ['theme', 'lighting', 'neonTitle', 'neonPlants', 'frameStyle', 'frameColor', 'framePerPainting', 'fx'].forEach(k => {
     try { localStorage.removeItem(k); } catch (e) {}
   });
   location.reload();
