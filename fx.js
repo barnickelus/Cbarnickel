@@ -32,7 +32,7 @@
 const FX = (() => {
   const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
   const isSmall = Math.min(window.innerWidth, window.innerHeight) < 700;
-  const lowTier = isTouch || isSmall;
+  const lowTier = isTouch || isSmall || (typeof PERF !== 'undefined' && PERF.low);
 
   // Defaults: full stack on desktop; GPU-heavy features off on touch/small screens.
   const DEFAULTS = {
@@ -976,6 +976,12 @@ const FX = (() => {
     for (const k of gov.shed) if (!(k in saved)) out[k] = true;
     return out;
   }
-  return { settings, render, set, exportable, lowTier, shed: gov.shed };
+  // Render-scale changes from the resolution governor in index.html
+  function setPixelRatio(pr) {
+    if (composer) { composer.setPixelRatio(pr); composer.setSize(window.innerWidth, window.innerHeight); }
+    resizeReflector();
+    resizeBloom();
+  }
+  return { settings, render, set, exportable, lowTier, setPixelRatio, shed: gov.shed };
 })();
 window.FX = FX;
