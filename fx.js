@@ -872,8 +872,9 @@ const FX = (() => {
   // only ones the visitor hasn't set by hand, never re-enabling (no
   // oscillation), and only for this session.
   const SHED_ORDER = ['reflect', 'bloom', 'atmos', 'surface'];
-  const gov = { acc: 0, frames: 0, slow: 0, last: 0 };
+  const gov = { acc: 0, frames: 0, slow: 0, last: 0, shed: [] };
   function governor(now) {
+    if (q) return;   // ?fx=on / ?fx=off pin the state for comparisons
     if (typeof entered === 'undefined' || !entered || document.hidden) { gov.last = 0; return; }
     if (gov.last) {
       const dtm = now - gov.last;
@@ -889,6 +890,7 @@ const FX = (() => {
     const k = SHED_ORDER.find(f => settings[f] && !(f in saved));
     if (!k) return;
     settings[k] = false;
+    gov.shed.push(k);
     syncUI();
     if (window.console) console.info('[fx] low frame rate — turned off', k);
   }
@@ -936,7 +938,12 @@ const FX = (() => {
   }
 
   // Explicit choices only — what "Export current as default JSON" should carry.
-  function exportable() { return Object.assign({}, settings); }
-  return { settings, render, set, exportable, lowTier };
+  // Anything the governor shed on this (slow) device is reported as intended.
+  function exportable() {
+    const out = Object.assign({}, settings);
+    for (const k of gov.shed) if (!(k in saved)) out[k] = true;
+    return out;
+  }
+  return { settings, render, set, exportable, lowTier, shed: gov.shed };
 })();
 window.FX = FX;
