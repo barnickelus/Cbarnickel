@@ -14,6 +14,8 @@
                 from each image's own fine detail, linen weave, varnish sheen
      reflect  — polished floor: a soft, Fresnel-weighted planar reflection
                 (Duomo marble strongest, dark-mode wood faint, comic themes off)
+     bloom    — the neon sign and neon plants throw real light: a selective
+                bloom (only neon blooms; walls still occlude it)
 */
 'use strict';
 
@@ -27,6 +29,7 @@ const FX = (() => {
     post: !lowTier,
     surface: true,
     reflect: !lowTier,
+    bloom: !lowTier,
   };
   // Query override for side-by-side comparisons: ?fx=off / ?fx=on
   const q = new URLSearchParams(location.search).get('fx');
@@ -70,9 +73,120 @@ const FX = (() => {
     c.setPixelRatio(renderer.getPixelRatio());
     c.setSize(w, h);
     c.addPass(new THREE.RenderPass(scene, camera));
-    const out = new THREE.ShaderPass(THREE.CopyShader);
-    c.addPass(out);
+    finalPass = new THREE.ShaderPass(FinalShader);
+    c.addPass(finalPass);
     return c;
+  }
+
+  // Final composite: scene + selective bloom.
+  const FinalShader = {
+    uniforms: {
+      tDiffuse: { value: null },
+      tBloom: { value: null },
+      bloomStrength: { value: 0 },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D tDiffuse;
+      uniform sampler2D tBloom;
+      uniform float bloomStrength;
+      varying vec2 vUv;
+      void main() {
+        vec4 c = texture2D(tDiffuse, vUv);
+        if (bloomStrength > 0.0) c.rgb += texture2D(tBloom, vUv).rgb * bloomStrength;
+        gl_FragColor = c;
+      }`,
+  };
+  let finalPass = null;
+
+  /* ─── Selective neon bloom ─── */
+  // Mask = the neon alone, depth-tested against a colour-less depth prepass
+  // of everything else (so a wall still hides the sign). The mask is blurred
+  // by an UnrealBloomPass; only its pure-glow target is added back, so the
+  // tubes themselves keep their exact baked look and just gain a halo.
+  const NEON_LAYER = 5;
+  const BLOOM_STRENGTH = 1.1;
+  let maskRT = null, bloomPass = null, depthMat = null;
+  const _clear = new THREE.Color();
+  const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _box = new THREE.Box3();
+  function neonObjects() {
+    const out = [];
+    if (typeof lobbyTitleMesh !== 'undefined' && lobbyTitleMesh && neonTitle) out.push(lobbyTitleMesh);
+    if (typeof neonPlantMeshes !== 'undefined') for (const g of neonPlantMeshes) out.push(...g.children);
+    return out;
+  }
+  function neonInView(list) {
+    _pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_pv);
+    for (const o of list) {
+      if (!o.visible || !o.parent) continue;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      _box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      if (_frustum.intersectsBox(_box)) return true;
+    }
+    return false;
+  }
+  function ensureBloom() {
+    if (bloomPass || !THREE.UnrealBloomPass) return !!bloomPass;
+    const pr = renderer.getPixelRatio();
+    const w = Math.round(window.innerWidth * pr / 2), h = Math.round(window.innerHeight * pr / 2);
+    maskRT = new THREE.WebGLRenderTarget(w, h, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
+    bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(w, h), 1.0, 0.55, 0.0);
+    bloomPass.setSize(w, h);
+    depthMat = new THREE.MeshBasicMaterial({ colorWrite: false });
+    return true;
+  }
+  function renderBloom() {
+    const list = neonObjects();
+    if (!list.length || !neonInView(list) || !ensureBloom()) return 0;
+    for (const o of list) o.layers.enable(NEON_LAYER);
+    const prevTarget = renderer.getRenderTarget();
+    const prevAuto = renderer.autoClear;
+    renderer.getClearColor(_clear);
+    const prevAlpha = renderer.getClearAlpha();
+    const prevMask = camera.layers.mask;
+    const prevFog = scene.fog;
+    // Reflectors would re-render the whole scene from inside this pass — hide them.
+    const mm = (typeof mirrorMesh !== 'undefined') ? mirrorMesh : null;
+    const mmVis = mm ? mm.visible : false, frVis = floorRefl ? floorRefl.visible : false;
+    if (mm) mm.visible = false;
+    if (floorRefl) floorRefl.visible = false;
+
+    renderer.setRenderTarget(maskRT);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+    renderer.autoClear = false;
+    // 1) depth of everything except the neon
+    const neonVis = list.map(o => o.visible);
+    list.forEach(o => { o.visible = false; });
+    scene.overrideMaterial = depthMat;
+    renderer.render(scene, camera);
+    scene.overrideMaterial = null;
+    list.forEach((o, i) => { o.visible = neonVis[i]; });
+    // 2) the neon alone, depth-tested (no fog: the glow shouldn't grey out)
+    scene.fog = null;
+    camera.layers.set(NEON_LAYER);
+    renderer.render(scene, camera);
+    camera.layers.mask = prevMask;
+    scene.fog = prevFog;
+
+    renderer.autoClear = prevAuto;
+    renderer.setClearColor(_clear, prevAlpha);
+    if (mm) mm.visible = mmVis;
+    if (floorRefl) floorRefl.visible = frVis;
+    // 3) blur
+    bloomPass.render(renderer, null, maskRT, 0, false);
+    renderer.setRenderTarget(prevTarget);
+    return 1;
+  }
+  function resizeBloom() {
+    if (!bloomPass) return;
+    const pr = renderer.getPixelRatio();
+    const w = Math.round(window.innerWidth * pr / 2), h = Math.round(window.innerHeight * pr / 2);
+    maskRT.setSize(w, h);
+    bloomPass.setSize(w, h);
   }
 
   /* ─── Painting surface: relief + weave + varnish ─── */
@@ -293,6 +407,7 @@ const FX = (() => {
     window.addEventListener('resize', () => {
       if (composer) composer.setSize(window.innerWidth, window.innerHeight);
       resizeReflector();
+      resizeBloom();
     });
   }
 
@@ -302,7 +417,13 @@ const FX = (() => {
     syncReflector();
     if (settings.post) {
       if (!composer) composer = buildComposer();
-      if (composer) { composer.render(); return; }
+      if (composer) {
+        const on = settings.bloom ? renderBloom() : 0;
+        finalPass.uniforms.bloomStrength.value = on ? BLOOM_STRENGTH : 0;
+        if (on) finalPass.uniforms.tBloom.value = bloomPass.renderTargetsHorizontal[0].texture;
+        composer.render();
+        return;
+      }
     }
     renderer.render(scene, camera);
   }
