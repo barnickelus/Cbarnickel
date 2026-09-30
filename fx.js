@@ -16,6 +16,8 @@
                 (Duomo marble strongest, dark-mode wood faint, comic themes off)
      bloom    — the neon sign and neon plants throw real light: a selective
                 bloom (only neon blooms; walls still occlude it)
+     atmos    — air you can see: faint beams under every painting spotlight and
+                slow dust motes drifting through them
 */
 'use strict';
 
@@ -30,6 +32,7 @@ const FX = (() => {
     surface: true,
     reflect: !lowTier,
     bloom: !lowTier,
+    atmos: true,
   };
   // Query override for side-by-side comparisons: ?fx=off / ?fx=on
   const q = new URLSearchParams(location.search).get('fx');
@@ -401,6 +404,178 @@ const FX = (() => {
     if (floorRefl) floorRefl.visible = want;
   }
 
+  /* ─── Atmosphere: spotlight beams + dust ─── */
+  // Each painting spot gets a soft cone: brightest along its core and near
+  // the lamp, feathered at the rim (view-angle falloff) and fading as it
+  // lands on the wall, so it reads as lit air rather than geometry. Motes
+  // drift inside the cones and only sparkle where the beam would catch them.
+  // Additive, no depth write, one draw call per beam + one for all dust.
+  const ATMOS = { duomo: 1.0, dark: 0.9, spotlight: 1.1, white: 0.0, ink: 0.0 };
+  const BeamShader = {
+    uniforms: { color: { value: new THREE.Color() }, strength: { value: 0 }, time: { value: 0 } },
+    vertexShader: `
+      varying float vAlong;
+      varying vec3 vN;
+      varying vec3 vView;
+      varying vec3 vLocal;
+      void main() {
+        vAlong = uv.y;                          // 1 at the lamp, 0 at the wall
+        vLocal = position;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vN = normalize(mat3(modelMatrix) * normal);
+        vView = cameraPosition - wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: `
+      uniform vec3 color;
+      uniform float strength;
+      uniform float time;
+      varying float vAlong;
+      varying vec3 vN;
+      varying vec3 vView;
+      varying vec3 vLocal;
+      void main() {
+        vec3 v = normalize(vView);
+        float edge = abs(dot(normalize(vN), v));          // 1 = looking through the core
+        float core = pow(edge, 2.2);
+        float along = smoothstep(0.0, 0.35, vAlong) * (0.35 + 0.65 * vAlong);
+        float nearFade = smoothstep(0.4, 2.2, length(vView));  // don't fog the lens
+        float drift = 0.85 + 0.15 * sin(vLocal.y * 3.0 + time * 0.4 + vLocal.x * 5.0);
+        float a = core * along * nearFade * drift * strength;
+        gl_FragColor = vec4(color * a, 1.0);
+      }`,
+  };
+  const DustShader = {
+    uniforms: { time: { value: 0 }, strength: { value: 0 }, color: { value: new THREE.Color(0xffe6c0) }, pr: { value: 1 } },
+    vertexShader: `
+      attribute vec3 seed;       // random 0..1 triplet
+      attribute vec3 apex;       // lamp position
+      attribute vec3 axis;       // unit beam direction
+      attribute vec2 dims;       // length, end radius
+      uniform float time;
+      uniform float pr;
+      varying float vA;
+      void main() {
+        float t = fract(seed.x + time * 0.004 * (0.5 + seed.y));   // slow fall along the beam
+        float along = mix(0.18, 0.98, t);
+        vec3 up = abs(axis.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+        vec3 u = normalize(cross(axis, up)), w = cross(axis, u);
+        float ang = seed.z * 6.2832 + time * 0.05 * (seed.y - 0.5);
+        float rad = sqrt(seed.y) * dims.y * along * 0.85;
+        vec3 p = apex + axis * (along * dims.x) + (u * cos(ang) + w * sin(ang)) * rad;
+        p += 0.03 * vec3(sin(time * 0.31 + seed.x * 40.0), sin(time * 0.23 + seed.z * 30.0), cos(time * 0.27 + seed.y * 50.0));
+        vec4 mv = viewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float dist = -mv.z;
+        gl_PointSize = pr * clamp(26.0 / dist, 1.0, 5.0);
+        float tw = 0.55 + 0.45 * sin(time * (0.8 + seed.x * 1.7) + seed.z * 20.0);
+        float edgeFade = smoothstep(0.0, 0.12, t) * smoothstep(1.0, 0.85, t);
+        vA = tw * edgeFade * smoothstep(0.5, 1.6, dist) * (1.0 - smoothstep(6.0, 12.0, dist));
+      }`,
+    fragmentShader: `
+      uniform vec3 color;
+      uniform float strength;
+      varying float vA;
+      void main() {
+        vec2 d = gl_PointCoord - 0.5;
+        float r = dot(d, d) * 4.0;
+        float a = exp(-r * 3.0) * vA * strength;
+        gl_FragColor = vec4(color * a, 1.0);
+      }`,
+  };
+  const atmos = { group: null, beams: [], dust: null, spotCount: -1 };
+  const _up = new THREE.Vector3(0, 1, 0);
+  function buildAtmos() {
+    const group = new THREE.Group();
+    group.name = 'fx-atmos';
+    const beams = [];
+    const spots = lightingRefs.spots;
+    const MOTES = 22;
+    const seeds = [], apexes = [], axes = [], dimsArr = [], pos = [];
+    for (const sp of spots) {
+      const a = sp.position, b = sp.target.position;
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length();
+      dir.normalize();
+      const endR = Math.tan(sp.angle * 0.62) * len;
+      // Cone: apex at the lamp (+Y in geometry space), open end at the wall
+      const geo = new THREE.CylinderGeometry(0.035, endR, len, 28, 1, true);
+      geo.translate(0, -len / 2, 0);
+      const mat = new THREE.ShaderMaterial({
+        uniforms: THREE.UniformsUtils.clone(BeamShader.uniforms),
+        vertexShader: BeamShader.vertexShader,
+        fragmentShader: BeamShader.fragmentShader,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      });
+      mat.uniforms.color.value.copy(sp.color);
+      const cone = new THREE.Mesh(geo, mat);
+      cone.position.copy(a);
+      cone.quaternion.setFromUnitVectors(_up, dir.clone().negate());
+      cone.renderOrder = 2;
+      cone.userData.spot = sp;
+      group.add(cone);
+      beams.push(cone);
+      for (let i = 0; i < MOTES; i++) {
+        seeds.push(Math.random(), Math.random(), Math.random());
+        apexes.push(a.x, a.y, a.z);
+        axes.push(dir.x, dir.y, dir.z);
+        dimsArr.push(len, endR);
+        pos.push(a.x, a.y, a.z);
+      }
+    }
+    if (spots.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('seed', new THREE.Float32BufferAttribute(seeds, 3));
+      g.setAttribute('apex', new THREE.Float32BufferAttribute(apexes, 3));
+      g.setAttribute('axis', new THREE.Float32BufferAttribute(axes, 3));
+      g.setAttribute('dims', new THREE.Float32BufferAttribute(dimsArr, 2));
+      const m = new THREE.ShaderMaterial({
+        uniforms: THREE.UniformsUtils.clone(DustShader.uniforms),
+        vertexShader: DustShader.vertexShader,
+        fragmentShader: DustShader.fragmentShader,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      m.uniforms.pr.value = renderer.getPixelRatio();
+      const pts = new THREE.Points(g, m);
+      pts.frustumCulled = false;
+      pts.renderOrder = 3;
+      group.add(pts);
+      atmos.dust = pts;
+    }
+    atmos.group = group;
+    atmos.beams = beams;
+    atmos.spotCount = spots.length;
+    scene.add(group);
+  }
+  function disposeAtmos() {
+    if (!atmos.group) return;
+    scene.remove(atmos.group);
+    atmos.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    atmos.group = null; atmos.beams = []; atmos.dust = null;
+  }
+  function syncAtmos(now) {
+    const k = ATMOS[theme] || 0;
+    const want = settings.atmos && k > 0 && !(typeof mirrorWorld !== 'undefined' && mirrorWorld);
+    if (!want) { if (atmos.group) atmos.group.visible = false; return; }
+    if (atmos.group && atmos.spotCount !== lightingRefs.spots.length) disposeAtmos();
+    if (!atmos.group) { if (!lightingRefs.spots.length) return; buildAtmos(); }
+    atmos.group.visible = true;
+    const t = now / 1000;
+    for (const b of atmos.beams) {
+      const sp = b.userData.spot;
+      b.material.uniforms.time.value = t;
+      // Follow the lighting slider + theme spot colour
+      b.material.uniforms.strength.value = 0.05 * k * Math.min(2, sp.intensity / 1.5);
+      b.material.uniforms.color.value.copy(sp.color);
+      b.visible = sp.visible !== false && sp.intensity > 0;
+    }
+    if (atmos.dust) {
+      atmos.dust.material.uniforms.time.value = t;
+      atmos.dust.material.uniforms.strength.value = 0.55 * k * lightingMul;
+    }
+  }
+
   function init() {
     if (ready) return;
     ready = true;
@@ -411,10 +586,11 @@ const FX = (() => {
     });
   }
 
-  function render() {
+  function render(dt, now) {
     init();
     syncSurfaces();
     syncReflector();
+    syncAtmos(now || performance.now());
     if (settings.post) {
       if (!composer) composer = buildComposer();
       if (composer) {
