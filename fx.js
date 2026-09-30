@@ -20,6 +20,10 @@
                 slow dust motes drifting through them
      contact  — baked contact shadow: floors darken softly where they meet the
                 walls and corners darken up their height (no screen-space AO)
+     film     — lens vignette + fine animated film grain, as a CSS overlay
+                (zero GPU cost, so it's on for phones too)
+     spill    — the neon lights its surroundings: coloured light pooled on the
+                floor and the nearby walls, flickering with the sign
 */
 'use strict';
 
@@ -36,6 +40,8 @@ const FX = (() => {
     bloom: !lowTier,
     atmos: true,
     contact: true,
+    film: true,
+    spill: true,
   };
   // Query override for side-by-side comparisons: ?fx=off / ?fx=on
   const q = new URLSearchParams(location.search).get('fx');
@@ -701,6 +707,127 @@ const FX = (() => {
     }
   }
 
+  /* ─── Film: vignette + grain overlay ─── */
+  const VIGNETTE = { duomo: 0.55, dark: 0.55, spotlight: 0.5, white: 0.22, ink: 0.18 };
+  let filmEl = null, filmTheme = null;
+  function buildFilm() {
+    const n = document.createElement('canvas');
+    n.width = n.height = 160;
+    const ctx = n.getContext('2d');
+    const img = ctx.createImageData(160, 160);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = (Math.random() * 255) | 0;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 22;
+    }
+    ctx.putImageData(img, 0, 0);
+    const css = document.createElement('style');
+    css.textContent = `
+      #fx-film { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+      #fx-film .vig { position: absolute; inset: 0;
+        background: radial-gradient(ellipse 78% 72% at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,var(--vig, .5)) 100%); }
+      #fx-film .grain { position: absolute; inset: -160px; opacity: .55;
+        background-image: url(${n.toDataURL()});
+        animation: fx-grain .5s steps(1) infinite; }
+      @keyframes fx-grain {
+        0% { transform: translate(0, 0); } 17% { transform: translate(-53px, 31px); }
+        33% { transform: translate(41px, -67px); } 50% { transform: translate(-97px, -13px); }
+        67% { transform: translate(71px, 89px); } 83% { transform: translate(-23px, 113px); } }
+      @media (prefers-reduced-motion: reduce) { #fx-film .grain { animation: none; } }`;
+    document.head.appendChild(css);
+    filmEl = document.createElement('div');
+    filmEl.id = 'fx-film';
+    filmEl.innerHTML = '<div class="vig"></div><div class="grain"></div>';
+    const stage = document.getElementById('stage');
+    stage.parentNode.insertBefore(filmEl, stage.nextSibling);
+  }
+  function syncFilm() {
+    if (settings.film && !filmEl) buildFilm();
+    if (!filmEl) return;
+    filmEl.style.display = settings.film ? '' : 'none';
+    if (filmTheme !== theme) {
+      filmTheme = theme;
+      filmEl.style.setProperty('--vig', String(VIGNETTE[theme] != null ? VIGNETTE[theme] : 0.45));
+    }
+  }
+
+  /* ─── Neon light spill ─── */
+  // Soft additive light pools the neon would throw on the stone and marble.
+  // Plant colours mirror the core's syncNeonPlants() table (by corner).
+  const SpillShader = {
+    uniforms: { color: { value: new THREE.Color() }, strength: { value: 0 } },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform vec3 color;
+      uniform float strength;
+      varying vec2 vUv;
+      void main() {
+        vec2 d = (vUv - 0.5) * 2.0;
+        float r2 = dot(d, d);
+        float a = exp(-r2 * 3.2) * (1.0 - smoothstep(0.8, 1.0, sqrt(r2)));
+        gl_FragColor = vec4(color * a * strength, 1.0);
+      }`,
+  };
+  const PLANT_GLOW = [   // [signX, signZ, colour]
+    [-1, -1, 0x39ff8c], [1, -1, 0xff2e88], [-1, 1, 0x2fd4ff], [1, 1, 0x39ff8c],
+  ];
+  const SPILL = { duomo: 1.0, dark: 0.8, spotlight: 1.0, white: 0.35, ink: 0.35 };
+  const spill = { group: null, plants: [], title: [] };
+  function spillPlane(w, h, color, pos, rotY, rotX) {
+    const m = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.clone(SpillShader.uniforms),
+      vertexShader: SpillShader.vertexShader, fragmentShader: SpillShader.fragmentShader,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    });
+    m.uniforms.color.value.setHex(color);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m);
+    mesh.position.copy(pos);
+    if (rotX) mesh.rotation.x = rotX;
+    if (rotY) mesh.rotation.y = rotY;
+    mesh.renderOrder = 1.6;
+    return mesh;
+  }
+  function buildSpill() {
+    const L = ROOMS.lobby;
+    const g = new THREE.Group();
+    g.name = 'fx-spill';
+    const T = WALL_THICKNESS / 2 + 0.012;
+    const xW = L.cx + L.w / 2 - T, zW = L.cz + L.d / 2 - T;
+    for (const [sx, sz, col] of PLANT_GLOW) {
+      const px = L.cx + sx * 7.8, pz = L.cz + sz * 4.6;
+      const set = [
+        [spillPlane(3.2, 3.2, col, new THREE.Vector3(px, 0.008, pz), 0, -Math.PI / 2), 0.20],
+        // side wall (x = ±) and end wall (z = ±)
+        [spillPlane(3.4, 3.0, col, new THREE.Vector3(sx * xW, 1.25, pz), -sx * Math.PI / 2, 0), 0.13],
+        [spillPlane(3.4, 3.0, col, new THREE.Vector3(px, 1.25, sz * zW), sz > 0 ? Math.PI : 0, 0), 0.13],
+      ];
+      for (const [mesh, k] of set) { mesh.userData.k = k; g.add(mesh); spill.plants.push(mesh); }
+    }
+    // Title: violet wash on the stone around the sign
+    const zN = L.cz - L.d / 2 + T;
+    const tw = spillPlane(9.0, 4.2, 0x6f5cff, new THREE.Vector3(0, 4.55, zN), 0, 0);
+    tw.userData.k = 0.16;
+    g.add(tw); spill.title.push(tw);
+    spill.group = g;
+    scene.add(g);
+  }
+  function syncSpill() {
+    const k = SPILL[theme] || 0;
+    const want = settings.spill && k > 0 && !(typeof mirrorWorld !== 'undefined' && mirrorWorld);
+    if (want && !spill.group && typeof ROOMS !== 'undefined' && ROOMS.lobby) buildSpill();
+    if (!spill.group) return;
+    spill.group.visible = want;
+    if (!want) return;
+    const plantsOn = typeof neonPlants !== 'undefined' && neonPlants && neonPlantMeshes.length > 0;
+    for (const m of spill.plants) { m.visible = plantsOn; m.material.uniforms.strength.value = m.userData.k * k; }
+    const titleOn = typeof neonTitle !== 'undefined' && neonTitle && lobbyTitleMesh;
+    const flick = titleOn ? lobbyTitleMesh.material.opacity : 0;
+    for (const m of spill.title) { m.visible = !!titleOn; m.material.uniforms.strength.value = m.userData.k * k * flick; }
+  }
+
   function init() {
     if (ready) return;
     ready = true;
@@ -717,6 +844,8 @@ const FX = (() => {
     syncReflector();
     syncAtmos(now || performance.now());
     syncContact();
+    syncFilm();
+    syncSpill();
     if (settings.post) {
       if (!composer) composer = buildComposer();
       if (composer) {
