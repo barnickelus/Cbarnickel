@@ -18,6 +18,8 @@
                 bloom (only neon blooms; walls still occlude it)
      atmos    — air you can see: faint beams under every painting spotlight and
                 slow dust motes drifting through them
+     contact  — baked contact shadow: floors darken softly where they meet the
+                walls and corners darken up their height (no screen-space AO)
 */
 'use strict';
 
@@ -33,6 +35,7 @@ const FX = (() => {
     reflect: !lowTier,
     bloom: !lowTier,
     atmos: true,
+    contact: true,
   };
   // Query override for side-by-side comparisons: ?fx=off / ?fx=on
   const q = new URLSearchParams(location.search).get('fx');
@@ -576,6 +579,128 @@ const FX = (() => {
     }
   }
 
+  /* ─── Contact shadows ─── */
+  // Multiply-blended gradient strips, laid only where a wall actually stands
+  // (probed with rays, so archways stay clear). Theme-independent: they
+  // darken whatever the floor/wall colour is by the same ratio.
+  const ContactShader = {
+    uniforms: { depth: { value: 0.5 } },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform float depth;
+      varying vec2 vUv;
+      void main() {
+        // vUv.y = 0 at the junction, 1 at the far edge of the strip
+        float a = pow(1.0 - vUv.y, 2.4) * depth;
+        gl_FragColor = vec4(vec3(1.0 - a), 1.0);
+      }`,
+  };
+  let contactGroup = null, contactTheme = null;
+  const CONTACT_DEPTH = { duomo: 0.42, dark: 0.45, white: 0.22, ink: 0.18, spotlight: 0.35 };
+  function buildContact() {
+    const group = new THREE.Group();
+    group.name = 'fx-contact';
+    const mat = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.clone(ContactShader.uniforms),
+      vertexShader: ContactShader.vertexShader, fragmentShader: ContactShader.fragmentShader,
+      transparent: true, depthWrite: false, blending: THREE.MultiplyBlending,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    mat.uniforms.depth.value = CONTACT_DEPTH[theme] || 0.35;
+    const rc = new THREE.Raycaster();
+    scene.updateMatrixWorld();   // first frame: walls haven't been rendered yet
+    const targets = wallMeshes.filter(m => m.isMesh);
+    const STEP = 0.2, FLOOR_W = 0.55, CORNER_W = 0.5;
+    const floorPos = [], floorUv = [], vertPos = [], vertUv = [];
+    const quad = (P, U, a, b, c, d) => {   // a,b at junction (v=0); c,d far (v=1)
+      P.push(...a, ...b, ...d, ...a, ...d, ...c);
+      U.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
+    };
+    const T = WALL_THICKNESS / 2;
+    for (const id of Object.keys(ROOMS)) {
+      const r = ROOMS[id];
+      const x0 = r.cx - r.w / 2 + T, x1 = r.cx + r.w / 2 - T;
+      const z0 = r.cz - r.d / 2 + T, z1 = r.cz + r.d / 2 - T;
+      // Each edge: start point, direction along it, inward normal
+      const edges = [
+        { sx: x0, sz: z0, dx: 1, dz: 0, nx: 0, nz: 1, len: x1 - x0 },   // north wall
+        { sx: x0, sz: z1, dx: 1, dz: 0, nx: 0, nz: -1, len: x1 - x0 },  // south
+        { sx: x0, sz: z0, dx: 0, dz: 1, nx: 1, nz: 0, len: z1 - z0 },   // west
+        { sx: x1, sz: z0, dx: 0, dz: 1, nx: -1, nz: 0, len: z1 - z0 },  // east
+      ];
+      for (const e of edges) {
+        const n = Math.max(1, Math.round(e.len / STEP));
+        const st = e.len / n;
+        let runStart = -1;
+        const flush = (i0, i1) => {
+          const ax = e.sx + e.dx * i0 * st, az = e.sz + e.dz * i0 * st;
+          const bx = e.sx + e.dx * i1 * st, bz = e.sz + e.dz * i1 * st;
+          quad(floorPos, floorUv,
+            [ax, 0.006, az], [bx, 0.006, bz],
+            [ax + e.nx * FLOOR_W, 0.006, az + e.nz * FLOOR_W], [bx + e.nx * FLOOR_W, 0.006, bz + e.nz * FLOOR_W]);
+          // the matching strip up the wall base (above the baseboard)
+          quad(vertPos, vertUv,
+            [ax + e.nx * 0.004, 0.0, az + e.nz * 0.004], [bx + e.nx * 0.004, 0.0, bz + e.nz * 0.004],
+            [ax + e.nx * 0.004, 0.45, az + e.nz * 0.004], [bx + e.nx * 0.004, 0.45, bz + e.nz * 0.004]);
+        };
+        for (let i = 0; i < n; i++) {
+          const mx = e.sx + e.dx * (i + 0.5) * st, mz = e.sz + e.dz * (i + 0.5) * st;
+          rc.set(new THREE.Vector3(mx + e.nx * 0.5, 0.4, mz + e.nz * 0.5), new THREE.Vector3(-e.nx, 0, -e.nz));
+          rc.far = 0.75;
+          const wall = rc.intersectObjects(targets, false).length > 0;
+          if (wall && runStart < 0) runStart = i;
+          if (!wall && runStart >= 0) { flush(runStart, i); runStart = -1; }
+        }
+        if (runStart >= 0) flush(runStart, n);
+      }
+      // Corners: a vertical strip on each wall of each corner, full height
+      const corners = [[x0, z0, 1, 1], [x1, z0, -1, 1], [x0, z1, 1, -1], [x1, z1, -1, -1]];
+      for (const [cx, cz, sx, sz] of corners) {
+        {
+          // along X-wall (the one running in x at z=cz)
+          vertPos.push(
+            cx, 0, cz + sz * 0.004, cx, r.h, cz + sz * 0.004, cx + sx * CORNER_W, r.h, cz + sz * 0.004,
+            cx, 0, cz + sz * 0.004, cx + sx * CORNER_W, r.h, cz + sz * 0.004, cx + sx * CORNER_W, 0, cz + sz * 0.004);
+          vertUv.push(0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1);
+          vertPos.push(
+            cx + sx * 0.004, 0, cz, cx + sx * 0.004, r.h, cz, cx + sx * 0.004, r.h, cz + sz * CORNER_W,
+            cx + sx * 0.004, 0, cz, cx + sx * 0.004, r.h, cz + sz * CORNER_W, cx + sx * 0.004, 0, cz + sz * CORNER_W);
+          vertUv.push(0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1);
+        }
+      }
+    }
+    const vMat = mat.clone();
+    vMat.userData.scale = 0.6;               // walls take a lighter touch than the floor
+    mat.userData.scale = 1.0;
+    for (const [P, U, M] of [[floorPos, floorUv, mat], [vertPos, vertUv, vMat]]) {
+      if (!P.length) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+      M.uniforms.depth.value = (CONTACT_DEPTH[theme] || 0.35) * M.userData.scale;
+      const m = new THREE.Mesh(g, M);
+      m.material.side = THREE.DoubleSide;
+      m.renderOrder = 1.5;              // after the floor reflection
+      m.frustumCulled = false;
+      group.add(m);
+    }
+    contactGroup = group;
+    contactTheme = theme;
+    scene.add(group);
+  }
+  function syncContact() {
+    const want = settings.contact && !(typeof mirrorWorld !== 'undefined' && mirrorWorld);
+    if (want && !contactGroup && wallMeshes.length) buildContact();
+    if (!contactGroup) return;
+    contactGroup.visible = want;
+    if (contactTheme !== theme) {
+      contactTheme = theme;
+      contactGroup.children.forEach(c => { c.material.uniforms.depth.value = (CONTACT_DEPTH[theme] || 0.35) * c.material.userData.scale; });
+    }
+  }
+
   function init() {
     if (ready) return;
     ready = true;
@@ -591,6 +716,7 @@ const FX = (() => {
     syncSurfaces();
     syncReflector();
     syncAtmos(now || performance.now());
+    syncContact();
     if (settings.post) {
       if (!composer) composer = buildComposer();
       if (composer) {
