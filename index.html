@@ -1921,11 +1921,86 @@ async function loadGalleryData() {
   return data;
 }
 
+/* ─── Device tier ───
+   One place decides how much the gallery asks of the GPU. iPads / phones /
+   small screens / low-core or low-memory machines get the lean profile:
+   smaller painting textures, no MSAA, a lower pixel-ratio cap, fewer neon
+   plants and shared painting spotlights. A runtime governor (perfGovernor)
+   then trims the pixel ratio further if frames still run slow. ?perf=low /
+   ?perf=high forces a tier; ?perf=off also freezes the governor (testing). */
+const PERF = (() => {
+  const q = new URLSearchParams(location.search).get('perf');
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const touch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  const small = Math.min(window.innerWidth, window.innerHeight) < 700;
+  const weak = (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
+               (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
+  let low = !!(iOS || touch || small || weak);
+  if (q === 'low') low = true;
+  if (q === 'high') low = false;
+  return {
+    low,
+    govern: q !== 'off',
+    maxTex: low ? 1024 : 1600,          // longest side of a painting texture
+    aniso: low ? 2 : 8,
+    prCap: low ? 1.25 : 2,
+    minPr: low ? 0.6 : 0.8,
+    plants: low ? 3 : 4,                // neon plants in the lobby
+    aa: !low,
+  };
+})();
+// Shrink an oversized painting image before it goes to the GPU: a 12-megapixel
+// JPEG costs ~60MB of video memory with mipmaps and is never shown that sharp.
+function fitTextureToTier(tex) {
+  const img = tex && tex.image;
+  if (!img || !img.width) return tex;
+  const m = Math.max(img.width, img.height);
+  if (m <= PERF.maxTex) return tex;
+  const k = PERF.maxTex / m;
+  try {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.width * k));
+    c.height = Math.max(1, Math.round(img.height * k));
+    const g = c.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, c.width, c.height);
+    tex.image = c;
+    tex.needsUpdate = true;
+  } catch (e) { /* keep the original if the canvas refuses */ }
+  return tex;
+}
+// Runtime resolution governor: if the device still can't hold ~30fps, step the
+// render resolution down (never back up, so it can't oscillate).
+const _gov = { acc: 0, frames: 0, last: 0, slow: 0, pr: 0 };
+function setRenderScale(pr) {
+  _gov.pr = pr;
+  renderer.setPixelRatio(pr);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  if (window.FX && FX.setPixelRatio) FX.setPixelRatio(pr);
+}
+function perfGovernor(now) {
+  if (!PERF.govern || typeof entered === 'undefined' || !entered || document.hidden) { _gov.last = 0; return; }
+  if (!_gov.pr) _gov.pr = renderer.getPixelRatio();
+  if (_gov.last) {
+    const d = now - _gov.last;
+    if (d < 250) { _gov.acc += d; _gov.frames++; }
+  }
+  _gov.last = now;
+  if (_gov.acc < 1500) return;
+  const fps = _gov.frames * 1000 / _gov.acc;
+  _gov.acc = 0; _gov.frames = 0;
+  _gov.slow = fps < 30 ? _gov.slow + 1 : 0;
+  if (_gov.slow < 2 || _gov.pr <= PERF.minPr + 1e-3) return;
+  _gov.slow = 0;
+  setRenderScale(Math.max(PERF.minPr, _gov.pr * 0.8));
+}
+
 /* ─── 5. Scene init ─── */
 function initScene() {
   canvas = document.getElementById('stage');
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: PERF.aa });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, PERF.prCap));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(T().rendererClear, 1);
   // Shadow maps disabled — they previously crashed iOS Safari with too many
@@ -3063,7 +3138,7 @@ let _duomoFloorMaps = null;
 function makeDuomoFloorTexture() { return getDuomoFloorMaps().map; }
 function getDuomoFloorMaps() {
   if (_duomoFloorMaps) return _duomoFloorMaps;
-  const size = 512, S2 = 1024;
+  const size = 512, S2 = PERF.low ? 512 : 1024;   // lean tier: a quarter of the per-pixel work
   const c = document.createElement('canvas');
   c.width = S2; c.height = S2;
   const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -3467,7 +3542,7 @@ let _stoneWallMaps = null;
 function getStoneWallMaps() {
   if (!_stoneWallMaps) {
     _stoneWallMaps = _genAshlar({
-      W: 1024, H: 2048, tileW: STONE_TILE_W, tileH: LOBBY_H, wrapY: false, normals: true,
+      W: PERF.low ? 768 : 1024, H: PERF.low ? 1536 : 2048, tileW: STONE_TILE_W, tileH: LOBBY_H, wrapY: false, normals: true,
       course() {
         const r = Math.random();
         if (r < 0.22) return 0.17 + Math.random() * 0.12;   // thin band
@@ -7679,12 +7754,21 @@ function placePainting(art, dir, localCoord, room) {
   // The frame builder always sets userData.frameDepth on the group.
   const frameDepth = frameGroup.userData.frameDepth;
 
+  // Lean tier: a painting sitting close beside one that's already lit on the same
+  // wall shares its spotlight (every spotlight costs every lit pixel) and gets a
+  // little more self-illumination instead.
+  const sharedSpot = PERF.low && lightingRefs.spots.some(sp =>
+    sp.userData.nx === normalX && sp.userData.nz === normalZ &&
+    Math.abs(sp.target.position.y - yCenter) < 1.2 &&
+    Math.hypot(sp.target.position.x - px, sp.target.position.z - pz) < 2.2);
+
   // Painting (texture loaded async)
   new THREE.TextureLoader().load(
     'paintings/' + art.file,
     (tex) => {
+      fitTextureToTier(tex);
       tex.encoding = THREE.sRGBEncoding;
-      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      tex.anisotropy = Math.min(PERF.aniso, renderer.capabilities.getMaxAnisotropy());
       const pMat = new THREE.MeshStandardMaterial({
         map: tex,
         roughness: 0.62,
@@ -7692,7 +7776,7 @@ function placePainting(art, dir, localCoord, room) {
         // pieces stay readable in the dim gallery (not purely spotlight-lit).
         emissive: 0xffffff,
         emissiveMap: tex,
-        emissiveIntensity: 0.32,
+        emissiveIntensity: sharedSpot ? 0.5 : 0.32,
       });
       const p = new THREE.Mesh(new THREE.PlaneGeometry(pW, pH), pMat);
       // Sit the painting flush with the frame's front face (frameDepth out
@@ -7723,6 +7807,7 @@ function placePainting(art, dir, localCoord, room) {
     (err) => console.warn('Failed to load', art.file, err)
   );
 
+  if (sharedSpot) return;
   // Spotlight per painting — also our shadow source
   const spotDist = Math.max(1.5, Math.min(2.8, room.h - HANG_HEIGHT));
   const spot = new THREE.SpotLight(
@@ -7739,6 +7824,7 @@ function placePainting(art, dir, localCoord, room) {
     pz + normalZ * Math.min(2.0, room.d / 4),
   );
   spot.target.position.set(px, yCenter, pz);
+  spot.userData.nx = normalX; spot.userData.nz = normalZ;
   scene.add(spot);
   scene.add(spot.target);
   lightingRefs.spots.push(spot);
@@ -9613,7 +9699,7 @@ const NP_SPECIES = {
 // the north wall; x=0 south), the Bio/Contact plaques (x=±2.5 north) and the
 // mirror (east wall, z≈1.5–4.1). Pools: f = floor radius; walls n/s/e/w with
 // centre u (x or z), centre height y, width w, height h.
-const NEON_PLANT_SPECS = [
+const NEON_PLANT_ALL = [
   { kind: 'palm', x: -7.75, z: -4.75, ry: 0, box: [-1.08, 9, -1.08, 9], delay: 0.3, seed: 11, H: 2.6, sway: 0.045,
     c: { leaf: '#3dffa8', leaf2: '#8dffd2', trunk: '#27d89c', ring: '#5f63ff', pot: '#ff3b5c', pot2: '#5f63ff', glow: '#3dffa8' },
     pools: { f: 2.0, fs: 0.57, walls: [['n', -7.75, 1.7, 3.2, 3.6, 0.42], ['w', -4.75, 1.7, 3.2, 3.6, 0.38]] } },
@@ -9645,6 +9731,9 @@ const NEON_PLANT_SPECS = [
     c: { trunk: '#b58cff', branch: '#9b7bff', leafA: '#ff4fa3', leafB: '#6b7bff', pot: '#5f63ff', pot2: '#ff3b5c', glow: '#9b6bff' },
     pools: { f: 2.4, fs: 0.57, walls: [['w', 0, 2.2, 4.4, 4.8, 0.49]] } },
 ];
+// Fewer, better-spread plants: one per lobby corner (three on the lean tier).
+const NEON_PLANT_KEEP = PERF.low ? ['palm', 'monstera', 'bird'] : ['palm', 'monstera', 'bird', 'cactus'];
+const NEON_PLANT_SPECS = NEON_PLANT_ALL.filter(sp => NEON_PLANT_KEEP.includes(sp.kind));
 
 // Floor + wall light pools for one plant (lobby coords, one merged quad set).
 // Quads are clipped to the lobby interior (and off the arch openings) so no glow
@@ -11247,7 +11336,7 @@ function updateProjectiles(dt) {
 
 /* ─── Mirror-world arsenal ───
    Only on the far side of the glass: a black crow roundel above KROW REDLO, a
-   rocket launcher on a plinth in the lobby centre, and walls that blow open onto
+   rocket launcher on a plinth in the centre of the Older Work room, and walls that blow open onto
    a beach. Persistent pieces (emblem, plinth, holes, scorches, rubble) live in
    worldRoot-LOCAL coordinates; transient FX (rockets, fireballs, sparks, smoke,
    flying debris) are world-space children of the raw scene. */
@@ -11795,9 +11884,9 @@ function buildMirrorArsenal() {
     arsenal.emblem = em;
   }
   // ── Display: plinth + turntable + launcher, fake spotlight ──
-  const lobby = ROOMS.lobby;
+  const dispRoom = ROOMS['older-work'] || ROOMS.lobby;   // centre of the reversed Older Work room
   const disp = new THREE.Group();
-  disp.position.set(lobby.cx, 0, lobby.cz);
+  disp.position.set(dispRoom.cx, 0, dispRoom.cz);
   const plinth = new THREE.Group();
   const marble = launcherMat('marble');
   const boxes = [[0.92, 0.10, 0.92, 0.05], [0.66, 0.90, 0.66, 0.55], [0.84, 0.08, 0.84, 1.04]];
@@ -14893,6 +14982,7 @@ function animate() {
 
   // Optional visual layer (fx.js); plain render when it's absent
   if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
+  perfGovernor(now);
 }
 
 /* ─── 14. Boot ─── */
