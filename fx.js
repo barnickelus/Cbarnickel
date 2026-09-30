@@ -251,7 +251,7 @@ const FX = (() => {
 
   function applySurface(p) {
     const m = p.material;
-    if (!m || !m.map) return;
+    if (!m || !m.map || !m.isMeshStandardMaterial) return;   // e.g. the portal ripple shader
     if (!p.userData.fxOrig) {
       p.userData.fxOrig = { roughness: m.roughness, envMapIntensity: m.envMapIntensity };
     }
@@ -282,7 +282,7 @@ const FX = (() => {
   }
   function removeSurface(p) {
     const m = p.material, o = p.userData.fxOrig;
-    if (!m || !o) return;
+    if (!m || !o || !m.isMeshStandardMaterial) return;
     m.bumpMap = null;
     m.roughness = o.roughness;
     m.envMapIntensity = o.envMapIntensity;
@@ -296,6 +296,12 @@ const FX = (() => {
     for (const p of paintingMeshes) {
       if (settings.surface && !p.userData.fxSurface) applySurface(p);
       else if (!settings.surface && p.userData.fxSurface) removeSurface(p);
+      else if (p.userData.fxSurface) {
+        // The lighter swaps a burning painting's map to a charred one (and
+        // back on restore) — keep the relief reading the texture on show.
+        const m = p.material;
+        if (m.isMeshStandardMaterial && m.map && m.bumpMap !== m.map) { m.bumpMap = m.map; m.needsUpdate = true; }
+      }
     }
   }
 
