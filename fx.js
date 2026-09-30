@@ -12,6 +12,8 @@
      post     — post-processing pipeline (MSAA render target + final passes)
      surface  — paintings read as physical objects: brush-stroke relief lifted
                 from each image's own fine detail, linen weave, varnish sheen
+     reflect  — polished floor: a soft, Fresnel-weighted planar reflection
+                (Duomo marble strongest, dark-mode wood faint, comic themes off)
 */
 'use strict';
 
@@ -24,6 +26,7 @@ const FX = (() => {
   const DEFAULTS = {
     post: !lowTier,
     surface: true,
+    reflect: !lowTier,
   };
   // Query override for side-by-side comparisons: ?fx=off / ?fx=on
   const q = new URLSearchParams(location.search).get('fx');
@@ -173,17 +176,130 @@ const FX = (() => {
     }
   }
 
+  /* ─── Floor reflection ─── */
+  // One Reflector plane spans every room's footprint just above the floors;
+  // walls occlude it naturally. It's alpha-blended over the floor by a Fresnel
+  // weight — a polished floor trades diffuse for specular, so the dark room
+  // shows in it as much as the bright art and neon: faint looking straight
+  // down, strong at grazing angles. Rendered at reduced resolution and softened with a
+  // small disk blur so it reads as polish, not a mirror.
+  const REFLECT_STRENGTH = { duomo: 1.0, dark: 0.45 };   // others: matte, off
+  const FloorReflectShader = {
+    uniforms: {
+      color: { value: null },
+      tDiffuse: { value: null },
+      textureMatrix: { value: null },
+      strength: { value: 0 },
+      blur: { value: 0.004 },
+    },
+    vertexShader: `
+      uniform mat4 textureMatrix;
+      varying vec4 vUvR;
+      varying vec3 vWorld;
+      void main() {
+        vUvR = textureMatrix * vec4(position, 1.0);
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorld = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: `
+      uniform vec3 color;
+      uniform sampler2D tDiffuse;
+      uniform float strength;
+      uniform float blur;
+      varying vec4 vUvR;
+      varying vec3 vWorld;
+      void main() {
+        vec2 uv = vUvR.xy / vUvR.w;
+        vec3 v = normalize(cameraPosition - vWorld);
+        float cosT = clamp(v.y, 0.0, 1.0);
+        float fres = 0.2 + 0.8 * pow(1.0 - cosT, 3.0);
+        // Blur grows with distance to the reflected point (contact-hardening-ish)
+        float r = blur * (0.6 + 0.4 * (1.0 - cosT));
+        vec3 acc = texture2D(tDiffuse, uv).rgb * 0.2;
+        acc += texture2D(tDiffuse, uv + vec2( r, 0.0)).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2(-r, 0.0)).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2(0.0,  r)).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2(0.0, -r)).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2( r,  r) * 0.7).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2(-r,  r) * 0.7).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2( r, -r) * 0.7).rgb * 0.1;
+        acc += texture2D(tDiffuse, uv + vec2(-r, -r) * 0.7).rgb * 0.1;
+        // Fade with distance so it sits under the gallery's fog
+        float fog = exp(-length(cameraPosition - vWorld) * 0.045);
+        gl_FragColor = vec4(acc, clamp(strength * fres * fog, 0.0, 1.0));
+      }`,
+  };
+  let floorRefl = null;
+  function reflectStrength() { return REFLECT_STRENGTH[theme] || 0; }
+  function buildFloorReflector() {
+    if (!THREE.Reflector || typeof ROOMS === 'undefined') return null;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const id of Object.keys(ROOMS)) {
+      const r = ROOMS[id];
+      x0 = Math.min(x0, r.cx - r.w / 2); x1 = Math.max(x1, r.cx + r.w / 2);
+      z0 = Math.min(z0, r.cz - r.d / 2); z1 = Math.max(z1, r.cz + r.d / 2);
+    }
+    if (!isFinite(x0)) return null;
+    const pr = renderer.getPixelRatio();
+    const scale = 0.5;
+    const refl = new THREE.Reflector(new THREE.PlaneGeometry(x1 - x0, z1 - z0), {
+      textureWidth: Math.round(window.innerWidth * pr * scale),
+      textureHeight: Math.round(window.innerHeight * pr * scale),
+      clipBias: 0.0005,
+      shader: FloorReflectShader,
+    });
+    refl.rotation.x = -Math.PI / 2;
+    refl.position.set((x0 + x1) / 2, 0.004, (z0 + z1) / 2);   // above the floors so they clip out of their own reflection
+    refl.renderOrder = 1;
+    const m = refl.material;
+    m.transparent = true;
+    m.blending = THREE.NormalBlending;
+    m.depthWrite = false;
+    // Only the main camera drives the reflection. Seen from any other camera
+    // (the wall mirror's virtual view) the texture would be misaligned, so
+    // the plane contributes nothing there — and the mirror is hidden while we
+    // render, so the two reflectors never recurse into each other.
+    const baseBefore = refl.onBeforeRender;
+    refl.onBeforeRender = function (r, s, c) {
+      if (c !== camera) { m.uniforms.strength.value = 0; return; }
+      m.uniforms.strength.value = reflectStrength();
+      const mm = (typeof mirrorMesh !== 'undefined') ? mirrorMesh : null;
+      const mv = mm ? mm.visible : false;
+      if (mm) mm.visible = false;
+      baseBefore.call(this, r, s, c);
+      if (mm) mm.visible = mv;
+    };
+    refl.userData.fxReflector = true;
+    return refl;
+  }
+  function resizeReflector() {
+    if (!floorRefl) return;
+    const pr = renderer.getPixelRatio();
+    floorRefl.getRenderTarget().setSize(Math.round(window.innerWidth * pr * 0.5), Math.round(window.innerHeight * pr * 0.5));
+  }
+  function syncReflector() {
+    const want = settings.reflect && reflectStrength() > 0 && !(typeof mirrorWorld !== 'undefined' && mirrorWorld);
+    if (want && !floorRefl) {
+      floorRefl = buildFloorReflector();
+      if (floorRefl) scene.add(floorRefl);
+    }
+    if (floorRefl) floorRefl.visible = want;
+  }
+
   function init() {
     if (ready) return;
     ready = true;
     window.addEventListener('resize', () => {
       if (composer) composer.setSize(window.innerWidth, window.innerHeight);
+      resizeReflector();
     });
   }
 
   function render() {
     init();
     syncSurfaces();
+    syncReflector();
     if (settings.post) {
       if (!composer) composer = buildComposer();
       if (composer) { composer.render(); return; }
@@ -197,6 +313,6 @@ const FX = (() => {
     persist();
   }
 
-  return { settings, render, set, lowTier };
+  return { settings, render, set, lowTier, _debug: () => ({ floorRefl, composer }) };
 })();
 window.FX = FX;
