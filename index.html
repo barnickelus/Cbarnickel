@@ -1444,6 +1444,13 @@ body { overscroll-behavior: none; }
 <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <!-- Reflector for the lobby wall mirror (real planar reflections) -->
 <script src="https://unpkg.com/three@0.128.0/examples/js/objects/Reflector.js"></script>
+<!-- Post-processing (r128 examples) — used by fx.js; the gallery runs without them -->
+<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
@@ -3348,11 +3355,44 @@ function buildLobbyPlaques() {
     // Default plane normal is +z which faces +z (toward the lobby/spawn). ✓
     mesh.userData.isPlaque = true;
     mesh.userData.action = action;
+    mesh.userData.label = label;
+    mesh.userData.sub = sub;
     scene.add(mesh);
     lobbyPlaques.push(mesh);
   };
   make('BIO',     'about the artist', 'bio',     -2.5);
   make('CONTACT', 'send a note',      'contact', +2.5);
+}
+
+// Canvas text is baked once at build time, and the web font may still be in
+// flight then — the plaques, sign and room labels would keep the fallback
+// face (faint, wrong weight) for the whole visit. Redraw them once it lands.
+function redrawCanvasTextWhenFontsReady() {
+  if (!document.fonts || !document.fonts.load) return;
+  Promise.all([
+    document.fonts.load('300 130px "Cormorant Garamond"'),
+    document.fonts.load('500 130px "Cormorant Garamond"'),
+    document.fonts.load('italic 400 38px "Cormorant Garamond"'),
+  ]).then(() => {
+    for (const mesh of lobbyPlaques) {
+      const tex = makePlaqueTexture(mesh.userData.label, mesh.userData.sub);
+      if (mesh.material.map) mesh.material.map.dispose();
+      mesh.material.map = tex;
+      mesh.material.needsUpdate = true;
+    }
+    if (lobbyTitleMesh) {
+      const tex = makeLobbyTitleTexture();
+      if (lobbyTitleMesh.material.map) lobbyTitleMesh.material.map.dispose();
+      lobbyTitleMesh.material.map = tex;
+      lobbyTitleMesh.material.needsUpdate = true;
+    }
+    for (const lbl of seriesLabels) {
+      const tex = makeLabelTexture(lbl.name, lbl.subtitle);
+      if (lbl.mesh.material.map) lbl.mesh.material.map.dispose();
+      lbl.mesh.material.map = tex;
+      lbl.mesh.material.needsUpdate = true;
+    }
+  }).catch(() => {});
 }
 
 function makePlaqueTexture(label, sub) {
@@ -3372,14 +3412,23 @@ function makePlaqueTexture(label, sub) {
   ctx.lineTo(c.width/2 + 60, c.height/2 + 70);
   ctx.stroke();
   // Label
-  ctx.shadowColor = 'rgba(0,0,0,0.7)';
-  ctx.shadowBlur = 12;
-  ctx.shadowOffsetY = 3;
+  // Medium weight: the hairline 300 cut drowned in its own shadow at plaque
+  // size once the real web font (not the Georgia fallback) drew it.
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 2;
   ctx.fillStyle = T().title;
-  ctx.font = '300 130px "Cormorant Garamond", Georgia, serif';
+  ctx.font = '500 130px "Cormorant Garamond", Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, c.width / 2, c.height / 2 - 20);
+  // A same-colour stroke gives the thin serif cut enough body to survive
+  // mipmapping from across the lobby.
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = T().title;
+  ctx.lineWidth = 3;
+  ctx.strokeText(label, c.width / 2, c.height / 2 - 20);
   // Subtitle
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
@@ -4075,6 +4124,15 @@ function makeLabelTexture(label, subtitle) {
   }
   const yMain = subtitle ? c.height / 2 - 30 : c.height / 2;
   ctx.fillText(label.toUpperCase(), c.width / 2, yMain);
+  // Same-colour stroke so the serif keeps its body when mipmapped across
+  // the lobby (as on the plaques)
+  ctx.save();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = T().label;
+  ctx.lineWidth = 2;
+  ctx.strokeText(label.toUpperCase(), c.width / 2, yMain);
+  ctx.restore();
   if (subtitle) {
     ctx.shadowBlur = 5;
     ctx.font = 'italic 32px "Cormorant Garamond", Georgia, serif';
@@ -6310,6 +6368,7 @@ function currentSettingsObject() {
     frameStyle: frameSettings.style,
     frameColor: frameSettings.color,
     framePerPainting: framePerPainting,
+    ...(window.FX ? { fx: FX.exportable() } : {}),
   };
 }
 function openSettingsExport() {
@@ -6344,7 +6403,7 @@ function downloadSettingsExport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function resetToDefaults() {
-  ['theme', 'lighting', 'neonTitle', 'neonPlants', 'frameStyle', 'frameColor', 'framePerPainting'].forEach(k => {
+  ['theme', 'lighting', 'neonTitle', 'neonPlants', 'frameStyle', 'frameColor', 'framePerPainting', 'fx'].forEach(k => {
     try { localStorage.removeItem(k); } catch (e) {}
   });
   location.reload();
@@ -8341,7 +8400,8 @@ function animate() {
   // Painting-portal ripples + fall-in sequence
   updatePaintingFX(now, dt);
 
-  renderer.render(scene, camera);
+  // Optional visual layer (fx.js); plain render when it's absent
+  if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
 }
 
 /* ─── 14. Boot ─── */
@@ -8368,6 +8428,7 @@ async function boot() {
   placeAllPaintings();
   markPaintingWallsPlain();
   buildIndex();
+  redrawCanvasTextWhenFontsReady();
   wireUI();
   // ── Returning from inside the painting? Skip the intro, slip back into the
   // mirror world, and stand where the canvas hangs — as if stepping out of it.
@@ -8443,6 +8504,7 @@ async function boot() {
 boot();
 
 </script>
+<script src="fx.js"></script>
 
 </body>
 </html>
