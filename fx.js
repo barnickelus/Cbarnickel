@@ -251,7 +251,7 @@ const FX = (() => {
   }
 #endif
 `;
-  const SURFACE = { relief: 0.009, rake: 1.2, weave: 0.18, threadsPerM: 900, roughness: 0.56, env: 0.08 };
+  const SURFACE = { relief: 0.0065, rake: 1.0, weave: 0.18, threadsPerM: 900, roughness: 0.56, env: 0.08 };
 
   function applySurface(p) {
     const m = p.material;
@@ -433,8 +433,12 @@ const FX = (() => {
   // Additive, no depth write, one draw call per beam + one for all dust.
   const ATMOS = { duomo: 1.0, dark: 0.9, spotlight: 1.1, white: 0.0, ink: 0.0 };
   const BeamShader = {
-    uniforms: { color: { value: new THREE.Color() }, strength: { value: 0 }, time: { value: 0 } },
+    uniforms: {
+      color: { value: new THREE.Color() }, strength: { value: 0 }, time: { value: 0 },
+      wallP: { value: new THREE.Vector3() }, wallN: { value: new THREE.Vector3() },
+    },
     vertexShader: `
+      varying vec3 vWorld;
       varying float vAlong;
       varying vec3 vN;
       varying vec3 vView;
@@ -443,6 +447,7 @@ const FX = (() => {
         vAlong = uv.y;                          // 1 at the lamp, 0 at the wall
         vLocal = position;
         vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorld = wp.xyz;
         vN = normalize(mat3(modelMatrix) * normal);
         vView = cameraPosition - wp.xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
@@ -451,6 +456,9 @@ const FX = (() => {
       uniform vec3 color;
       uniform float strength;
       uniform float time;
+      uniform vec3 wallP;
+      uniform vec3 wallN;
+      varying vec3 vWorld;
       varying float vAlong;
       varying vec3 vN;
       varying vec3 vView;
@@ -462,9 +470,12 @@ const FX = (() => {
         // Peak mid-beam: fades into the wall at one end and out before the
         // lamp at the other, so no light hangs against the ceiling.
         float along = smoothstep(0.0, 0.35, vAlong) * (1.0 - smoothstep(0.45, 0.8, vAlong));
-        float nearFade = smoothstep(0.4, 2.2, length(vView));  // don't fog the lens
+        float nearFade = smoothstep(1.5, 4.5, length(vView));  // beams read at a distance, not as haze on the lens
         float drift = 0.85 + 0.15 * sin(vLocal.y * 3.0 + time * 0.4 + vLocal.x * 5.0);
-        float a = core * along * nearFade * drift * strength;
+        // Melt into the wall: without this the cone's cut against the wall
+        // shows as a hard arc wherever the beam meets it at an angle.
+        float wallFade = smoothstep(0.0, 0.9, dot(vWorld - wallP, wallN));
+        float a = core * along * nearFade * drift * wallFade * strength;
         gl_FragColor = vec4(color * a, 1.0);
       }`,
   };
@@ -531,6 +542,9 @@ const FX = (() => {
         transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
       });
       mat.uniforms.color.value.copy(sp.color);
+      // Wall plane: the target sits on the wall; the lamp hangs out along its normal.
+      mat.uniforms.wallP.value.copy(b);
+      mat.uniforms.wallN.value.set(a.x - b.x, 0, a.z - b.z).normalize();
       const cone = new THREE.Mesh(geo, mat);
       cone.position.copy(a);
       cone.quaternion.setFromUnitVectors(_up, dir.clone().negate());
@@ -589,7 +603,7 @@ const FX = (() => {
       const sp = b.userData.spot;
       b.material.uniforms.time.value = t;
       // Follow the lighting slider + theme spot colour
-      b.material.uniforms.strength.value = 0.05 * k * Math.min(2, sp.intensity / 1.5);
+      b.material.uniforms.strength.value = 0.04 * k * Math.min(2, sp.intensity / 1.5);
       b.material.uniforms.color.value.copy(sp.color);
       b.visible = sp.visible !== false && sp.intensity > 0;
     }
@@ -831,7 +845,7 @@ const FX = (() => {
     }
     // Title: violet wash on the stone around the sign
     const zN = L.cz - L.d / 2 + T;
-    const tw = spillPlane(9.0, 4.2, 0x6f5cff, new THREE.Vector3(0, 4.55, zN), 0, 0);
+    const tw = spillPlane(8.0, 2.6, 0x6f5cff, new THREE.Vector3(0, 4.75, zN), 0, 0);   // stays above the arch labels
     tw.userData.k = 0.16;
     g.add(tw); spill.title.push(tw);
     spill.group = g;
