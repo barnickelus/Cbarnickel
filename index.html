@@ -1444,6 +1444,13 @@ body { overscroll-behavior: none; }
 <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <!-- Reflector for the lobby wall mirror (real planar reflections) -->
 <script src="https://unpkg.com/three@0.128.0/examples/js/objects/Reflector.js"></script>
+<!-- Post-processing (r128 examples) — used by fx.js; the gallery runs without them -->
+<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
@@ -8341,7 +8348,8 @@ function animate() {
   // Painting-portal ripples + fall-in sequence
   updatePaintingFX(now, dt);
 
-  renderer.render(scene, camera);
+  // Optional visual layer (fx.js); plain render when it's absent
+  if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
 }
 
 /* ─── 14. Boot ─── */
@@ -8443,6 +8451,7 @@ async function boot() {
 boot();
 
 </script>
+<script src="fx.js"></script>
 
 </body>
 </html>
