@@ -1985,6 +1985,8 @@ function setRenderScale(pr) {
 function perfGovernor(now) {
   if (!PERF.govern || typeof entered === 'undefined' || !entered || document.hidden) { _gov.last = 0; return; }
   if (!_gov.pr) _gov.pr = renderer.getPixelRatio();
+  if (!_gov.t0) _gov.t0 = now;
+  if (now - _gov.t0 < 6000) { _gov.last = 0; return; }   // let shaders compile / the intro settle
   if (_gov.last) {
     const d = now - _gov.last;
     if (d < 250) { _gov.acc += d; _gov.frames++; }

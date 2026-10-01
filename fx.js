@@ -908,6 +908,10 @@ const FX = (() => {
   function governor(now) {
     if (q) return;   // ?fx=on / ?fx=off pin the state for comparisons
     if (typeof entered === 'undefined' || !entered || document.hidden) { gov.last = 0; return; }
+    // Grace period: the first seconds inside are shader compiles, texture
+    // uploads and the intro glide — not representative of steady-state speed.
+    if (!gov.t0) gov.t0 = now;
+    if (now - gov.t0 < 8000) { gov.last = 0; return; }
     if (gov.last) {
       const dtm = now - gov.last;
       if (dtm < 250) { gov.acc += dtm; gov.frames++; }   // ignore tab-switch gaps
@@ -918,6 +922,10 @@ const FX = (() => {
     gov.acc = 0; gov.frames = 0;
     gov.slow = fps < 40 ? gov.slow + 1 : 0;
     if (gov.slow < 3) return;
+    // Trade resolution first (index.html's perfGovernor); only drop effects once
+    // the render scale is already at its floor and frames are still slow.
+    if (typeof PERF !== 'undefined' && PERF.govern && typeof _gov !== 'undefined' &&
+        _gov.pr && _gov.pr > PERF.minPr + 1e-3) { gov.slow = 0; return; }
     gov.slow = 0;
     const k = SHED_ORDER.find(f => settings[f] && !(f in saved));
     if (!k) return;
