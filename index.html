@@ -1973,6 +1973,35 @@ function fitTextureToTier(tex) {
   } catch (e) { /* keep the original if the canvas refuses */ }
   return tex;
 }
+// Pre-sized copies of every painting live beside the originals: paintings/lo
+// (≤1024px) and paintings/md (≤1600px). The gallery never needs more than that
+// on a wall, and the two 12-megapixel originals alone were 15MB of download and
+// ~100MB of decoded bitmap — the main reason an iPad reloaded the page.
+function paintingSrc(file, use) {
+  if (use === 'thumb') return 'paintings/lo/' + file;
+  if (use === 'view') return PERF.low ? 'paintings/md/' + file : 'paintings/' + file;
+  return (PERF.low ? 'paintings/lo/' : 'paintings/md/') + file;      // gallery wall
+}
+// Painting textures load a few at a time, nearest to the entrance first, so a
+// weak device isn't decoding thirty JPEGs at once (a memory spike that can take
+// the whole tab down on iOS) and the rooms you see first fill in first.
+const _texQueue = { pending: [], active: 0, limit: PERF.low ? 3 : 5 };
+function queueTextureLoad(url, priority, onLoad, onError) {
+  _texQueue.pending.push({ url, priority, onLoad, onError });
+  _texQueue.pending.sort((a, b) => a.priority - b.priority);
+  pumpTextureQueue();
+}
+function pumpTextureQueue() {
+  while (_texQueue.active < _texQueue.limit && _texQueue.pending.length) {
+    const job = _texQueue.pending.shift();
+    _texQueue.active++;
+    const done = () => { _texQueue.active--; pumpTextureQueue(); };
+    new THREE.TextureLoader().load(job.url,
+      (tex) => { done(); job.onLoad(tex); },
+      undefined,
+      (err) => { done(); if (job.onError) job.onError(err); });
+  }
+}
 // Runtime resolution governor: if the device still can't hold ~30fps, step the
 // render resolution down (never back up, so it can't oscillate).
 const _gov = { acc: 0, frames: 0, last: 0, slow: 0, pr: 0 };
@@ -4120,6 +4149,15 @@ function buildMirror() {
       color: 0x9aa0a0,
       shader: rippleShader,
     });
+    // The reflection is a second full render of the scene. On the lean tier it
+    // refreshes every other frame — the last one stays on the glass between.
+    if (PERF.low) {
+      const reflect = mirrorMesh.onBeforeRender;
+      mirrorMesh.onBeforeRender = function (...args) {
+        if (_frameNo & 1) return;
+        reflect.apply(this, args);
+      };
+    }
   } else {
     mirrorMesh = new THREE.Mesh(
       makeMirrorGlassGeometry(glassKind),
@@ -6319,6 +6357,7 @@ function placeAllPaintings() {
     if (subset.length === 0) continue;
     placeSeriesInRoom(room, subset, sid);
   }
+  ensureSpotPool();
 }
 
 // After all paintings are placed, switch any wall FACE that carries art to the
@@ -7759,17 +7798,18 @@ function placePainting(art, dir, localCoord, room) {
   // The frame builder always sets userData.frameDepth on the group.
   const frameDepth = frameGroup.userData.frameDepth;
 
-  // Lean tier: a painting sitting close beside one that's already lit on the same
-  // wall shares its spotlight (every spotlight costs every lit pixel) and gets a
-  // little more self-illumination instead.
-  const sharedSpot = PERF.low && lightingRefs.spots.some(sp =>
-    sp.userData.nx === normalX && sp.userData.nz === normalZ &&
-    Math.abs(sp.target.position.y - yCenter) < 1.2 &&
-    Math.hypot(sp.target.position.x - px, sp.target.position.z - pz) < 2.2);
+  // Where this painting's spotlight hangs and aims. On the lean tier the
+  // lights come from a small shared pool instead (see updateSpotPool), so every
+  // lit pixel pays for eight lights rather than thirty.
+  const spotSpec = {
+    lx: px + normalX * Math.min(2.0, room.w / 4), ly: LOBBY_H - 0.25, lz: pz + normalZ * Math.min(2.0, room.d / 4),
+    px, py: yCenter, pz, roomId: room.id, mesh: null, lit: false,
+  };
 
-  // Painting (texture loaded async)
-  new THREE.TextureLoader().load(
-    'paintings/' + art.file,
+  // Painting (texture loaded async, nearest to the entrance first)
+  queueTextureLoad(
+    paintingSrc(art.file, 'wall'),
+    Math.hypot(px, pz - 4.5),
     (tex) => {
       fitTextureToTier(tex);
       tex.encoding = THREE.sRGBEncoding;
@@ -7781,7 +7821,7 @@ function placePainting(art, dir, localCoord, room) {
         // pieces stay readable in the dim gallery (not purely spotlight-lit).
         emissive: 0xffffff,
         emissiveMap: tex,
-        emissiveIntensity: sharedSpot ? 0.5 : 0.32,
+        emissiveIntensity: 0.32,
       });
       const p = new THREE.Mesh(new THREE.PlaneGeometry(pW, pH), pMat);
       // Sit the painting flush with the frame's front face (frameDepth out
@@ -7805,14 +7845,15 @@ function placePainting(art, dir, localCoord, room) {
       p.userData.normalX = normalX;
       p.userData.normalZ = normalZ;
       p.userData.yCenter = yCenter;
+      p.userData.spotSpec = spotSpec;
+      spotSpec.mesh = p;
       scene.add(p);
       paintingMeshes.push(p);
     },
-    undefined,
     (err) => console.warn('Failed to load', art.file, err)
   );
 
-  if (sharedSpot) return;
+  if (SPOT_POOL) { _spotSpecs.push(spotSpec); return; }
   // Spotlight per painting — also our shadow source
   const spotDist = Math.max(1.5, Math.min(2.8, room.h - HANG_HEIGHT));
   const spot = new THREE.SpotLight(
@@ -7833,6 +7874,99 @@ function placePainting(art, dir, localCoord, room) {
   scene.add(spot);
   scene.add(spot.target);
   lightingRefs.spots.push(spot);
+}
+
+/* ─── Shared spotlight pool (lean tier) ───
+   Every spotlight in the scene is evaluated for every lit pixel, so thirty of
+   them make the big stone walls the most expensive thing an iPad draws. Here a
+   pool of SPOT_POOL lights serves whichever paintings are nearest the visitor;
+   a light fades out, moves, and fades back in when it changes painting, and a
+   painting without a light lifts its own glow a little so nothing goes dark.
+   The pool size never changes, so no shader ever recompiles. */
+const SPOT_POOL = (() => {           // ?pool=0 / ?pool=1 override the tier (testing)
+  const q = new URLSearchParams(location.search).get('pool');
+  return (q === '1' || (PERF.low && q !== '0')) ? 8 : 0;
+})();
+const _spotSpecs = [];
+const _spotPool = { slots: [], nextPick: 0, v: new THREE.Vector3() };
+function ensureSpotPool() {
+  if (!SPOT_POOL || _spotPool.slots.length || !_spotSpecs.length) return;
+  const n = Math.min(SPOT_POOL, _spotSpecs.length);
+  for (let i = 0; i < n; i++) {
+    const spot = new THREE.SpotLight(T().spot.color, T().spot.intensity * lightingMul, 8, Math.PI / 6, 0.4, 1.2);
+    scene.add(spot);
+    scene.add(spot.target);
+    lightingRefs.spots.push(spot);
+    _spotPool.slots.push({ spot, spec: null, next: null, fade: 0 });
+  }
+  updateSpotPool(performance.now(), 10);     // seat the lights before the first frame
+}
+function _seatSpot(slot, spec) {
+  if (slot.spec) slot.spec.lit = false;
+  slot.spec = spec;
+  spec.lit = true;
+  slot.spot.position.set(spec.lx, spec.ly, spec.lz);
+  slot.spot.target.position.set(spec.px, spec.py, spec.pz);
+  _spotPoolMoved();
+}
+function _spotPoolMoved() {
+  _teardownDuomoAtmosphere();                       // rebuilt from the new positions next frame
+  if (window.FX && FX.atmosDirty) FX.atmosDirty();
+}
+function updateSpotPool(now, dt) {
+  const slots = _spotPool.slots;
+  if (!slots.length) return;
+  // Re-pick targets a few times a second; the fades run every frame
+  if (now >= _spotPool.nextPick) {
+    _spotPool.nextPick = now + 180;
+    const c = _spotPool.v.copy(camera.position);
+    if (worldRoot) worldRoot.worldToLocal(c);
+    // Paintings in another room than the visitor rank well behind this room's,
+    // however close they are through a shared wall. From the lobby every room
+    // is on view through its arch, so there plain distance decides.
+    let here = null;
+    for (const id of Object.keys(ROOMS)) {
+      const r = ROOMS[id];
+      if (Math.abs(c.x - r.cx) <= r.w / 2 && Math.abs(c.z - r.cz) <= r.d / 2) { here = id; break; }
+    }
+    const away = here && here !== 'lobby';
+    for (const sp of _spotSpecs) {
+      sp.d = Math.hypot(sp.px - c.x, sp.pz - c.z) + (away && sp.roomId !== here ? 40 : 0);
+    }
+    const byDist = _spotSpecs.slice().sort((a, b) => a.d - b.d);
+    const want = byDist.slice(0, slots.length);
+    const free = slots.filter(sl => !sl.spec);
+    for (const sp of want) {
+      if (sp.lit || slots.some(sl => sl.next === sp)) continue;
+      let slot = free.pop();
+      if (!slot) {
+        // Take the light from the farthest painting — but only for a clearly
+        // nearer one, so pacing in a doorway doesn't make lights hop
+        let far = null;
+        for (const sl of slots) if (sl.spec && !sl.next && (!far || sl.spec.d > far.spec.d)) far = sl;
+        if (!far || sp.d + 1.0 >= far.spec.d) continue;
+        slot = far;
+      }
+      if (slot.spec) slot.next = sp; else _seatSpot(slot, sp);
+    }
+  }
+  const base = T().spot.intensity * lightingMul;
+  for (const sl of slots) {
+    if (sl.next) {
+      sl.fade = Math.max(0, sl.fade - dt / 0.25);
+      if (sl.fade === 0) { _seatSpot(sl, sl.next); sl.next = null; }
+    } else if (sl.spec) {
+      sl.fade = Math.min(1, sl.fade + dt / 0.35);
+    }
+    sl.spot.intensity = base * sl.fade;
+  }
+  // Unlit paintings carry a touch more self-illumination
+  for (const sp of _spotSpecs) {
+    const m = sp.mesh && sp.mesh.material;
+    if (!m || !m.isMeshStandardMaterial || sp.mesh.userData.burn) continue;
+    const target = sp.lit ? 0.32 : 0.55;
+    m.emissiveIntensity += (target - m.emissiveIntensity) * Math.min(1, dt * 3);
+  }
 }
 
 /* ─── 8. Navigation: tap, pinch, joystick, magnetic snap ─── */
@@ -13617,7 +13751,7 @@ function buildIndex() {
       const card = document.createElement('div');
       card.className = 'index-card';
       card.innerHTML = `
-        <div class="img-wrap"><img src="paintings/${art.file}" alt="${escapeHtml(art.title)}" loading="lazy"></div>
+        <div class="img-wrap"><img src="${paintingSrc(art.file, 'thumb')}" alt="${escapeHtml(art.title)}" loading="lazy"></div>
         <div class="num">${String(idx + 1).padStart(2, '0')}${art.year ? ' — ' + escapeHtml(art.year) : ''}</div>
         <h4>${escapeHtml(art.title)}</h4>
         ${art.medium ? `<div class="meta"><em>${escapeHtml(art.medium)}</em> · ${formatSize(art._size)}</div>` : ''}`;
@@ -13635,7 +13769,7 @@ function escapeHtml(s) {
 function openModal(idx) {
   const art = ARTWORKS[idx];
   if (!art) return;
-  document.getElementById('modal-img').src = 'paintings/' + art.file;
+  document.getElementById('modal-img').src = paintingSrc(art.file, 'view');
   document.getElementById('modal-num').textContent = String(idx + 1).padStart(2, '0') + (art.year ? ' — ' + art.year : '');
   document.getElementById('modal-title').textContent = art.title || '';
   document.getElementById('modal-meta').textContent = art.medium || '';
@@ -13671,7 +13805,7 @@ function showSlide(i) {
   if (ARTWORKS.length === 0) return;
   slideIdx = (i + ARTWORKS.length) % ARTWORKS.length;
   const art = ARTWORKS[slideIdx];
-  document.getElementById('slide-img').src = 'paintings/' + art.file;
+  document.getElementById('slide-img').src = paintingSrc(art.file, 'view');
   document.getElementById('slide-num').textContent = String(slideIdx + 1).padStart(2, '0') + (art.year ? ' — ' + art.year : '');
   document.getElementById('slide-title').textContent = art.title;
   document.getElementById('slide-meta').textContent = (art.medium || '') + (art._size ? ' · ' + formatSize(art._size) : '');
@@ -14888,8 +15022,10 @@ function rerouteMusicBus(B) {
 }
 
 /* ─── 13. Animate loop ─── */
+let _frameNo = 0;
 function animate() {
   requestAnimationFrame(animate);
+  _frameNo++;
   const now = performance.now();
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
@@ -14974,6 +15110,7 @@ function animate() {
   updateNeonFlicker(now);
   // Duomo dust motes drifting in the spot beams
   updateDuomoAtmosphere(now);
+  updateSpotPool(now, dt);
   // Neon plants: ignition, sway/flicker uniforms, power-down, hum
   updateNeonPlants(now);
   // Mirror ripples + push-through sequence

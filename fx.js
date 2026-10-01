@@ -295,11 +295,21 @@ const FX = (() => {
     m.needsUpdate = true;
     p.userData.fxSurface = false;
   }
+  // The relief only reads from close up, so only paintings within SURFACE_NEAR
+  // metres carry it (hysteresis to SURFACE_FAR so it can't flicker on the
+  // threshold). Both shader variants are compiled once and then just swapped.
+  const SURFACE_NEAR = 4.2, SURFACE_FAR = 5.2;
+  const _sv = new THREE.Vector3();
+  let surfaceWarmed = false;
   function syncSurfaces() {
     // Paintings load asynchronously — pick up newcomers every frame (cheap flag check).
     for (const p of paintingMeshes) {
-      if (settings.surface && !p.userData.fxSurface) applySurface(p);
-      else if (!settings.surface && p.userData.fxSurface) removeSurface(p);
+      _sv.setFromMatrixPosition(p.matrixWorld);
+      const d = _sv.distanceTo(camera.position);
+      // Seed one painting early so the warm-up compile covers this variant
+      const near = d < SURFACE_NEAR || (!surfaceWarmed && (surfaceWarmed = true));
+      if (settings.surface && near && !p.userData.fxSurface) applySurface(p);
+      else if ((!settings.surface || d > SURFACE_FAR) && p.userData.fxSurface) removeSurface(p);
       else if (p.userData.fxSurface) {
         // The lighter swaps a burning painting's map to a charred one (and
         // back on restore) — keep the relief reading the texture on show.
@@ -985,11 +995,14 @@ const FX = (() => {
     return out;
   }
   // Render-scale changes from the resolution governor in index.html
+  // The lean tier's spotlight pool moves lights between paintings; the beams
+  // are rebuilt from the new positions on the next frame.
+  function atmosDirty() { disposeAtmos(); }
   function setPixelRatio(pr) {
     if (composer) { composer.setPixelRatio(pr); composer.setSize(window.innerWidth, window.innerHeight); }
     resizeReflector();
     resizeBloom();
   }
-  return { settings, render, set, exportable, lowTier, setPixelRatio, shed: gov.shed };
+  return { settings, render, set, exportable, lowTier, setPixelRatio, atmosDirty, shed: gov.shed };
 })();
 window.FX = FX;
