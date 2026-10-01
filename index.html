@@ -1518,7 +1518,7 @@ let lightingMul = 1.0;
 // result here to make it the site default for everyone.
 const DEFAULT_SETTINGS = {
   theme: 'duomo',
-  lighting: 1.0,
+  lighting: 0.81,
   neonTitle: true,
   neonPlants: true,
   frameStyle: 'ornate',
@@ -1554,6 +1554,9 @@ const DEFAULT_SETTINGS = {
     "09-arch-beach-heights.jpg": { style: "victorian", color: "painted" },
     "02-hillside-in-blue.jpg": { style: "victorian", color: "ivory" },
   },
+  // Visual effects layer (fx.js). Touch / small-screen devices ignore these and
+  // keep their lighter defaults.
+  fx: { surface: true, reflect: true, bloom: false, atmos: true, contact: true, film: true, spill: true },
 };
 theme = localStorage.getItem('theme') || DEFAULT_SETTINGS.theme;
 lightingMul = parseFloat(localStorage.getItem('lighting')) || DEFAULT_SETTINGS.lighting;
