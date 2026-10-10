@@ -1160,8 +1160,14 @@ body { overscroll-behavior: none; }
 </div>
 
 <!-- Background music — dark ambient track plays softly in lobby+series rooms.
-     Not autoplay (browsers block it); starts on first user gesture. -->
-<audio id="bg-music" src="dark-ambient-music-354475.mp3" loop preload="auto"></audio>
+     Not autoplay (browsers block it); starts on first user gesture. preload is
+     none so the 4 MB stays off the pre-Enter download path: boot() buffers it
+     once the Enter button enables (unless the visitor muted it last time). -->
+<audio id="bg-music" src="dark-ambient-music-354475.mp3" loop preload="none"></audio>
+<!-- The same recording pre-reversed (tools/build-reversed.py, 320 kbps CBR):
+     it streams BACKWARDS inside the mirror world through this second element,
+     fetched only once a visitor pushes the mirror. -->
+<audio id="bg-music-rev" src="dark-ambient-music-354475-reversed-320.mp3" loop preload="none"></audio>
 
 <div class="bait" id="bait">
   <span class="bait-label">do not click here</span>
@@ -4973,11 +4979,12 @@ function handleMirrorPush(hitPoint) {
     tapWalkTarget = { x: c.x, z: c.z, faceX: MIRROR_PX, faceZ: MIRROR_Z };
     return;
   }
-  // Use the push GESTURE to unlock/resume audio and pre-decode the reversed
-  // track, so the backwards music can actually sound when we cross (iOS
-  // requires AudioContext activation from within a user gesture).
+  // Use the push GESTURE to unlock/resume audio and start the reversed track
+  // loading (and bless its element), so the backwards music can actually sound
+  // when we cross (iOS requires AudioContext activation from within a user
+  // gesture, and a media element must have played in one).
   ensureAudio();
-  if (localStorage.getItem('musicMuted') !== 'true') preloadReversedMusic();
+  if (localStorage.getItem('musicMuted') !== 'true') primeReversedMusic();
   const now = performance.now();
   if (now - _mirrorPush.last > 6000) _mirrorPush.count = 0;
   _mirrorPush.last = now;
@@ -8413,10 +8420,12 @@ function handleTap(clientX, clientY) {
   }
 
   // Inside the mirror world, use any tap (a gesture) to retry the reversed
-  // soundtrack if it hasn't managed to start (iOS audio-unlock timing).
-  if (mirrorWorld && !_musicReversed.node && _musicStarted
+  // soundtrack if it hasn't managed to start (iOS audio-unlock timing) or was
+  // paused by a system interruption; it resumes in place, never re-seeks.
+  if (mirrorWorld && _musicStarted && !_rev.failed
       && localStorage.getItem('musicMuted') !== 'true') {
-    setMirrorMusic(true);
+    const rev = revEl();
+    if (rev && (rev.paused || !_rev.started)) setMirrorMusic(true);
   }
 
   // The mirror — pushable
@@ -14167,110 +14176,261 @@ function startBackgroundMusic() {
 }
 
 /* ─── Mirror-world music: the ambient track plays BACKWARDS inside ───
-   The mp3 is decoded once into a WebAudio buffer, sample-reversed, and looped
-   through the shared AudioContext while the <audio> element is paused; leaving
-   the mirror stops the node and resumes the normal track. */
-const _musicReversed = { buffer: null, node: null, gain: null, loading: false };
-// Fetch + decode + sample-reverse the track once. Called from the PUSH gesture
-// so the buffer is ready by the time the crossing completes.
-function preloadReversedMusic() {
-  if (_musicReversed.buffer || _musicReversed.loading) return;
-  const audio = document.getElementById('bg-music');
-  const ctx = ensureAudio();
-  if (!audio || !ctx) return;
-  _musicReversed.loading = true;
-  fetch(audio.currentSrc || audio.getAttribute('src'))
-    .then(r => r.arrayBuffer())
-    .then(ab => new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej)))
-    .then(buf => {
-      const rev = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
-      for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-        const a = buf.getChannelData(ch), b = rev.getChannelData(ch);
-        for (let i = 0, n = buf.length; i < n; i++) b[i] = a[n - 1 - i];
-      }
-      _musicReversed.buffer = rev;
-      _musicReversed.loading = false;
-      // If we're already inside the mirror when the decode lands, start now
-      if (mirrorWorld) setMirrorMusic(true);
-    })
-    .catch(() => { _musicReversed.loading = false; });
+   A pre-reversed copy of the mp3 (dark-ambient-music-354475-reversed-320.mp3:
+   the same recording sample-reversed and re-encoded at 320 kbps CBR by
+   tools/build-reversed.py) streams through a second <audio> element while the
+   forward element is paused; leaving the mirror fades it out and resumes the
+   normal track. Streaming it keeps the two ~46 MB decoded-PCM copies (and the
+   main-thread reverse loop) of the old decode-and-reverse path out of the tab.
+   Routed through the music bus like the forward element once the context
+   runs (createMediaElementSource is irreversible, hence the clone dance in
+   bypassMusicBus); straight out at MUSIC_LEVEL until then. */
+const revEl = () => document.getElementById('bg-music-rev');   // bypassMusicBus swaps nodes: always look it up
+// The reversed stream's state. Decisions come from here, not from rev.paused:
+// a bless promise or an iOS interruption can pause the element underneath us.
+const _rev = {
+  primed: false,     // load() called (once: it resets a playing element)
+  started: false,    // the mirror seeked + played it; a paused element then just resumes in place
+  failed: false,     // no file / undecodable: the mirror keeps the forward track
+  pauseTimer: 0,     // the deferred pause behind a fade-out
+  onMeta: null,      // pending 'loadedmetadata' seek listener (at most one)
+  onPlaying: null,   // pending 'playing' fade-in listener (at most one)
+  hooked: new WeakSet(),
+};
+// Start the reversed file downloading once (its preload is none, so it costs
+// nothing until a push) and, inside the push gesture, bless the element for
+// iOS: a media element only plays programmatically later if it once played
+// in a gesture. bless === false (the ?return boot, no gesture) only loads.
+function primeReversedMusic(bless) {
+  const rev = revEl();
+  if (!rev || _rev.failed) return;
+  if (_rev.pauseTimer) { clearTimeout(_rev.pauseTimer); _rev.pauseTimer = 0; }
+  if (!_rev.primed) {
+    _rev.primed = true;
+    hookReversedElement(rev);
+    rev.preload = 'auto';
+    rev.load();   // the only load() call: it would reset a playing element
+  }
+  if (bless === false || _rev.started || rev.played.length > 0) return;
+  const B = _musicBus, ctx = _audioCtx;
+  const fwd = document.getElementById('bg-music');
+  // Pause only if the crossing hasn't started it meanwhile (the promise can
+  // resolve late on a slow link). An older WebKit may have paused the room
+  // track's session for the second element: put it back.
+  const after = () => {
+    rev.muted = false;
+    if (!_rev.started) rev.pause();
+    if (!mirrorWorld && _musicStarted && fwd && fwd.paused
+        && localStorage.getItem('musicMuted') !== 'true') fwd.play().catch(() => {});
+  };
+  if (B && !B.bypassed && ctx && ctx.state === 'running' && routeReversedMusic(B)) {
+    // routed: its bus gain sits at 0 until the crossing fades it in
+    B.revG.gain.cancelScheduledValues(ctx.currentTime);
+    B.revG.gain.setValueAtTime(0, ctx.currentTime);
+    rev.play().then(after).catch(() => {});
+  } else {
+    rev.muted = true;
+    rev.play().then(after).catch(() => { rev.muted = false; });
+  }
+}
+// Route the reversed element through the bus, once per element (a second
+// createMediaElementSource throws). False: it has to play straight out.
+function routeReversedMusic(B) {
+  if (B.revSrc) return true;
+  const rev = revEl();
+  if (!rev) return false;
+  let src;
+  try { src = B.ctx.createMediaElementSource(rev); } catch (e) { return false; }
+  const g = B.ctx.createGain();
+  g.gain.value = 0;
+  src.connect(g); g.connect(B.revIn);
+  B.revSrc = src;
+  B.revG = g;
+  rev.volume = 1;   // routed: the bus applies the level
+  return true;
+}
+function hookReversedElement(rev) {
+  if (_rev.hooked.has(rev)) return;
+  _rev.hooked.add(rev);
+  rev.addEventListener('error', () => markReversedFailed(rev.error));
+}
+// The reversed file is missing or undecodable: the forward track sounds in
+// the mirror instead, as the bypass fallback always did. Sticky, so the
+// gesture retries stop pausing the forward track on every tap.
+function markReversedFailed(err) {
+  if (_rev.failed) return;
+  _rev.failed = true;
+  _rev.started = false;
+  console.warn('Reversed soundtrack unavailable; the mirror keeps the forward track:', err && (err.message || err));
+  const rev = revEl();
+  if (rev) { dropReversedListeners(rev); try { rev.pause(); } catch (e) {} }
+  if (mirrorWorld) forwardInMirror(document.getElementById('bg-music'), localStorage.getItem('musicMuted') === 'true');
+}
+// Without a reversed stream the forward track plays in the mirror: reopen its
+// bus path (applyMusicMirror closes it in there; it honours _rev.failed too).
+function forwardInMirror(audio, muted) {
+  if (!audio) return;
+  if (muted || !_musicStarted) { audio.pause(); return; }
+  const B = _musicBus;
+  if (B && !B.bypassed) {
+    const t = B.ctx.currentTime;
+    B.fwd.gain.cancelScheduledValues(t);
+    B.fwd.gain.setTargetAtTime(1, t, 0.05);
+    audio.volume = 1;
+  } else audio.volume = MUSIC_LEVEL;
+  audio.play().catch(() => {});
+}
+function dropReversedListeners(rev) {
+  if (_rev.onMeta) { rev.removeEventListener('loadedmetadata', _rev.onMeta); _rev.onMeta = null; }
+  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); _rev.onPlaying = null; }
+}
+// Begin at the mirrored position of where the forward track paused. The
+// reversed file's duration is unknown until its metadata lands (the forward
+// element's stands in; the two differ by one mp3 frame), and a position set
+// before that is re-applied on 'loadedmetadata', before any sound.
+function seekReversedMusic(rev, audio) {
+  if (_rev.onMeta) { rev.removeEventListener('loadedmetadata', _rev.onMeta); _rev.onMeta = null; }
+  const apply = () => {
+    const dur = (rev.duration > 0 && isFinite(rev.duration)) ? rev.duration
+      : (audio.duration > 0 && isFinite(audio.duration)) ? audio.duration : 0;
+    if (!dur) return false;
+    let off = ((dur - (audio.currentTime % dur)) % dur) || 0;
+    // A fresh load (the painting-portal return) would open on the forward
+    // track's fade-out tail (or its first second, then loop into that tail),
+    // several near-silent seconds: begin just past it instead
+    if (audio.currentTime < 1) off = Math.min(4, dur / 2);
+    try { rev.currentTime = off; } catch (e) { return false; }
+    return true;
+  };
+  if (!apply() || rev.readyState < 1) {
+    _rev.onMeta = () => { _rev.onMeta = null; if (_rev.started) apply(); };
+    rev.addEventListener('loadedmetadata', _rev.onMeta, { once: true });
+  }
+}
+// Fade the routed stream in over 0.6 s from the moment sound actually starts
+// (a seek into an un-buffered stretch of the file arrives later than play()),
+// taken from the 'playing' event or the play() promise, whichever is first.
+function armReversedFadeIn(rev) {
+  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); _rev.onPlaying = null; }
+  const B = _musicBus;
+  if (!B || !B.revG) return;
+  const t = B.ctx.currentTime;
+  B.revG.gain.cancelScheduledValues(t);
+  B.revG.gain.setValueAtTime(0, t);
+  _rev.onPlaying = () => fireReversedFadeIn();
+  rev.addEventListener('playing', _rev.onPlaying);
+}
+function fireReversedFadeIn() {
+  if (!_rev.onPlaying) return;   // not armed, or already through
+  const rev = revEl();
+  if (!rev) { _rev.onPlaying = null; return; }
+  // Still seeking or buffering (a 'playing' queued before the deferred seek
+  // landed): no sound yet — the one after the data arrives fires the ramp
+  if (_rev.started && (rev.seeking || rev.readyState < 3)) return;
+  rev.removeEventListener('playing', _rev.onPlaying);
+  _rev.onPlaying = null;
+  const B = _musicBus;
+  if (!_rev.started || !B || !B.revG) return;
+  const t = B.ctx.currentTime;
+  B.revG.gain.cancelScheduledValues(t);
+  B.revG.gain.setValueAtTime(0, t);
+  B.revG.gain.linearRampToValueAtTime(1, t + 0.6);
+}
+// play() is a no-op on a playing element, so this is safe to repeat. A
+// NotAllowedError (no gesture yet) is left to the tap retries; an aborted
+// play (paused meanwhile) is nothing; anything else is a file that cannot
+// play — the failure case.
+function playReversedMusic(rev) {
+  let p;
+  try { p = rev.play(); } catch (e) { return; }
+  if (!p || !p.then) return;
+  p.then(() => { if (_rev.started) fireReversedFadeIn(); }, err => {
+    const n = err && err.name;
+    if (n && n !== 'NotAllowedError' && n !== 'AbortError') markReversedFailed(err);
+  });
 }
 function setMirrorMusic(reversed) {
   const audio = document.getElementById('bg-music');
   if (!audio) return;
+  const rev = revEl();
   const muted = localStorage.getItem('musicMuted') === 'true';
+  const B = _musicBus;
   if (reversed) {
+    if (_rev.pauseTimer) { clearTimeout(_rev.pauseTimer); _rev.pauseTimer = 0; }
+    if (!rev && !_rev.failed) markReversedFailed(new Error('no #bg-music-rev element'));
+    if (_rev.failed) { forwardInMirror(audio, muted); return; }
     const wasPlaying = !audio.paused;
-    // iOS fallback: while the context won't run, the bus is bypassed and the
-    // reversed stream (WebAudio only) would be silent — keep the unrouted
-    // element playing forward instead; onMusicCtxState hands back on 'running'.
-    const B = _musicBus;
-    if (B && B.bypassed && (!_audioCtx || _audioCtx.state !== 'running')) {
-      if (_musicReversed.node) stopReversedMusicNode(0);
-      if (!muted && _musicStarted) { audio.volume = MUSIC_LEVEL; audio.play().catch(() => {}); }
-      else audio.pause();
+    const running = !!_audioCtx && _audioCtx.state === 'running';
+    // iOS fallback: while the context won't run, the bus is bypassed and a
+    // routed element would be silent — play the (unrouted) reversed element
+    // straight at the level; onMusicCtxState routes it on 'running'.
+    if (B && B.bypassed && !running && !B.revSrc) {
+      audio.pause();
+      if (muted || !_musicStarted) return;
+      if (!_rev.primed) primeReversedMusic(false);
+      if (!_rev.started) { _rev.started = true; seekReversedMusic(rev, audio); }
+      rev.muted = false;
+      rev.volume = MUSIC_LEVEL;
+      playReversedMusic(rev);
       return;
     }
     audio.pause();
     if (muted || (!wasPlaying && !_musicStarted)) return;
     const ctx = ensureAudio();
-    if (!ctx) return;
     const start = () => {
-      if (!mirrorWorld || _musicReversed.node || !_musicReversed.buffer) return;
-      const src = ctx.createBufferSource();
-      src.buffer = _musicReversed.buffer;
-      src.loop = true;
-      const g = ctx.createGain();
+      if (!mirrorWorld || _rev.failed) return;
+      const B = _musicBus;
+      if (!_rev.primed) primeReversedMusic(false);
       // Through the music bus when it exists (it applies the level); straight
-      // out otherwise
-      const bus = _musicBus ? _musicBus.revIn : null;
-      const t0 = ctx.currentTime;
-      g.gain.setValueAtTime(0, t0);
-      g.gain.linearRampToValueAtTime(bus ? 1 : 0.35, t0 + 0.6);
-      src.connect(g); g.connect(bus || ctx.destination);
-      // begin at the mirrored position of where the forward track paused
-      const dur = _musicReversed.buffer.duration;
-      let off = ((dur - (audio.currentTime % dur)) % dur) || 0;
-      // A fresh load (the painting-portal return) would open on the forward
-      // track's fade-out tail (or its first second, then loop into that tail),
-      // several near-silent seconds: begin just past it instead
-      if (audio.currentTime < 1) off = Math.min(4, dur / 2);
-      src.start(0, off);
-      _musicReversed.node = src;
-      _musicReversed.gain = g;
+      // out otherwise. Routing an already-routed element is a no-op.
+      const routed = !!B && routeReversedMusic(B);
+      rev.muted = false;
+      rev.volume = routed ? 1 : MUSIC_LEVEL;
+      if (!_rev.started) {
+        // first start on this side: position it and fade it in
+        _rev.started = true;
+        seekReversedMusic(rev, audio);
+        if (routed) armReversedFadeIn(rev);
+      }
+      // started already (interruption, or a rejected play() being retried
+      // from a gesture): resume in place, no re-seek, no new ramp
+      playReversedMusic(rev);
     };
     // iOS: the context only truly runs when resumed from a gesture; the pushes
     // call ensureAudio() in-gesture, but belt-and-braces resume here too.
-    if (ctx.state === 'suspended') {
+    if (ctx && ctx.state === 'suspended') {
       ctx.resume().then(start).catch(() => {});
     }
-    if (_musicReversed.buffer) { start(); return; }
-    preloadReversedMusic();   // starts itself on decode if still inside
+    start();
   } else {
-    if (_musicReversed.node) {
-      stopReversedMusicNode(0.25);
-    }
+    // The forward element first, the reversed pause on the same tick after
+    // it, so an unrouted (bypassed) hand-back leaves no silent gap
     if (!muted && _musicStarted) audio.play().catch(() => {});
+    stopReversedMusic(0.25);
   }
 }
-// Stop the reversed stream with a short fade so it never clicks off.
-function stopReversedMusicNode(fade) {
-  const node = _musicReversed.node, g = _musicReversed.gain;
-  _musicReversed.node = null;
-  _musicReversed.gain = null;
-  if (!node) return;
-  const ctx = _audioCtx;
-  try {
-    if (ctx && g && ctx.state === 'running') {
-      const t = ctx.currentTime;
-      g.gain.cancelScheduledValues(t);
-      g.gain.setValueAtTime(g.gain.value, t);
-      g.gain.linearRampToValueAtTime(0, t + fade);
-      node.stop(t + fade + 0.02);
-    } else {
-      node.stop();
-    }
-  } catch (e) { try { node.stop(); } catch (e2) {} }
+// Stop the reversed stream with a short fade so it never clicks off; the
+// element pauses once the fade is through (unless it was started again).
+function stopReversedMusic(fade) {
+  const rev = revEl();
+  _rev.started = false;
+  if (_rev.pauseTimer) { clearTimeout(_rev.pauseTimer); _rev.pauseTimer = 0; }
+  if (!rev) return;
+  dropReversedListeners(rev);
+  const B = _musicBus, ctx = _audioCtx;
+  if (B && B.revG && ctx && ctx.state === 'running' && fade > 0) {
+    const t = ctx.currentTime, g = B.revG.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0, t + fade);
+    _rev.pauseTimer = setTimeout(() => {
+      _rev.pauseTimer = 0;
+      const r = revEl();
+      if (r && !_rev.started) r.pause();
+    }, fade * 1000 + 20);
+  } else {
+    rev.pause();   // unrouted (iOS locks the element volume: no fade possible)
+  }
 }
 
 function toggleMusic() {
@@ -14286,8 +14446,8 @@ function toggleMusic() {
     updateMusicButtonState(willMute);
     syncMusicBusMute();
     if (willMute) {
-      stopReversedMusicNode(0.06);
-      if (_musicBus && _musicBus.bypassed) audio.pause();   // the forward fallback
+      stopReversedMusic(0.06);
+      if (_rev.failed || (_musicBus && _musicBus.bypassed)) audio.pause();   // the forward fallback
     } else {
       setMirrorMusic(true);
       musicGestureKick();
@@ -14691,12 +14851,10 @@ function buildMusicBus(ctx) {
   B.chimeIn.connect(B.chimeSend); B.chimeSend.connect(B.sendHP);
   _musicBus = B;
   el.volume = 1;   // routed: the bus applies the level
-  // A reversed stream already playing straight out moves onto the bus
-  if (_musicReversed.gain) {
-    try { _musicReversed.gain.disconnect(); } catch (e) {}
-    _musicReversed.gain.gain.cancelScheduledValues(ctx.currentTime);
-    _musicReversed.gain.gain.value = 1;
-    _musicReversed.gain.connect(B.revIn);
+  // A reversed stream already playing straight out moves onto the bus, at
+  // level and without a ramp, so its sound is continuous
+  if (_rev.started && routeReversedMusic(B)) {
+    B.revG.gain.setValueAtTime(1, ctx.currentTime);
   }
   const t = ctx.currentTime;
   applyMusicSpace(B, musicSpaceKey(B.room), t);
@@ -14781,8 +14939,9 @@ function applyMusicSpace(B, key, t) {
 
 function applyMusicMirror(B, on, t) {
   B.mirror = on;
-  // The forward element is paused in there; keep its path closed too
-  B.fwd.gain.setTargetAtTime(on ? 0 : 1, t, 0.05);
+  // The forward element is paused in there; keep its path closed too (unless
+  // it is standing in for a reversed stream that could not load)
+  B.fwd.gain.setTargetAtTime(on && !_rev.failed ? 0 : 1, t, 0.05);
   if (on) {
     const ir = musicImpulseReady(B.ctx, 'shimmer');
     if (!ir) {
@@ -14900,7 +15059,8 @@ function updateMusicAmbience() {
   }
   if (B.muted && !B.idle && t - B.mutedAt > 0.6) setMusicBusIdle(B, true);
   // Layers only ever sound alongside the track
-  const sounding = !B.muted && (mirrorWorld ? !!_musicReversed.node : !B.el.paused);
+  const rev = mirrorWorld && !_rev.failed ? revEl() : null;
+  const sounding = !B.muted && (rev ? !rev.paused : !B.el.paused);
   if (sounding !== B.sounding && t >= B.padHoldUntil) {
     B.sounding = sounding;
     B.padGate.gain.cancelScheduledValues(t);
@@ -14974,12 +15134,20 @@ function musicGestureKick(e) {
   const el = document.getElementById('bg-music');
   if (!el) return;
   if (mirrorWorld) {
-    if (!_musicReversed.node) setMirrorMusic(true);
+    const rev = revEl();
+    if (_rev.failed) {
+      // no reversed stream: the forward track stands in (never re-paused)
+      if (el.paused) forwardInMirror(el, false);
+      return;
+    }
+    // not started yet (iOS unlock timing), or paused by a system
+    // interruption: it starts, or resumes in place without a re-seek
+    if (!rev || rev.paused || !_rev.started) setMirrorMusic(true);
     // A return-flow page load never played the element in a gesture; bless it
     // now (silently — its bus path is closed in here) so leaving the mirror can
     // start it programmatically on iOS.
     if (B && !B.bypassed && el.paused && el.played.length === 0) {
-      el.play().then(() => { if (mirrorWorld) el.pause(); }).catch(() => {});
+      el.play().then(() => { if (mirrorWorld && !_rev.failed) el.pause(); }).catch(() => {});
     }
   } else if (el.paused) {
     // dropped by a system interruption, or blocked from autoplaying
@@ -15004,8 +15172,38 @@ function bypassMusicBus() {
   B.el = el;
   B.bypassed = true;
   B.stallAt = 0; B.stallTaps = 0;
-  if (localStorage.getItem('musicMuted') !== 'true') {
-    if (mirrorWorld) stopReversedMusicNode(0);   // silent in a stalled context anyway
+  // The reversed element gets the same swap if it is routed (its source node
+  // is just as irreversible); an unrouted one already plays straight out
+  const rev = revEl();
+  if (rev && B.revSrc) {
+    const clone = rev.cloneNode(false);   // keeps id, src, loop, preload
+    const rpos = rev.currentTime;
+    dropReversedListeners(rev);
+    rev.pause();
+    rev.removeAttribute('id');
+    if (rev.parentNode) rev.parentNode.replaceChild(clone, rev);
+    try { B.revSrc.disconnect(); } catch (e) {}
+    try { B.revG.disconnect(); } catch (e) {}
+    B.revSrc = null; B.revG = null;
+    hookReversedElement(clone);
+    clone.volume = MUSIC_LEVEL;
+    try { clone.currentTime = rpos; } catch (e) {
+      clone.addEventListener('loadedmetadata', () => { try { clone.currentTime = rpos; } catch (e2) {} }, { once: true });
+    }
+  }
+  if (localStorage.getItem('musicMuted') === 'true') return;
+  if (mirrorWorld && !_rev.failed) {
+    // In the mirror only the reversed clone sounds, from where it was. The
+    // forward clone is blessed silently in this same gesture so leaving the
+    // mirror can resume it programmatically on iOS.
+    const r = revEl();
+    if (r) {
+      if (!_rev.started) setMirrorMusic(true);
+      else { r.muted = false; r.volume = MUSIC_LEVEL; playReversedMusic(r); }
+    }
+    el.muted = true;
+    el.play().then(() => { if (mirrorWorld) el.pause(); el.muted = false; }).catch(() => { el.muted = false; });
+  } else {
     el.play().catch(() => {});
   }
 }
@@ -15019,6 +15217,13 @@ function rerouteMusicBus(B) {
   src.connect(B.fwd);
   B.el.volume = 1;
   B.bypassed = false;
+  // The reversed element too (a clone has no source node yet); one already
+  // sounding goes straight to level so the hand-back is seamless
+  if (routeReversedMusic(B) && _rev.started) {
+    const t = B.ctx.currentTime;
+    B.revG.gain.cancelScheduledValues(t);
+    B.revG.gain.setValueAtTime(1, t);
+  }
 }
 
 /* ─── 13. Animate loop ─── */
@@ -15179,15 +15384,18 @@ async function boot() {
         flashCustomHint('back through the paint…', 2600);
         warmShaderPrograms(2500);   // no intro on this path
         // Backwards music should be playing on this side. A fresh page load has
-        // no gesture, so try immediately (works where the origin is trusted)
-        // and rearm on the first gesture for strict autoplay policies (iOS).
-        preloadReversedMusic();
+        // no gesture, so start the reversed file loading (no bless: nothing to
+        // bless it in), try immediately (works where the origin is trusted —
+        // enterGallery started the music a tick ago) and rearm on the first
+        // gesture for strict autoplay policies (iOS). A started stream that
+        // is merely paused resumes in place, never re-seeks.
+        primeReversedMusic(false);
         const kickReverse = () => {
-          if (!mirrorWorld) return;
+          if (!mirrorWorld || localStorage.getItem('musicMuted') === 'true') return;
+          const rev = revEl();
+          if (!rev || _rev.failed) return;
           ensureAudio();
-          if (!_musicReversed.node && localStorage.getItem('musicMuted') !== 'true') {
-            setMirrorMusic(true);
-          }
+          if (rev.paused || !_rev.started) setMirrorMusic(true);
         };
         kickReverse();
         ['pointerdown', 'touchstart', 'keydown'].forEach(ev =>
@@ -15215,6 +15423,20 @@ async function boot() {
   const btn = document.getElementById('enter-btn');
   btn.disabled = false;
   btn.textContent = 'Enter the gallery';
+  // The music (preload none, so it stayed off the boot download path) buffers
+  // while the visitor reads the entry screen — unless they muted it last
+  // time, in which case it is never fetched. Only ever on an untouched
+  // element: load() would reset one that is already playing (the ?return
+  // path's enterGallery runs from a timer after this, so the order holds).
+  {
+    const a = document.getElementById('bg-music');
+    let want = true;
+    try { want = localStorage.getItem('musicMuted') !== 'true'; } catch (e) {}
+    if (a && want && a.paused && a.readyState === 0 && a.networkState !== 2) {   // 2 = NETWORK_LOADING
+      a.preload = 'auto';
+      a.load();
+    }
+  }
 
   // If user is returning from a non-AJAX formsubmit redirect, show a thanks
   // message in the contact view automatically.
