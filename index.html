@@ -3170,9 +3170,11 @@ function makeComicWallTexture(bgCss, lineCss) {
 // with its polished-marble roughness + joint-relief normal maps.
 let _duomoFloorMaps = null;
 function makeDuomoFloorTexture() { return getDuomoFloorMaps().map; }
-function getDuomoFloorMaps() {
-  if (_duomoFloorMaps) return _duomoFloorMaps;
-  const size = 512, S2 = PERF.low ? 512 : 1024;   // lean tier: a quarter of the per-pixel work
+// The inlay itself is vector art, so it is drawn on the main thread (a canvas;
+// ~10–30 ms) and its RGBA bytes at S2×S2 go to duomoFloorPixels — on a worker
+// at boot (startTextureGen) or inline here.
+function _drawDuomoInlay(S2) {
+  const size = 512;
   const c = document.createElement('canvas');
   c.width = S2; c.height = S2;
   const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -3290,28 +3292,132 @@ function getDuomoFloorMaps() {
       ctx.restore();
     }
   }
+  return ctx.getImageData(0, 0, S2, S2).data;
+}
+function getDuomoFloorMaps() {
+  if (_duomoFloorMaps) return _duomoFloorMaps;
+  const S2 = PERF.low ? 512 : 1024;   // lean tier: a quarter of the per-pixel work
+  _duomoFloorMaps = _wrapFloorMaps(duomoFloorPixels(_drawDuomoInlay(S2), S2, S2 / FLOOR_TILE_M, _texgenRand('floor')), S2);
+  return _duomoFloorMaps;
+}
+function _wrapFloorMaps(r, S2) {
+  return {
+    map: _repeatTexData(r.map, S2, S2),
+    normalMap: _repeatTexData(r.normal, S2, S2),
+    roughnessMap: _repeatTexData(r.rough, S2, S2),
+  };
+}
+
+// ── Procedural surface helpers (generated once, cached) ──
+const STONE_TILE_W = 4.0;      // metres of wall per ashlar tile (u); v spans the full LOBBY_H
+const FLOOR_TILE_M = 2.4;      // metres per marble-inlay tile (2×2 medallions)
+
+// ── Pixel generators ──
+// Pure typed-array math: they touch nothing but their parameters, each other,
+// Math and typed arrays (no DOM, no THREE, no page globals), so the very same
+// source runs inline on the main thread and, pasted into TEXGEN_SRC, on a Web
+// Worker at boot. Every output is a Uint8ClampedArray, exactly like the
+// ImageData these used to write into. `rand` is Math.random unless a test
+// seeds it (_texgenRand).
+// Tileable value-noise fBm on a W×H grid, ~[0,1]. Wraps in x (and y if wrapY).
+function fbmField(W, H, cellsX, octaves, wrapY, rand) {
+  rand = rand || Math.random;
+  const out = new Float32Array(W * H);
+  const ix0 = new Int32Array(W), ix1 = new Int32Array(W), fxs = new Float32Array(W);
+  // the x-interpolated grid rows above/below only change when the grid row
+  // does, so they are built once per grid row (f64, as the locals they replace)
+  const top = new Float64Array(W), bot = new Float64Array(W);
+  let amp = 1, norm = 0, cx = cellsX;
+  for (let o = 0; o < octaves; o++) {
+    const gx = Math.max(2, Math.round(cx));
+    const gy = Math.max(2, Math.round(cx * H / W));
+    const grid = new Float32Array(gx * (gy + 1));
+    for (let i = 0; i < grid.length; i++) grid[i] = rand();
+    for (let x = 0; x < W; x++) {
+      const f = (x / W) * gx, i0 = Math.floor(f), t = f - i0;
+      ix0[x] = i0 % gx; ix1[x] = (i0 + 1) % gx; fxs[x] = t * t * (3 - 2 * t);
+    }
+    let lastJ = -1;
+    for (let y = 0; y < H; y++) {
+      const f = (y / H) * gy, j0 = Math.floor(f), t0 = f - j0, ty = t0 * t0 * (3 - 2 * t0);
+      if (j0 !== lastJ) {
+        lastJ = j0;
+        const r0 = j0 * gx, r1 = (wrapY ? (j0 + 1) % gy : j0 + 1) * gx;
+        for (let x = 0; x < W; x++) {
+          const a = grid[r0 + ix0[x]], b = grid[r0 + ix1[x]];
+          top[x] = a + (b - a) * fxs[x];
+          const c = grid[r1 + ix0[x]], d = grid[r1 + ix1[x]];
+          bot[x] = c + (d - c) * fxs[x];
+        }
+      }
+      const row = y * W;
+      for (let x = 0; x < W; x++) {
+        const tp = top[x];
+        out[row + x] += amp * (tp + (bot[x] - tp) * ty);
+      }
+    }
+    norm += amp; amp *= 0.5; cx *= 2;
+  }
+  for (let i = 0; i < out.length; i++) out[i] /= norm;
+  return out;
+}
+// Tangent-space normal map (RGBA bytes) from a height field in metres (canvas
+// y runs down, texture v runs up). Wraps in x; in y only if wrapY.
+function normalFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY) {
+  const d = new Uint8ClampedArray(W * H * 4);
+  const sx = pxPerMX / 2, sy = pxPerMY / 2;
+  for (let y = 0; y < H; y++) {
+    const yu = y > 0 ? y - 1 : (wrapY ? H - 1 : 0);
+    const yd = y < H - 1 ? y + 1 : (wrapY ? 0 : H - 1);
+    for (let x = 0; x < W; x++) {
+      const xl = x > 0 ? x - 1 : W - 1, xr = x < W - 1 ? x + 1 : 0;
+      const nx = -(h[y * W + xr] - h[y * W + xl]) * sx;
+      const ny = -(h[yu * W + x] - h[yd * W + x]) * sy;
+      const il = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+      const i = (y * W + x) * 4;
+      d[i] = (nx * il * 0.5 + 0.5) * 255;
+      d[i + 1] = (ny * il * 0.5 + 0.5) * 255;
+      d[i + 2] = (il * 0.5 + 0.5) * 255;
+      d[i + 3] = 255;
+    }
+  }
+  return d;
+}
+// Duomo floor: the drawn inlay (px, S2×S2 RGBA, modified in place into the
+// albedo) gets marble veining, a joint-relief normal and a polished roughness.
+// Returns { map, normal, rough }.
+function duomoFloorPixels(px, S2, pxPerM, rand) {
+  rand = rand || Math.random;
   // Per-pixel pass: the joints between inlaid pieces are wherever the drawn
   // colour changes sharply, so relief/roughness line up with the pattern.
   const N = S2 * S2;
-  const img = ctx.getImageData(0, 0, S2, S2), px = img.data;
   const lum = new Float32Array(N);
   for (let i = 0; i < N; i++) lum[i] = px[i * 4] * 0.3 + px[i * 4 + 1] * 0.59 + px[i * 4 + 2] * 0.11;
-  const low = _fbmField(S2, S2, 3, 3, true);     // cloudy marble drift / wax wear
-  const warp = _fbmField(S2, S2, 4, 3, true);    // bends the vein runs
-  const crack = _fbmField(S2, S2, 28, 2, true);  // jags them like real fracture veins
-  const vmask = _fbmField(S2, S2, 2, 2, true);   // where a slab carries veins at all
-  const fine = _fbmField(S2, S2, 96, 1, true);   // crystalline speckle
+  const low = fbmField(S2, S2, 3, 3, true, rand);     // cloudy marble drift / wax wear
+  const warp = fbmField(S2, S2, 4, 3, true, rand);    // bends the vein runs
+  const crack = fbmField(S2, S2, 28, 2, true, rand);  // jags them like real fracture veins
+  const vmask = fbmField(S2, S2, 2, 2, true, rand);   // where a slab carries veins at all
+  const fine = fbmField(S2, S2, 96, 1, true, rand);   // crystalline speckle
   // 3×3 box blur of the drawing: joints between pieces are eased (ground and
-  // waxed, not a printed hard edge)
+  // waxed, not a printed hard edge). Only the joint pixels ever read it, so it
+  // is filled just there — in a pass of its own over the untouched drawing.
   const soft = new Float32Array(N * 3);
+  const jointA = new Float32Array(N);
   for (let y = 0; y < S2; y++) {
     const r0 = ((y + S2 - 1) % S2) * S2, r1 = y * S2, r2 = ((y + 1) % S2) * S2;
     for (let x = 0; x < S2; x++) {
-      const c0 = (x + S2 - 1) % S2, c2 = (x + 1) % S2, o = (r1 + x) * 3;
-      for (let ch = 0; ch < 3; ch++) {
-        soft[o + ch] = (px[(r0 + c0) * 4 + ch] + px[(r0 + x) * 4 + ch] + px[(r0 + c2) * 4 + ch] +
-          px[(r1 + c0) * 4 + ch] + px[(r1 + x) * 4 + ch] + px[(r1 + c2) * 4 + ch] +
-          px[(r2 + c0) * 4 + ch] + px[(r2 + x) * 4 + ch] + px[(r2 + c2) * 4 + ch]) / 9;
+      const p = r1 + x, c0 = (x + S2 - 1) % S2, c2 = (x + 1) % S2;
+      const g = Math.max(Math.abs(lum[r1 + c2] - lum[r1 + c0]), Math.abs(lum[r2 + x] - lum[r0 + x]));
+      const e = Math.min(1, Math.max(0, (g - 14) / 50));
+      const joint = e * e * (3 - 2 * e);
+      jointA[p] = joint;
+      if (joint > 0) {
+        const o = p * 3;
+        for (let ch = 0; ch < 3; ch++) {
+          soft[o + ch] = (px[(r0 + c0) * 4 + ch] + px[(r0 + x) * 4 + ch] + px[(r0 + c2) * 4 + ch] +
+            px[(r1 + c0) * 4 + ch] + px[(r1 + x) * 4 + ch] + px[(r1 + c2) * 4 + ch] +
+            px[(r2 + c0) * 4 + ch] + px[(r2 + x) * 4 + ch] + px[(r2 + c2) * 4 + ch]) / 9;
+        }
       }
     }
   }
@@ -3319,23 +3425,17 @@ function getDuomoFloorMaps() {
   // across it (a few long drifts + hairlines), with its own tone.
   const half = S2 / 2, slabs = [];
   for (let i = 0; i < 4; i++) {
-    const a = Math.random() * Math.PI, a2 = a + (Math.random() < 0.5 ? 1 : -1) * (0.25 + Math.random() * 0.3);
+    const a = rand() * Math.PI, a2 = a + (rand() < 0.5 ? 1 : -1) * (0.25 + rand() * 0.3);
     slabs.push({ ca: Math.cos(a), sa: Math.sin(a), ca2: Math.cos(a2), sa2: Math.sin(a2),
-      f: 1.1 + Math.random() * 0.9, ph: Math.random() * 4, tone: 0.95 + Math.random() * 0.08 });
+      f: 1.1 + rand() * 0.9, ph: rand() * 4, tone: 0.95 + rand() * 0.08 });
   }
   const hgt = new Float32Array(N);
-  const rc = document.createElement('canvas');
-  rc.width = S2; rc.height = S2;
-  const rctx = rc.getContext('2d', { willReadFrequently: true });
-  const rimg = rctx.createImageData(S2, S2), rpx = rimg.data;
+  const rpx = new Uint8ClampedArray(N * 4);
   for (let y = 0; y < S2; y++) {
-    const yu = (y + S2 - 1) % S2, yd = (y + 1) % S2;
     for (let x = 0; x < S2; x++) {
-      const p = y * S2 + x, xl = (x + S2 - 1) % S2, xr = (x + 1) % S2;
+      const p = y * S2 + x;
       const l = lum[p];
-      const g = Math.max(Math.abs(lum[y * S2 + xr] - lum[y * S2 + xl]), Math.abs(lum[yd * S2 + x] - lum[yu * S2 + x]));
-      const e = Math.min(1, Math.max(0, (g - 14) / 50));
-      const joint = e * e * (3 - 2 * e);
+      const joint = jointA[p];
       const sl = slabs[(x >= half ? 1 : 0) + (y >= half ? 2 : 0)];
       const lx = (x % half) / half, ly = (y % half) / half, w = warp[p] - 0.5, cj = crack[p] - 0.5;
       // Sparse directional veins: a gently bowed main run with a jagged edge,
@@ -3370,118 +3470,51 @@ function getDuomoFloorMaps() {
       rpx[i4] = r; rpx[i4 + 1] = r; rpx[i4 + 2] = r; rpx[i4 + 3] = 255;
     }
   }
-  ctx.putImageData(img, 0, 0);
-  rctx.putImageData(rimg, 0, 0);
-  const pxPerM = S2 / FLOOR_TILE_M;
-  _duomoFloorMaps = {
-    map: _repeatTex(c),
-    normalMap: _repeatTex(_normalCanvasFromHeight(hgt, S2, S2, pxPerM, pxPerM, true)),
-    roughnessMap: _repeatTex(rc),
-  };
-  return _duomoFloorMaps;
+  return { map: px, normal: normalFromHeight(hgt, S2, S2, pxPerM, pxPerM, true), rough: rpx };
 }
-
-// ── Procedural surface helpers (generated once, cached) ──
-const STONE_TILE_W = 4.0;      // metres of wall per ashlar tile (u); v spans the full LOBBY_H
-const FLOOR_TILE_M = 2.4;      // metres per marble-inlay tile (2×2 medallions)
-// Tileable value-noise fBm on a W×H grid, ~[0,1]. Wraps in x (and y if wrapY).
-function _fbmField(W, H, cellsX, octaves, wrapY) {
-  const out = new Float32Array(W * H);
-  const ix0 = new Int32Array(W), ix1 = new Int32Array(W), fxs = new Float32Array(W);
-  let amp = 1, norm = 0, cx = cellsX;
-  for (let o = 0; o < octaves; o++) {
-    const gx = Math.max(2, Math.round(cx));
-    const gy = Math.max(2, Math.round(cx * H / W));
-    const grid = new Float32Array(gx * (gy + 1));
-    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
-    for (let x = 0; x < W; x++) {
-      const f = (x / W) * gx, i0 = Math.floor(f), t = f - i0;
-      ix0[x] = i0 % gx; ix1[x] = (i0 + 1) % gx; fxs[x] = t * t * (3 - 2 * t);
-    }
-    for (let y = 0; y < H; y++) {
-      const f = (y / H) * gy, j0 = Math.floor(f), t0 = f - j0, ty = t0 * t0 * (3 - 2 * t0);
-      const r0 = j0 * gx, r1 = (wrapY ? (j0 + 1) % gy : j0 + 1) * gx;
-      const row = y * W;
-      for (let x = 0; x < W; x++) {
-        const a = grid[r0 + ix0[x]], b = grid[r0 + ix1[x]];
-        const top = a + (b - a) * fxs[x];
-        const c = grid[r1 + ix0[x]], d = grid[r1 + ix1[x]];
-        const bot = c + (d - c) * fxs[x];
-        out[row + x] += amp * (top + (bot - top) * ty);
-      }
-    }
-    norm += amp; amp *= 0.5; cx *= 2;
-  }
-  for (let i = 0; i < out.length; i++) out[i] /= norm;
-  return out;
-}
-// Tangent-space normal map from a height field in metres (canvas y runs down,
-// texture v runs up). Wraps in x; in y only if wrapY.
-function _normalCanvasFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY) {
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.createImageData(W, H), d = img.data;
-  const sx = pxPerMX / 2, sy = pxPerMY / 2;
-  for (let y = 0; y < H; y++) {
-    const yu = y > 0 ? y - 1 : (wrapY ? H - 1 : 0);
-    const yd = y < H - 1 ? y + 1 : (wrapY ? 0 : H - 1);
-    for (let x = 0; x < W; x++) {
-      const xl = x > 0 ? x - 1 : W - 1, xr = x < W - 1 ? x + 1 : 0;
-      const nx = -(h[y * W + xr] - h[y * W + xl]) * sx;
-      const ny = -(h[yu * W + x] - h[yd * W + x]) * sy;
-      const il = 1 / Math.sqrt(nx * nx + ny * ny + 1);
-      const i = (y * W + x) * 4;
-      d[i] = (nx * il * 0.5 + 0.5) * 255;
-      d[i + 1] = (ny * il * 0.5 + 0.5) * 255;
-      d[i + 2] = (il * 0.5 + 0.5) * 255;
-      d[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  return c;
-}
-function _repeatTex(canvas) {
-  const t = new THREE.CanvasTexture(canvas);
-  t.wrapS = THREE.RepeatWrapping;
-  t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  return t;
-}
-
-// Coursed ashlar generator: lays out irregular courses of dressed blocks, then
+// Coursed ashlar: lays out irregular courses of dressed blocks, then
 // rasterises colour AND height from that one layout so relief matches colour —
 // recessed mortar joints, rounded + chipped arrises, per-block face tilt and
 // undulation, fine chisel tooling and pitting. Colour stays in one grey family:
 // variation comes only from grain, faint veins, pores and baked joint AO.
-function _genAshlar(o) {
+// o.courseKind picks the course-height distribution ('wall' | 'web' | 'rib').
+// Returns { map, W, H } plus { normal, rough, RW, RH } when o.normals.
+function ashlarPixels(o, rand) {
+  rand = rand || Math.random;
   const W = o.W, H = o.H, pxX = W / o.tileW, pxY = H / o.tileH;
-  const low = _fbmField(W, H, o.tileW * 1.3, 2, o.wrapY);
-  const mid = _fbmField(W, H, o.tileW * 8, 2, o.wrapY);
-  const fine = _fbmField(W, H, o.tileW * 44, 1, o.wrapY);
+  const course = o.courseKind === 'wall' ? function () {
+    const r = rand();
+    if (r < 0.22) return 0.17 + rand() * 0.12;   // thin band
+    if (r < 0.62) return 0.37 + rand() * 0.18;   // medium
+    return 0.58 + rand() * 0.22;                 // tall
+  } : o.courseKind === 'web' ? function () { return 0.19 + rand() * 0.1; }
+    : function () { return 1; };
+  const low = fbmField(W, H, o.tileW * 1.3, 2, o.wrapY, rand);
+  const mid = fbmField(W, H, o.tileW * 8, 2, o.wrapY, rand);
+  const fine = fbmField(W, H, o.tileW * 44, 1, o.wrapY, rand);
   const blocks = [];
   const mk = (x, w, y0, y1) => ({
     x, w, y0, y1,
-    tone: o.tone * (1 + (Math.random() * 2 - 1) * o.toneVar),
-    tx: (Math.random() * 2 - 1) * 0.004, ty: (Math.random() * 2 - 1) * 0.003,
-    freq: (2 * Math.PI) / (0.01 + Math.random() * 0.008),
+    tone: o.tone * (1 + (rand() * 2 - 1) * o.toneVar),
+    tx: (rand() * 2 - 1) * 0.004, ty: (rand() * 2 - 1) * 0.003,
+    freq: (2 * Math.PI) / (0.01 + rand() * 0.008),
   });
   let yM = 0;
   while (yM < o.tileH - 1e-4) {
-    let h = o.course();
+    let h = course();
     if (o.tileH - yM - h < o.minCourse) h = o.tileH - yM;
     const y0 = H - (yM + h) * pxY, y1 = H - yM * pxY;
     const widths = [];
     let x = 0;
-    while (x < W) { const bw = (o.minW + Math.random() * (o.maxW - o.minW)) * pxX; widths.push(bw); x += bw; }
+    while (x < W) { const bw = (o.minW + rand() * (o.maxW - o.minW)) * pxX; widths.push(bw); x += bw; }
     widths[widths.length - 1] -= x - W;    // close the course exactly around the tile
     if (widths.length > 1 && widths[widths.length - 1] < o.minW * pxX * 0.6) {
       const w = widths.pop(); widths[widths.length - 1] += w;
     }
-    let bx = Math.random() * W;
+    let bx = rand() * W;
     for (const bw of widths) {
-      if (h > o.splitMin && Math.random() < o.splitP) {
-        const ym = y0 + (y1 - y0) * (0.4 + Math.random() * 0.2);
+      if (h > o.splitMin && rand() < o.splitP) {
+        const ym = y0 + (y1 - y0) * (0.4 + rand() * 0.2);
         blocks.push(mk(bx, bw, y0, ym), mk(bx, bw, ym, y1));
       } else {
         blocks.push(mk(bx, bw, y0, y1));
@@ -3490,17 +3523,14 @@ function _genAshlar(o) {
     }
     yM += h;
   }
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.createImageData(W, H), px = img.data;
+  const px = new Uint8ClampedArray(W * H * 4);
   const hgt = o.normals ? new Float32Array(W * H) : null;
   // Roughness at half resolution (box-filtered): matte mortar and weathered
   // arrises, slightly smoother dressed faces that catch a soft spot sheen.
   const RW = W >> 1, RH = H >> 1, rgh = o.normals ? new Float32Array(RW * RH) : null;
   const jh = o.joint / 2, bev = o.bevel, depth = o.depth;
   for (const b of blocks) {
-    const ang = (Math.random() * 0.5 + 0.2) * (Math.random() < 0.5 ? 1 : -1) + Math.PI / 2;
+    const ang = (rand() * 0.5 + 0.2) * (rand() < 0.5 ? 1 : -1) + Math.PI / 2;
     const ca = Math.cos(ang) / pxX * b.freq, sa = Math.sin(ang) / pxY * b.freq;
     const stc = Math.cos(ca), sts = Math.sin(ca);
     const ya = Math.max(0, Math.ceil(b.y0 - 0.5)), yb = Math.min(H, Math.ceil(b.y1 - 0.5));
@@ -3547,20 +3577,108 @@ function _genAshlar(o) {
       }
     }
   }
-  ctx.putImageData(img, 0, 0);
-  const out = { map: _repeatTex(c) };
+  const out = { map: px, W, H };
   if (hgt) {
-    out.normalMap = _repeatTex(_normalCanvasFromHeight(hgt, W, H, pxX, pxY, o.wrapY));
-    const rc = document.createElement('canvas');
-    rc.width = RW; rc.height = RH;
-    const rctx = rc.getContext('2d');
-    const rimg = rctx.createImageData(RW, RH), rd = rimg.data;
+    out.normal = normalFromHeight(hgt, W, H, pxX, pxY, o.wrapY);
+    const rd = new Uint8ClampedArray(RW * RH * 4);
     for (let i = 0; i < RW * RH; i++) {
       const v = Math.min(1, rgh[i]) * 255;
       rd[i * 4] = rd[i * 4 + 1] = rd[i * 4 + 2] = v; rd[i * 4 + 3] = 255;
     }
-    rctx.putImageData(rimg, 0, 0);
-    out.roughnessMap = _repeatTex(rc);
+    out.rough = rd; out.RW = RW; out.RH = RH;
+  }
+  return out;
+}
+// Honed stone for the plain painting walls: no joints or pattern at all, just
+// a faint grain and surface undulation so the calm field still reads as stone.
+// Returns { map, normal } at S×S for `tile` metres.
+function honedPixels(S, tile, rand) {
+  rand = rand || Math.random;
+  const low = fbmField(S, S, 2.5, 3, true, rand), mid = fbmField(S, S, 14, 3, true, rand), fine = fbmField(S, S, 90, 2, true, rand);
+  const px = new Uint8ClampedArray(S * S * 4);
+  const hgt = new Float32Array(S * S);
+  for (let p = 0; p < S * S; p++) {
+    const f = fine[p];
+    let L = 244 * (0.955 + 0.05 * low[p] + 0.03 * mid[p]) * (0.985 + 0.03 * f);
+    hgt[p] = (low[p] - 0.5) * 0.003 + (mid[p] - 0.5) * 0.0006;
+    if (f > 0.8) { hgt[p] -= (f - 0.8) * 0.003; L *= 1 - (f - 0.8) * 0.3; }
+    px[p * 4] = L; px[p * 4 + 1] = L; px[p * 4 + 2] = L; px[p * 4 + 3] = 255;
+  }
+  return { map: px, normal: normalFromHeight(hgt, S, S, S / tile, S / tile, true) };
+}
+// Seeded PRNG (mulberry32) — only so tests can ask for deterministic maps.
+function _mulberry32(seed) {
+  let s = seed | 0;
+  return function () {
+    let t = (s += 0x6D2B79F5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function _texgenSeed(kind) {   // tests only: window.__texgenSeeds = { floor: 1, ashlar: 2, … }
+  const s = window.__texgenSeeds && window.__texgenSeeds[kind];
+  return s == null ? undefined : s;
+}
+function _texgenRand(kind) {
+  const s = _texgenSeed(kind);
+  return s == null ? Math.random : _mulberry32(s);
+}
+
+// Main-thread wrappers over the pixel generators for the callers that want a
+// field, a canvas or a CanvasTexture (wood floor, damask, dark ceiling): same
+// bytes as ever.
+function _fbmField(W, H, cellsX, octaves, wrapY) { return fbmField(W, H, cellsX, octaves, wrapY); }
+function _normalCanvasFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY) {
+  return _canvasFromRGBA(normalFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY), W, H);
+}
+function _canvasFromRGBA(data, W, H) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const img = ctx.createImageData(W, H);
+  img.data.set(data);
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+function _repeatTex(canvas) {
+  const t = new THREE.CanvasTexture(canvas);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
+}
+// RGBA bytes → a repeating texture with exactly a CanvasTexture's sampling
+// state (DataTexture's own defaults are nearest, no mips, no flip). The bytes
+// stay referenced in image.data, so a dispose()d map re-uploads when its theme
+// returns, as the canvases did.
+function _repeatTexData(data, W, H) {
+  const pot = (n) => (n & (n - 1)) === 0;
+  if (renderer && !renderer.capabilities.isWebGL2 && !(pot(W) && pot(H))) {
+    // WebGL1 tiles only power-of-two sizes: three resizes a canvas to one but
+    // uploads a DataTexture as-is (clamped, no mips), so keep the canvas path
+    return _repeatTex(_canvasFromRGBA(data, W, H));
+  }
+  const t = new THREE.DataTexture(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), W, H,
+    THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.flipY = true;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  t.needsUpdate = true;
+  return t;
+}
+
+// Coursed ashlar generator (see ashlarPixels), wrapped into textures.
+function _genAshlar(o, rand) { return _wrapAshlar(ashlarPixels(o, rand)); }
+function _wrapAshlar(r) {
+  const out = { map: _repeatTexData(r.map, r.W, r.H) };
+  if (r.normal) {
+    out.normalMap = _repeatTexData(r.normal, r.W, r.H);
+    out.roughnessMap = _repeatTexData(r.rough, r.RW, r.RH);
   }
   return out;
 }
@@ -3573,79 +3691,188 @@ function _genAshlar(o) {
 // (see syncDuomoSurfaces): u = metres / STONE_TILE_W, v = height / LOBBY_H, so
 // the coursing runs level and unbroken across every wall, lintel and reveal.
 let _stoneWallMaps = null;
+function _stoneWallOpts() {
+  return {
+    W: PERF.low ? 768 : 1024, H: PERF.low ? 1536 : 2048, tileW: STONE_TILE_W, tileH: LOBBY_H, wrapY: false, normals: true,
+    courseKind: 'wall',   // thin bands / medium / tall courses
+    minCourse: 0.15, minW: 0.55, maxW: 1.45, splitMin: 0.5, splitP: 0.2,
+    joint: 0.011, bevel: 0.016, depth: 0.009, chip: 0.05, undul: 0.005,
+    tool: 0.00035, grain: 0.0012, pit: 0.02, tone: 131, toneVar: 0.075, mortar: 116, vein: 0.07,
+  };
+}
 function getStoneWallMaps() {
-  if (!_stoneWallMaps) {
-    _stoneWallMaps = _genAshlar({
-      W: PERF.low ? 768 : 1024, H: PERF.low ? 1536 : 2048, tileW: STONE_TILE_W, tileH: LOBBY_H, wrapY: false, normals: true,
-      course() {
-        const r = Math.random();
-        if (r < 0.22) return 0.17 + Math.random() * 0.12;   // thin band
-        if (r < 0.62) return 0.37 + Math.random() * 0.18;   // medium
-        return 0.58 + Math.random() * 0.22;                 // tall
-      },
-      minCourse: 0.15, minW: 0.55, maxW: 1.45, splitMin: 0.5, splitP: 0.2,
-      joint: 0.011, bevel: 0.016, depth: 0.009, chip: 0.05, undul: 0.005,
-      tool: 0.00035, grain: 0.0012, pit: 0.02, tone: 131, toneVar: 0.075, mortar: 116, vein: 0.07,
-    });
-  }
+  if (!_stoneWallMaps) _stoneWallMaps = _genAshlar(_stoneWallOpts(), _texgenRand('ashlar'));
   return _stoneWallMaps;
 }
 function makeStoneWallTexture() { return getStoneWallMaps().map; }
-// Honed stone for the plain painting walls: no joints or pattern at all, just
-// a faint grain and surface undulation so the calm field still reads as stone.
+// Honed stone for the plain painting walls (see honedPixels).
 let _honedStoneMaps = null;
 function getHonedStoneMaps() {
   if (_honedStoneMaps) return _honedStoneMaps;
   const S = 512, tile = 2.0;
-  const low = _fbmField(S, S, 2.5, 3, true), mid = _fbmField(S, S, 14, 3, true), fine = _fbmField(S, S, 90, 2, true);
-  const c = document.createElement('canvas');
-  c.width = S; c.height = S;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.createImageData(S, S), px = img.data;
-  const hgt = new Float32Array(S * S);
-  for (let p = 0; p < S * S; p++) {
-    const f = fine[p];
-    let L = 244 * (0.955 + 0.05 * low[p] + 0.03 * mid[p]) * (0.985 + 0.03 * f);
-    hgt[p] = (low[p] - 0.5) * 0.003 + (mid[p] - 0.5) * 0.0006;
-    if (f > 0.8) { hgt[p] -= (f - 0.8) * 0.003; L *= 1 - (f - 0.8) * 0.3; }
-    px[p * 4] = L; px[p * 4 + 1] = L; px[p * 4 + 2] = L; px[p * 4 + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  _honedStoneMaps = {
-    map: _repeatTex(c),
-    normalMap: _repeatTex(_normalCanvasFromHeight(hgt, S, S, S / tile, S / tile, true)),
+  _honedStoneMaps = _wrapHoned(honedPixels(S, tile, _texgenRand('honed')), S, tile);
+  return _honedStoneMaps;
+}
+function _wrapHoned(r, S, tile) {
+  return {
+    map: _repeatTexData(r.map, S, S),
+    normalMap: _repeatTexData(r.normal, S, S),
     tile,
   };
-  return _honedStoneMaps;
 }
 // Small coursed stone for the vault webbing (u/v in metres / 2.5 by arc length).
 let _vaultWebMap = null;
+function _vaultWebOpts() {
+  return {
+    W: 512, H: 512, tileW: 2.5, tileH: 2.5, wrapY: true, normals: false,
+    courseKind: 'web',    // 0.19–0.29 m courses
+    minCourse: 0.16, minW: 0.32, maxW: 0.72, splitMin: 9, splitP: 0,
+    joint: 0.009, bevel: 0.01, depth: 0.004, chip: 0.03, undul: 0.002,
+    tool: 0, grain: 0, pit: 0.01, tone: 168, toneVar: 0.04, mortar: 150, vein: 0.04,
+  };
+}
 function getVaultWebMap() {
-  if (!_vaultWebMap) {
-    _vaultWebMap = _genAshlar({
-      W: 512, H: 512, tileW: 2.5, tileH: 2.5, wrapY: true, normals: false,
-      course() { return 0.19 + Math.random() * 0.1; },
-      minCourse: 0.16, minW: 0.32, maxW: 0.72, splitMin: 9, splitP: 0,
-      joint: 0.009, bevel: 0.01, depth: 0.004, chip: 0.03, undul: 0.002,
-      tool: 0, grain: 0, pit: 0.01, tone: 168, toneVar: 0.04, mortar: 150, vein: 0.04,
-    }).map;
-  }
+  if (!_vaultWebMap) _vaultWebMap = _genAshlar(_vaultWebOpts(), _texgenRand('vaultWeb')).map;
   return _vaultWebMap;
 }
 // Voussoirs for the ribs, cornice and shafts: one course of dressed blocks
 // (u = metres / 2 along the member, v = across its moulded profile).
 let _vaultRibMap = null;
+function _vaultRibOpts() {
+  return {
+    W: 512, H: 64, tileW: 2.0, tileH: 0.25, wrapY: false, normals: false,
+    courseKind: 'rib',    // a single course
+    minCourse: 0.01, minW: 0.38, maxW: 0.62, splitMin: 9, splitP: 0,
+    joint: 0.007, bevel: 0.012, depth: 0.004, chip: 0.03, undul: 0.002,
+    tool: 0, grain: 0, pit: 0.012, tone: 214, toneVar: 0.07, mortar: 172, vein: 0.05,
+  };
+}
 function getVaultRibMap() {
-  if (!_vaultRibMap) {
-    _vaultRibMap = _genAshlar({
-      W: 512, H: 64, tileW: 2.0, tileH: 0.25, wrapY: false, normals: false,
-      course() { return 1; },
-      minCourse: 0.01, minW: 0.38, maxW: 0.62, splitMin: 9, splitP: 0,
-      joint: 0.007, bevel: 0.012, depth: 0.004, chip: 0.03, undul: 0.002,
-      tool: 0, grain: 0, pit: 0.012, tone: 214, toneVar: 0.07, mortar: 172, vein: 0.05,
-    }).map;
-  }
+  if (!_vaultRibMap) _vaultRibMap = _genAshlar(_vaultRibOpts(), _texgenRand('vaultRib')).map;
   return _vaultRibMap;
+}
+
+// ── Boot-time generation on Web Workers ──
+// The Duomo maps are the heaviest synchronous work in boot (≈0.6–0.8 s of
+// typed-array math on a desktop, 2–3× that on an iPad). startTextureGen()
+// posts them to one or two workers while initScene runs; the bytes come back
+// transferred (not copied) and are wrapped into the very cache objects the
+// lazy getters fill, so getDuomoFloorMaps() etc. simply return them. Any
+// failure — no Worker, a worker error, no reply in time — just leaves the
+// caches empty and the getters generate inline exactly as before. Only what
+// today's boot would generate is started: the saved theme decides.
+const TEXGEN_SRC = "'use strict';\n" +
+  [fbmField, normalFromHeight, duomoFloorPixels, ashlarPixels, honedPixels, _mulberry32].map(String).join('\n') + `
+onmessage = function (e) {
+  const job = e.data, rand = job.seed == null ? Math.random : _mulberry32(job.seed);
+  try {
+    let r;
+    if (job.kind === 'floor') r = duomoFloorPixels(job.px, job.S2, job.pxPerM, rand);
+    else if (job.kind === 'ashlar') r = ashlarPixels(job.o, rand);
+    else r = honedPixels(job.S, job.tile, rand);
+    const out = { id: job.id, ok: true, W: r.W, H: r.H, RW: r.RW, RH: r.RH }, bufs = [];
+    for (const k of ['map', 'normal', 'rough']) if (r[k]) { out[k] = r[k]; bufs.push(r[k].buffer); }
+    postMessage(out, bufs);
+  } catch (err) {
+    postMessage({ id: job.id, ok: false, error: String(err && err.message || err) });
+  }
+};`;
+const TEXGEN_TIMEOUT_MS = 6000;   // past this the getters generate inline (today's timing)
+let _texgen = null;               // { workers, jobs, fallback } while generating; for tests
+function startTextureGen() {
+  const duomo = theme === 'duomo', dark = theme === 'dark';
+  const jobs = [];
+  if (duomo) {
+    const S2 = PERF.low ? 512 : 1024;
+    jobs.push({ kind: 'floor', msg: { kind: 'floor', px: _drawDuomoInlay(S2), S2, pxPerM: S2 / FLOOR_TILE_M },
+      apply(r) { if (!_duomoFloorMaps) _duomoFloorMaps = _wrapFloorMaps(r, S2); } });
+    jobs.push({ kind: 'ashlar', msg: { kind: 'ashlar', o: _stoneWallOpts() },
+      apply(r) { if (!_stoneWallMaps) _stoneWallMaps = _wrapAshlar(r); } });
+    jobs.push({ kind: 'vaultWeb', msg: { kind: 'ashlar', o: _vaultWebOpts() },
+      apply(r) { if (!_vaultWebMap) _vaultWebMap = _wrapAshlar(r).map; } });
+    jobs.push({ kind: 'vaultRib', msg: { kind: 'ashlar', o: _vaultRibOpts() },
+      apply(r) { if (!_vaultRibMap) _vaultRibMap = _wrapAshlar(r).map; } });
+  }
+  if (duomo || dark) {
+    jobs.push({ kind: 'honed', msg: { kind: 'honed', S: 512, tile: 2.0 },
+      apply(r) { if (!_honedStoneMaps) _honedStoneMaps = _wrapHoned(r, 512, 2.0); } });
+  }
+  if (!jobs.length || typeof Worker === 'undefined' || typeof Blob === 'undefined' ||
+      typeof URL === 'undefined' || !URL.createObjectURL) return Promise.resolve();
+  const n = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, jobs.length));
+  const T = _texgen = { workers: [], url: null, jobs, pending: jobs.length, fallback: false, timer: 0, t0: performance.now() };
+  const finish = () => {
+    clearTimeout(T.timer);
+    for (const w of T.workers) { try { w.terminate(); } catch (e) {} }
+    T.workers = [];
+    if (T.url) { try { URL.revokeObjectURL(T.url); } catch (e) {} T.url = null; }
+  };
+  return new Promise(resolve => {
+    const fail = (why) => {
+      if (T.fallback) return;
+      T.fallback = true;            // late replies are ignored; the getters generate inline
+      finish();
+      console.warn('texture workers: ' + why + ' — generating inline');
+      resolve();
+    };
+    try {
+      T.url = URL.createObjectURL(new Blob([TEXGEN_SRC], { type: 'application/javascript' }));
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(T.url);
+        w.onerror = (e) => fail('error' + (e && e.message ? ' (' + e.message + ')' : ''));
+        w.onmessageerror = () => fail('message error');
+        w.onmessage = (e) => {
+          if (T.fallback) return;
+          const r = e.data, job = jobs[r.id];
+          if (!job || job.done) return;
+          if (!r.ok) return fail(r.error);
+          job.done = true;
+          try { job.apply(r); } catch (err) { return fail(String(err)); }
+          if (--T.pending === 0) { T.ms = performance.now() - T.t0; finish(); resolve(); }
+        };
+        T.workers.push(w);
+      }
+      for (let i = 0; i < jobs.length; i++) {
+        const msg = jobs[i].msg, w = T.workers[i % n];
+        msg.id = i; msg.seed = _texgenSeed(jobs[i].kind);
+        try { w.postMessage(msg, msg.px ? [msg.px.buffer] : []); }
+        catch (e) { w.postMessage(msg); }   // no transfer: clone instead
+      }
+      T.timer = setTimeout(() => fail('no reply in ' + TEXGEN_TIMEOUT_MS + ' ms'), TEXGEN_TIMEOUT_MS);
+    } catch (e) {
+      fail(String(e && e.message || e));
+    }
+  });
+}
+
+// ── Boot sequencing ──
+// One macrotask boundary (a MessageChannel message: neither throttled in a
+// hidden tab nor clamped like nested timeouts) so boot runs as a few tasks
+// rather than one multi-second one, letting the texture replies land between.
+const _tickPort = (typeof MessageChannel === 'function') ? new MessageChannel() : null;
+const _tickWaiters = [];
+if (_tickPort) _tickPort.port1.onmessage = () => { const r = _tickWaiters.shift(); if (r) r(); };
+function _tick() {
+  return new Promise(r => {
+    if (_tickPort) { _tickWaiters.push(r); _tickPort.port2.postMessage(0); }
+    else setTimeout(r, 0);
+  });
+}
+// Work boot can put off (the mirror-world arsenal, then the staggered neon
+// plants) runs one job per macrotask once boot is done — independent of
+// whether frames are running yet; runDeferred() flushes all of it
+// synchronously, so enterGallery can make sure the whole set exists before
+// anything is seen or pushed.
+const _deferred = [];
+function _runDeferredJob() {
+  if (_deferred.length) { const job = _deferred.shift(); try { job(); } catch (e) { console.error(e); } }
+  else if (_np.pending.length && !_np.offAt) npBuildNext();
+}
+function _runDeferredSoon() {
+  if (_deferred.length || _np.pending.length) setTimeout(() => { _runDeferredJob(); _runDeferredSoon(); }, 0);
+}
+function runDeferred() {
+  while (_deferred.length || (_np.pending.length && !_np.offAt)) _runDeferredJob();
 }
 
 // Theme-aware texture pickers used by both initial build and applyTheme.
@@ -14129,6 +14356,7 @@ function wireUI() {
 }
 
 function enterGallery() {
+  runDeferred();   // the arsenal and any plants still pending exist before the first visible frame
   ensureAudio();   // critical: must call from user gesture for iOS
   startBackgroundMusic();   // also a user gesture — autoplay rules require this
   const entry = document.getElementById('entry');
@@ -15143,18 +15371,27 @@ async function boot() {
     document.getElementById('enter-btn').textContent = 'No paintings';
     return;
   }
+  // The heavy Duomo maps generate on workers while the scene is set up; the
+  // rest of boot runs as a few tasks (one yield between steps) instead of one.
+  const gen = startTextureGen();
   initScene();
+  await _tick();
+  await gen;
   buildGallery();
+  await _tick();
   syncDuomoVaultRibs();   // saved theme may be Duomo on first load
   syncDuomoSurfaces();
-  syncNeonPlants();       // saved neon-plants preference
+  await _tick();
+  syncNeonPlants(true);   // saved neon-plants preference: first plant now, the rest one per frame
   buildMirror();
-  buildMirrorArsenal();   // crow emblem + launcher display (shown only in the mirror world)
+  _deferred.push(buildMirrorArsenal);   // crow emblem + launcher display (shown only in the mirror world)
+  await _tick();
   placeAllPaintings();
   markPaintingWallsPlain();
   buildIndex();
   redrawCanvasTextWhenFontsReady();
   wireUI();
+  _runDeferredSoon();
   // ── Returning from inside the painting? Skip the intro, slip back into the
   // mirror world, and stand where the canvas hangs — as if stepping out of it.
   const _ret = new URLSearchParams(location.search).get('return') === 'painting';
