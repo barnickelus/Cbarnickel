@@ -4,6 +4,27 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>C.Barnickel Artwork — Virtual Gallery</title>
+<script>
+// Early fetches. paintings.json and the Victorian frame GLB are needed on
+// essentially every visit, so they (and the GLB's meshopt decoder) start
+// downloading with the HTML instead of after ~1 MB of scripts has run.
+// loadGalleryData() / loadVictorianMesh() consume each promise once and fall
+// back to a fresh request if it failed; both catch to null so nothing can
+// raise an unhandled rejection before boot. The GLB goes at low priority so
+// it never competes with the scripts the Enter button waits on.
+window.__pre = {
+  json: fetch('paintings.json', { cache: 'no-cache' }).catch(function () { return null; }),
+  glb: fetch('victorian-frame-textured.glb', { priority: 'low' })
+    .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+    .catch(function () { return null; }),
+};
+(function () {
+  var s = document.createElement('script');
+  s.id = 'meshopt-decoder'; s.async = true; s.src = 'meshopt_decoder.js';
+  s.onerror = function () { window.__meshoptFailed = true; };
+  document.head.appendChild(s);
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -1607,11 +1628,16 @@ let activeFrame = frameSettings;
 // once, its geometry cached, then cloned + scaled per painting. Because
 // loading is async but frames build synchronously, any victorian frame
 // built before the mesh arrives registers here and gets populated on load.
+// The shipped GLB is meshopt-compressed (16-bit positions/uv, no normals —
+// every frame recomputes them anyway); the uncompressed original is kept as
+// a fallback for browsers without WebAssembly or when the decoder fails.
 const VICTORIAN_GLB_URL = 'victorian-frame-textured.glb';
-let _victorianGeo = null;          // cached BufferGeometry
+const VICTORIAN_GLB_RAW_URL = 'victorian-frame-textured-raw.glb';
+let _victorianGeo = null;          // cached BufferGeometry (position + shared index/uv, no normals)
 let _victorianTexMat = null;       // cached PBR material from the GLB (polychrome paint)
 let _victorianLineTex = null;      // black-line-on-white edge map (Line Art)
 let _victorianLineTexDark = null;  // chalk-line-on-dark edge map (Line Art Dark)
+let _victorianLineTexTried = false; // the line maps are built lazily, at most once
 let _victorianBasePositions = null; // Float32Array of base vertex positions (for band-stretch)
 let _victorianLoadState = 'idle';  // idle | loading | ready | failed
 const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
@@ -1908,10 +1934,25 @@ function formatSize(sz) {
 }
 
 async function loadGalleryData() {
-  const res = await fetch('paintings.json', { cache: 'no-cache' });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const data = await res.json();
-  if (!Array.isArray(data.paintings)) throw new Error('paintings.json missing "paintings"');
+  // The <head> pre-fetch (window.__pre.json) normally has the response in
+  // hand already. Its body can be read only once, so it is consumed here and
+  // any failure (rejected, null, !ok, bad JSON) retries once with a fresh
+  // request — the same no-cache fetch the admin edit flow relies on.
+  const pre = window.__pre && window.__pre.json;
+  if (window.__pre) window.__pre.json = null;
+  let data = null, got = false;
+  if (pre) {
+    try {
+      const res = await pre;
+      if (res && res.ok) { data = await res.json(); got = true; }
+    } catch (e) { got = false; }
+  }
+  if (!got) {
+    const res = await fetch('paintings.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  }
+  if (!data || !Array.isArray(data.paintings)) throw new Error('paintings.json missing "paintings"');
   if (!data.series || typeof data.series !== 'object') {
     data.series = { all: { name: 'Gallery', subtitle: '' } };
   }
@@ -6998,6 +7039,12 @@ function addVictorianMesh(group, pW, pH) {
   const fc = group.userData.frameColor;
   const isLineDark = (fc === 'linework-dark');
   const isLine = (fc === 'linework' || isLineDark);
+  // The line-art maps are derived from the GLB's baseColor map on first use
+  // (no default painting needs them) — once only, even if the build fails.
+  if (isLine && !_victorianLineTexTried && _victorianTexMat && _victorianTexMat.map) {
+    _victorianLineTexTried = true;
+    buildVictorianLineTextures(_victorianTexMat.map);
+  }
   const lineTex = isLineDark ? _victorianLineTexDark : _victorianLineTex;
   const useTexture = (fc === 'painted') && _victorianTexMat;
   const useLineTex = isLine && lineTex;       // line art from the carved detail
@@ -7038,9 +7085,16 @@ function addVictorianMesh(group, pW, pH) {
   // opening zone (X: |x|<openHX, Y: rail band) so that AFTER the fixed world
   // scale, the opening equals pW × pH. Border/ornament vertices outside the
   // opening zone are shifted rigidly (never scaled), preserving their size.
-  const geo = _victorianGeo.clone();
-  const pos = geo.attributes.position;
+  //
+  // The index and uv buffers never change, so every frame shares the cached
+  // geometry's attribute objects (one GPU upload for all of them); only the
+  // stretched positions — and the normals recomputed from them — are per
+  // frame. rebuildSingleFrame detaches the shared buffers before disposing.
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(_victorianGeo.index);
+  if (_victorianGeo.attributes.uv) geo.setAttribute('uv', _victorianGeo.attributes.uv);
   const base = _victorianBasePositions;
+  const out = new Float32Array(base.length);
 
   // Fixed world scale: pick so the side rail (0.588 model units, measured in
   // the straight section of the new mesh) renders at ~0.07 m — a believable
@@ -7101,16 +7155,27 @@ function addVictorianMesh(group, pW, pH) {
     return [nx, ny];
   };
 
-  for (let i = 0; i < pos.count; i++) {
-    const [nx, ny] = stretchXY(base[i*3], base[i*3+1]);
-    pos.setXYZ(i, nx, ny, base[i*3+2]);
+  // stretchXY inlined for the 54k mesh vertices (same branches, same
+  // arithmetic, no per-vertex array allocation).
+  const xScale = wantHX / openHX;
+  const yShift = yExtra / 2;
+  for (let i = 0, n = base.length; i < n; i += 3) {
+    const x = base[i], y = base[i + 1];
+    if (x > openHX)       out[i] = x + xExtraHalf;
+    else if (x < -openHX) out[i] = x - xExtraHalf;
+    else                  out[i] = x * xScale;
+    if (y > bandHi)       out[i + 1] = y + yShift;
+    else if (y < bandLo)  out[i + 1] = y - yShift;
+    else                  out[i + 1] = bandCenter + (y - bandCenter) * bandScale;
+    out[i + 2] = base[i + 2];
   }
-  pos.needsUpdate = true;
+  geo.setAttribute('position', new THREE.BufferAttribute(out, 3));
   geo.computeVertexNormals();
   geo.computeBoundingBox();
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.scale.setScalar(FIXED_SCALE);
+  mesh.userData.sharesVictorianBuffers = true;
 
   // The opening center sits at bandCenter and scales about itself, so it is
   // invariant under the stretch. Shift the mesh so that point lands on the
@@ -7226,6 +7291,43 @@ function buildVictorianLineTextures(srcMap) {
   } catch (e) { /* tainted canvas or no image — fall back to silhouette only */ }
 }
 
+// Resolves with the meshopt decoder (meshopt_decoder.js, started from <head>
+// so it downloads alongside the GLB) once its WebAssembly module is ready.
+// Rejects when it cannot be used — no WebAssembly, script blocked/failed,
+// decoder unsupported — so the caller can fall back to the raw GLB instead of
+// sitting in 'loading' forever.
+let _meshoptReady = null;
+function _ensureMeshopt() {
+  if (_meshoptReady) return _meshoptReady;
+  _meshoptReady = new Promise((resolve, reject) => {
+    if (typeof WebAssembly === 'undefined') { reject(new Error('WebAssembly unavailable')); return; }
+    const done = () => {
+      const D = window.MeshoptDecoder;
+      if (!D) { reject(new Error('meshopt_decoder.js loaded without MeshoptDecoder')); return; }
+      if (D.supported === false) { reject(new Error('MeshoptDecoder unsupported')); return; }
+      Promise.resolve(D.ready).then(() => resolve(D), reject);
+    };
+    if (window.MeshoptDecoder) { done(); return; }
+    if (window.__meshoptFailed) { reject(new Error('meshopt_decoder.js failed to load')); return; }
+    let s = document.getElementById('meshopt-decoder');
+    if (!s) {   // the <head> snippet did not run (e.g. a stripped copy): inject once
+      s = document.createElement('script');
+      s.id = 'meshopt-decoder'; s.async = true; s.src = 'meshopt_decoder.js';
+      document.head.appendChild(s);
+    }
+    s.addEventListener('load', done);
+    s.addEventListener('error', () => reject(new Error('meshopt_decoder.js failed to load')));
+  });
+  return _meshoptReady;
+}
+
+// Denormalisation divisor for a normalized integer attribute — r128's
+// getX/getY/getZ hand back the raw integers.
+function _normDivisor(arr) {
+  return arr instanceof Int16Array ? 32767 : arr instanceof Uint16Array ? 65535
+       : arr instanceof Int8Array ? 127 : arr instanceof Uint8Array ? 255 : 1;
+}
+
 // Lazy-load the Victorian GLB once; populate all pending frames on success.
 function loadVictorianMesh() {
   if (_victorianLoadState === 'loading' || _victorianLoadState === 'ready') return;
@@ -7236,31 +7338,65 @@ function loadVictorianMesh() {
   }
   _victorianLoadState = 'loading';
   const loader = new THREE.GLTFLoader();
-  loader.load(
-    VICTORIAN_GLB_URL,
-    (gltf) => {
-      let geo = null;
-      gltf.scene.traverse(o => {
-        if (o.isMesh && !geo) {
-          // Keep the GLB's own normals (they carry the baked carving detail);
-          // the textured asset already ships correct smooth normals.
-          geo = o.geometry;
-          // Cache the GLB's PBR material (baked polychrome paint + normal map).
-          // Used when frame color is AUTO; specific colors use a flat material.
-          if (o.material) {
-            _victorianTexMat = o.material;
-            _victorianTexMat.side = THREE.FrontSide;
-            // Derive the line-art edge textures from the painted baseColor map.
-            if (_victorianTexMat.map) buildVictorianLineTextures(_victorianTexMat.map);
-          }
-        }
-      });
-      if (!geo) { _victorianLoadState = 'failed'; return; }
+
+  const onErr = (err) => {
+    console.warn('Victorian GLB failed to load:', err);
+    if (_victorianLoadState === 'loading') _victorianLoadState = 'failed';
+  };
+
+  const onLoad = (gltf) => {
+    try {
+      gltf.scene.updateMatrixWorld(true);
+      let src = null;
+      gltf.scene.traverse(o => { if (o.isMesh && !src) src = o; });
+      if (!src || !src.geometry || !src.geometry.attributes.position) { onErr(new Error('no mesh in the Victorian GLB')); return; }
+      const sg = src.geometry;
+      // The meshopt file carries normalized int16 positions (interleaved —
+      // read through getX/Y/Z, never .array directly) and uint16 uv, with the
+      // dequantisation scale + offset on the node. Bake both into plain
+      // Float32Arrays in the original model units, so VIC_OPEN_* and
+      // FIXED_SCALE keep meaning exactly what they did for the raw file (for
+      // which this is a straight copy: not normalized, identity matrix).
+      const pa = sg.attributes.position;
+      const n = pa.count;
+      const basePos = new Float32Array(n * 3);
+      const pDiv = pa.normalized ? _normDivisor(pa.array) : 1;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < n; i++) {
+        v.set(pa.getX(i), pa.getY(i), pa.getZ(i));
+        if (pDiv !== 1) v.multiplyScalar(1 / pDiv);
+        v.applyMatrix4(src.matrixWorld);
+        basePos[i * 3] = v.x; basePos[i * 3 + 1] = v.y; basePos[i * 3 + 2] = v.z;
+      }
+      const ua = sg.attributes.uv;
+      let uvArr = null;
+      if (ua) {
+        uvArr = new Float32Array(n * 2);
+        const uDiv = ua.normalized ? _normDivisor(ua.array) : 1;
+        for (let i = 0; i < n; i++) { uvArr[i * 2] = ua.getX(i) / uDiv; uvArr[i * 2 + 1] = ua.getY(i) / uDiv; }
+      }
+      // No normals on the cached geometry: every frame recomputes its own
+      // from the stretched positions (as before — the GLB's were never drawn).
+      const geo = new THREE.BufferGeometry();
+      geo.setIndex(sg.index);
+      sg.setIndex(null);   // the index now belongs to the cached geometry
+      geo.setAttribute('position', new THREE.BufferAttribute(basePos, 3));
+      if (uvArr) geo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+      geo.computeBoundingBox();
+      // Cache the GLB's PBR material (baked polychrome paint + normal map).
+      // Used by the "Painted" color; specific colors use a flat material.
+      if (src.material) {
+        _victorianTexMat = src.material;
+        _victorianTexMat.side = THREE.FrontSide;
+        // GLTFLoader hands back a flat-shaded clone when the file has no
+        // NORMAL attribute; the frames carry smooth recomputed normals.
+        _victorianTexMat.flatShading = false;
+        _victorianTexMat.needsUpdate = true;
+      }
       _victorianGeo = geo;
       // Cache the base position array so each painting can build a
       // band-stretched copy (top/bottom ornament fixed, side rails stretch).
-      _victorianBasePositions = geo.attributes.position.array.slice();
-      geo.computeBoundingBox();
+      _victorianBasePositions = basePos;
       const bb = geo.boundingBox;
       _victorianNativeSize = {
         x: bb.max.x - bb.min.x,
@@ -7268,27 +7404,65 @@ function loadVictorianMesh() {
         z: bb.max.z - bb.min.z,
         minY: bb.min.y, maxY: bb.max.y,
       };
+      // Let the loader's decoded buffers and the pre-fetched bytes go.
+      sg.dispose();
+      if (window.__pre) window.__pre.glb = null;
       _victorianLoadState = 'ready';
-      // Populate every pending frame: clear placeholder, add real mesh.
-      for (const p of _victorianPending) {
-        // Remove placeholder children
-        const toRemove = [];
-        p.group.traverse(o => { if (o.userData && o.userData.isVictorianPlaceholder) toRemove.push(o); });
-        for (const o of toRemove) {
-          if (o.geometry) o.geometry.dispose();
-          if (o.material) o.material.dispose();
-          p.group.remove(o);
-        }
-        addVictorianMesh(p.group, p.pW, p.pH);
+      // Populate the pending frames nearest the visitor first, in ~8 ms
+      // slices on a timer (rAF stalls headlessly) so the swap never stalls a
+      // frame. The array object is kept: rebuildSingleFrame / rebuildAllFrames
+      // splice or clear it, which simply ends the chain early.
+      if (_victorianPending.length > 1 && typeof camera !== 'undefined' && camera) {
+        const cp = camera.getWorldPosition(new THREE.Vector3());
+        const w = new THREE.Vector3();
+        const dist = new Map();
+        for (const p of _victorianPending) dist.set(p, p.group.getWorldPosition(w).distanceToSquared(cp));
+        _victorianPending.sort((a, b) => dist.get(a) - dist.get(b));
       }
-      _victorianPending.length = 0;
+      const drain = () => {
+        const t0 = performance.now();
+        while (_victorianPending.length && performance.now() - t0 < 8) {
+          const p = _victorianPending.shift();
+          // Remove placeholder children
+          const toRemove = [];
+          p.group.traverse(o => { if (o.userData && o.userData.isVictorianPlaceholder) toRemove.push(o); });
+          for (const o of toRemove) {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) o.material.dispose();
+            p.group.remove(o);
+          }
+          addVictorianMesh(p.group, p.pW, p.pH);
+        }
+        if (_victorianPending.length) setTimeout(drain, 16);
+      };
+      drain();
+    } catch (e) { onErr(e); }
+  };
+
+  // The <head> pre-fetch usually has the bytes already; its promise is
+  // consumed once (nulled here) so a later retry re-requests the file.
+  const pre = window.__pre && window.__pre.glb;
+  if (window.__pre) window.__pre.glb = null;
+  const loadFresh = () => loader.load(VICTORIAN_GLB_URL, onLoad, undefined, onErr);
+  _ensureMeshopt().then(
+    (dec) => {
+      loader.setMeshoptDecoder(dec);
+      Promise.resolve(pre).then((buf) => {
+        if (!buf) { loadFresh(); return; }
+        loader.parse(buf, '', onLoad, (err) => {
+          console.warn('Pre-fetched Victorian GLB did not parse; re-requesting:', err);
+          loadFresh();
+        });
+      }, loadFresh);
     },
-    undefined,
     (err) => {
-      console.warn('Victorian GLB failed to load:', err);
-      _victorianLoadState = 'failed';
+      // No usable decoder (no WebAssembly, script blocked…): the compressed
+      // file cannot be parsed, so load the uncompressed copy instead — no
+      // browser is left with placeholder surrounds for the Victorian frames.
+      console.warn('meshopt decoder unavailable, loading the raw Victorian GLB:', err);
+      loader.load(VICTORIAN_GLB_RAW_URL, onLoad, undefined, onErr);
     }
-  );
+  ).catch(onErr);
 }
 
 // ── Lathe profile helpers ──
@@ -7628,7 +7802,19 @@ function rebuildSingleFrame(fg) {
   while (fg.children.length) {
     const c = fg.children[0];
     c.traverse(n => {
-      if (n.geometry && n.geometry !== _victorianGeo) n.geometry.dispose();
+      if (n.geometry && n.geometry !== _victorianGeo) {
+        // Victorian frames share _victorianGeo's index + uv buffers: detach
+        // them first so dispose() only frees this frame's own position and
+        // normal buffers (otherwise the renderer would delete the shared GPU
+        // buffers under every other frame). The Line Art outline shell uses
+        // the same geometry object and is visited after its parent, so its
+        // dispose() is a harmless no-op.
+        if (n.userData && n.userData.sharesVictorianBuffers) {
+          n.geometry.setIndex(null);
+          n.geometry.deleteAttribute('uv');
+        }
+        n.geometry.dispose();
+      }
     });
     if (c.userData && c.userData.isVictorianMeshChild && c.material) c.material.dispose();
     fg.remove(c);
