@@ -27,6 +27,7 @@ window.__pre = {
 })();
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -1481,18 +1482,16 @@ body { overscroll-behavior: none; }
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<!-- GLTFLoader for the Victorian mesh frame (cdnjs lacks the r128 loaders dir, unpkg has it) -->
-<script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-<!-- Reflector for the lobby wall mirror (real planar reflections) -->
-<script src="https://unpkg.com/three@0.128.0/examples/js/objects/Reflector.js"></script>
-<!-- Post-processing (r128 examples) — used by fx.js; the gallery runs without them -->
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<!-- three.js r128 and its example scripts, served from this origin (vendor/): two
+     requests on the connection that is already open, instead of nine across
+     cdnjs + unpkg (two extra DNS/TLS set-ups before the gallery script can run,
+     and an outage of either CDN took the site down with it). Same bytes as
+     three@0.128.0; vendor/three-examples.r128.js is GLTFLoader (Victorian mesh
+     frame), Reflector (lobby wall mirror) and the post-processing passes
+     fx.js uses (CopyShader, LuminosityHighPassShader, EffectComposer,
+     RenderPass, ShaderPass, UnrealBloomPass), in that order. -->
+<script src="vendor/three.r128.min.js"></script>
+<script src="vendor/three-examples.r128.js"></script>
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
