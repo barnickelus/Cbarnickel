@@ -6831,58 +6831,95 @@ function syncContactAO() {
 // Additive, very low opacity, fading out well above the art so it can never
 // veil a painting. One mesh for all beams, one Points cloud for all motes; the
 // motion is entirely in the vertex shader (a single time uniform per frame).
-const _atmo = { beams: null, dust: null, spots: 0, time: { value: 0 } };
-function _buildDuomoAtmosphere() {
-  const spots = lightingRefs.spots;
-  const bp = [], bt = [], bi = [], dp = [], dr = [];
-  const SEG = 18;
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), dir = new THREE.Vector3();
-  const u = new THREE.Vector3(), v = new THREE.Vector3();
-  for (const s of spots) {
-    a.copy(s.position); b.copy(s.target.position);
-    dir.subVectors(b, a);
-    const len = dir.length();
-    dir.normalize();
-    u.set(0, 1, 0).cross(dir);
-    if (u.lengthSq() < 1e-4) u.set(1, 0, 0);
-    u.normalize(); v.crossVectors(dir, u).normalize();
-    const r0 = 0.07, r1 = len * Math.tan(0.2);
-    const RINGS = 6;
-    const base = bp.length / 3;
-    for (let k = 0; k <= RINGS; k++) {
-      const t = k / RINGS, rr = r0 + (r1 - r0) * t;
-      for (let i = 0; i <= SEG; i++) {
-        const ang = (i / SEG) * Math.PI * 2;
-        const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
-        bp.push(a.x + dir.x * len * t + u.x * cx + v.x * cy,
-                a.y + dir.y * len * t + u.y * cx + v.y * cy,
-                a.z + dir.z * len * t + u.z * cx + v.z * cy);
-        bt.push(t, a.x + dir.x * len * t, a.y + dir.y * len * t, a.z + dir.z * len * t);
-      }
+// Spot i of lightingRefs.spots owns a fixed block of both buffers (133 beam
+// vertices, 16 motes), so when the lean tier's spotlight pool re-seats a light
+// its block is rewritten in place: no geometry or material is rebuilt and the
+// two shader programs stay compiled while walking. The materials live for the
+// whole Duomo visit and go only on leaving the theme.
+const _atmo = { beams: null, dust: null, spots: 0, time: { value: 0 },
+                beamMat: null, dustMat: null,   // created on the first build, reused by every later one
+                dirty: false,                   // a pool re-seat arrived before the systems existed
+                keys: null,                     // per spot: lamp + target position (6 floats) as last written
+                rnd: null };                    // per mote: the four random draws of its placement
+const _ATMO = { SEG: 18, RINGS: 6, VERTS: 7 * 19, MOTES: 16,
+                a: new THREE.Vector3(), b: new THREE.Vector3(), dir: new THREE.Vector3(),
+                u: new THREE.Vector3(), v: new THREE.Vector3() };
+// Writes spot i's share of the beam + mote buffers. The build and the in-place
+// refresh both come through here, so a refreshed slot is bit-identical to a
+// fresh build. A mote keeps its random draws (_atmo.rnd) for the session: a
+// re-seated light carries the same motes to its new beam instead of re-rolling.
+function _writeDuomoAtmosphereSlot(i, s, bp, bt, dp, dr) {
+  const { SEG, RINGS, VERTS, MOTES, a, b, dir, u, v } = _ATMO;
+  a.copy(s.position); b.copy(s.target.position);
+  dir.subVectors(b, a);
+  const len = dir.length();
+  dir.normalize();
+  u.set(0, 1, 0).cross(dir);
+  if (u.lengthSq() < 1e-4) u.set(1, 0, 0);
+  u.normalize(); v.crossVectors(dir, u).normalize();
+  const r0 = 0.07, r1 = len * Math.tan(0.2);
+  let o = i * VERTS * 3, q = i * VERTS * 4;
+  for (let k = 0; k <= RINGS; k++) {
+    const t = k / RINGS, rr = r0 + (r1 - r0) * t;
+    for (let j = 0; j <= SEG; j++) {
+      const ang = (j / SEG) * Math.PI * 2;
+      const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
+      bp[o++] = a.x + dir.x * len * t + u.x * cx + v.x * cy;
+      bp[o++] = a.y + dir.y * len * t + u.y * cx + v.y * cy;
+      bp[o++] = a.z + dir.z * len * t + u.z * cx + v.z * cy;
+      bt[q++] = t; bt[q++] = a.x + dir.x * len * t; bt[q++] = a.y + dir.y * len * t; bt[q++] = a.z + dir.z * len * t;
     }
+  }
+  const rnd = _atmo.rnd;
+  o = i * MOTES * 3; q = i * MOTES * 2;
+  for (let m = 0; m < MOTES; m++) {
+    const r = (i * MOTES + m) * 4;
+    const t = 0.12 + rnd[r] * 0.5, rr = (r0 + (r1 - r0) * t) * Math.sqrt(rnd[r + 1]) * 0.9;
+    const ang = rnd[r + 2] * Math.PI * 2;
+    const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
+    dp[o++] = a.x + dir.x * len * t + u.x * cx + v.x * cy;
+    dp[o++] = a.y + dir.y * len * t + u.y * cx + v.y * cy;
+    dp[o++] = a.z + dir.z * len * t + u.z * cx + v.z * cy;
+    dr[q++] = rnd[r + 3] * 100; dr[q++] = t;
+  }
+}
+// Records spot i's lamp + target position; true when either moved since the last record.
+function _atmoSlotKey(i, s) {
+  const k = _atmo.keys, o = i * 6, p = s.position, t = s.target.position;
+  if (k[o] === p.x && k[o + 1] === p.y && k[o + 2] === p.z &&
+      k[o + 3] === t.x && k[o + 4] === t.y && k[o + 5] === t.z) return false;
+  k[o] = p.x; k[o + 1] = p.y; k[o + 2] = p.z; k[o + 3] = t.x; k[o + 4] = t.y; k[o + 5] = t.z;
+  return true;
+}
+function _buildDuomoAtmosphere() {
+  const spots = lightingRefs.spots, n = spots.length;
+  const { SEG, RINGS, VERTS, MOTES } = _ATMO;
+  if (!_atmo.rnd || _atmo.rnd.length !== n * MOTES * 4) {
+    _atmo.rnd = new Float64Array(n * MOTES * 4);
+    for (let k = 0; k < _atmo.rnd.length; k++) _atmo.rnd[k] = Math.random();
+  }
+  const bp = new Float32Array(n * VERTS * 3), bt = new Float32Array(n * VERTS * 4), bi = [];
+  const dp = new Float32Array(n * MOTES * 3), dr = new Float32Array(n * MOTES * 2);
+  _atmo.keys = new Float64Array(n * 6);
+  for (let i = 0; i < n; i++) {
+    _atmoSlotKey(i, spots[i]);
+    _writeDuomoAtmosphereSlot(i, spots[i], bp, bt, dp, dr);
+    const base = i * VERTS;
     for (let k = 0; k < RINGS; k++) {
-      for (let i = 0; i < SEG; i++) {
-        const p = base + k * (SEG + 1) + i, q = p + SEG + 1;
+      for (let j = 0; j < SEG; j++) {
+        const p = base + k * (SEG + 1) + j, q = p + SEG + 1;
         bi.push(p, q, p + 1, p + 1, q, q + 1);
       }
     }
-    for (let m = 0; m < 16; m++) {
-      const t = 0.12 + Math.random() * 0.5, rr = (r0 + (r1 - r0) * t) * Math.sqrt(Math.random()) * 0.9;
-      const ang = Math.random() * Math.PI * 2;
-      const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
-      dp.push(a.x + dir.x * len * t + u.x * cx + v.x * cy,
-              a.y + dir.y * len * t + u.y * cx + v.y * cy,
-              a.z + dir.z * len * t + u.z * cx + v.z * cy);
-      dr.push(Math.random() * 100, t);
-    }
   }
-  const col = new THREE.Color(T().spot.color);
+  const col = T().spot.color;
   const bg = new THREE.BufferGeometry();
-  bg.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
-  bg.setAttribute('aAxis', new THREE.Float32BufferAttribute(bt, 4));
+  bg.setAttribute('position', new THREE.BufferAttribute(bp, 3));
+  bg.setAttribute('aAxis', new THREE.BufferAttribute(bt, 4));
   bg.setIndex(bi);
-  const beamMat = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: col }, uOpacity: { value: 0.07 } },
+  if (_atmo.beamMat) _atmo.beamMat.uniforms.uColor.value.set(col);
+  else _atmo.beamMat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(col) }, uOpacity: { value: 0.07 } },
     vertexShader: [
       'attribute vec4 aAxis;',
       'varying float vT; varying vec3 vN; varying vec3 vV;',
@@ -6906,12 +6943,13 @@ function _buildDuomoAtmosphere() {
     ].join('\n'),
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
   });
-  _atmo.beams = new THREE.Mesh(bg, beamMat);
+  _atmo.beams = new THREE.Mesh(bg, _atmo.beamMat);
   const dg = new THREE.BufferGeometry();
-  dg.setAttribute('position', new THREE.Float32BufferAttribute(dp, 3));
-  dg.setAttribute('aSeed', new THREE.Float32BufferAttribute(dr, 2));
-  const dustMat = new THREE.ShaderMaterial({
-    uniforms: { uTime: _atmo.time, uColor: { value: col }, uScale: { value: 1 }, uGain: { value: 0.5 } },
+  dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+  dg.setAttribute('aSeed', new THREE.BufferAttribute(dr, 2));
+  if (_atmo.dustMat) _atmo.dustMat.uniforms.uColor.value.set(col);
+  else _atmo.dustMat = new THREE.ShaderMaterial({
+    uniforms: { uTime: _atmo.time, uColor: { value: new THREE.Color(col) }, uScale: { value: 1 }, uGain: { value: 0.5 } },
     vertexShader: [
       'attribute vec2 aSeed;',
       'uniform float uTime; uniform float uScale;',
@@ -6935,24 +6973,54 @@ function _buildDuomoAtmosphere() {
     ].join('\n'),
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
-  _atmo.dust = new THREE.Points(dg, dustMat);
+  _atmo.dust = new THREE.Points(dg, _atmo.dustMat);
   _atmo.beams.renderOrder = 3; _atmo.dust.renderOrder = 3;   // after beach-hole discs (2.5)
   _atmo.beams.frustumCulled = false; _atmo.dust.frustumCulled = false;
   scene.add(_atmo.beams); scene.add(_atmo.dust);
-  _atmo.spots = spots.length;
+  _atmo.spots = n;
+  _atmo.dirty = false;
 }
-function _teardownDuomoAtmosphere() {
+// Lean tier: a pooled spotlight was re-seated on another painting. Rewrites
+// only the slots whose lamp or target moved; the index, the materials and
+// their programs are untouched. A no-op until the systems exist or while the
+// spot count differs (updateDuomoAtmosphere rebuilds for that).
+function _refreshDuomoAtmosphere() {
+  const spots = lightingRefs.spots;
+  if (!_atmo.beams || !spots || spots.length !== _atmo.spots) return;
+  _atmo.dirty = false;
+  const bg = _atmo.beams.geometry, dg = _atmo.dust.geometry;
+  const bp = bg.attributes.position, bt = bg.attributes.aAxis, dp = dg.attributes.position, dr = dg.attributes.aSeed;
+  let moved = false;
+  for (let i = 0; i < spots.length; i++) {
+    if (!_atmoSlotKey(i, spots[i])) continue;
+    _writeDuomoAtmosphereSlot(i, spots[i], bp.array, bt.array, dp.array, dr.array);
+    moved = true;
+  }
+  if (!moved) return;
+  bp.needsUpdate = bt.needsUpdate = dp.needsUpdate = dr.needsUpdate = true;
+  bg.boundingSphere = bg.boundingBox = null;
+  dg.boundingSphere = dg.boundingBox = null;
+}
+// Drops the meshes (a rebuild follows); with disposeMats the materials too,
+// which releases their two shader programs — only on leaving the Duomo.
+function _teardownDuomoAtmosphere(disposeMats) {
   for (const k of ['beams', 'dust']) {
     const m = _atmo[k];
     if (!m) continue;
-    scene.remove(m); m.geometry.dispose(); m.material.dispose();
+    scene.remove(m); m.geometry.dispose();
     _atmo[k] = null;
   }
   _atmo.spots = 0;
+  if (!disposeMats) return;
+  for (const k of ['beamMat', 'dustMat']) {
+    if (_atmo[k]) _atmo[k].dispose();
+    _atmo[k] = null;
+  }
 }
 function syncDuomoAtmosphere() {
   const spots = lightingRefs.spots ? lightingRefs.spots.length : 0;
-  if (theme !== 'duomo' || spots !== _atmo.spots) _teardownDuomoAtmosphere();
+  if (theme !== 'duomo') _teardownDuomoAtmosphere(true);
+  else if (spots !== _atmo.spots) _teardownDuomoAtmosphere();
   if (theme === 'duomo' && !_atmo.beams && spots > 0 && scene) _buildDuomoAtmosphere();
   syncDuomoLightingGain();
 }
@@ -6976,6 +7044,8 @@ function updateDuomoAtmosphere(now) {
       wallMeshes.length !== _uvSyncedWalls) {
     _syncSurfaceUVs();
     syncDuomoAtmosphere();
+  } else if (_atmo.dirty) {
+    _refreshDuomoAtmosphere();     // a pool re-seat the systems missed
   }
   _atmo.time.value = now;
   if (_atmo.dust) _atmo.dust.material.uniforms.uScale.value = renderer.getPixelRatio() * window.innerHeight / 760;
@@ -8695,8 +8765,15 @@ function _seatSpot(slot, spec) {
   _spotPoolMoved();
 }
 function _spotPoolMoved() {
-  _teardownDuomoAtmosphere();                       // rebuilt from the new positions next frame
-  if (window.FX && FX.atmosDirty) FX.atmosDirty();
+  // The Duomo beams and the fx cones follow the light in place — nothing is
+  // disposed, so no shader program is lost and recompiled while walking.
+  // Before the systems exist (the seating burst in ensureSpotPool) they are
+  // simply built later from the final positions.
+  const spots = lightingRefs.spots;
+  if (_atmo.beams && spots && spots.length === _atmo.spots) _refreshDuomoAtmosphere();
+  else _atmo.dirty = true;
+  if (window.FX && FX.atmosMove) FX.atmosMove();
+  else if (window.FX && FX.atmosDirty) FX.atmosDirty();   // a cached older fx.js
 }
 function updateSpotPool(now, dt) {
   const slots = _spotPool.slots;
