@@ -21,6 +21,7 @@ window.__pre = {
 (function () {
   var s = document.createElement('script');
   s.id = 'meshopt-decoder'; s.async = true; s.src = 'meshopt_decoder.js';
+  s.onload = function () { window.__meshoptLoaded = true; };
   s.onerror = function () { window.__meshoptFailed = true; };
   document.head.appendChild(s);
 })();
@@ -7903,6 +7904,7 @@ function _ensureMeshopt() {
       Promise.resolve(D.ready).then(() => resolve(D), reject);
     };
     if (window.MeshoptDecoder) { done(); return; }
+    if (window.__meshoptLoaded) { done(); return; }   // fired before we listened, without a decoder: falls to the raw file
     if (window.__meshoptFailed) { reject(new Error('meshopt_decoder.js failed to load')); return; }
     let s = document.getElementById('meshopt-decoder');
     if (!s) {   // the <head> snippet did not run (e.g. a stripped copy): inject once
@@ -8038,7 +8040,10 @@ function loadVictorianMesh() {
   // consumed once (nulled here) so a later retry re-requests the file.
   const pre = window.__pre && window.__pre.glb;
   if (window.__pre) window.__pre.glb = null;
-  const loadFresh = () => loader.load(VICTORIAN_GLB_URL, onLoad, undefined, onErr);
+  // A fresh request of the compressed file; if that fails too (an odd decoder
+  // on an odd browser), the uncompressed copy is the last resort.
+  const loadFresh = () => loader.load(VICTORIAN_GLB_URL, onLoad, undefined,
+    () => loader.load(VICTORIAN_GLB_RAW_URL, onLoad, undefined, onErr));
   _ensureMeshopt().then(
     (dec) => {
       loader.setMeshoptDecoder(dec);
