@@ -16423,8 +16423,9 @@ async function boot() {
     // The music (preload none, so it stayed off the boot download path) buffers
     // while the visitor reads the entry screen — unless they muted it last
     // time, in which case it is never fetched. Only ever on an untouched
-    // element: load() would reset one that is already playing (the ?return
-    // path's enterGallery runs from a timer after this, so the order holds).
+    // element: load() would reset one that is already playing (on the ?return
+    // path enterGallery's play() may already have run — the guards below then
+    // leave the element alone).
     const a = document.getElementById('bg-music');
     let want = true;
     try { want = localStorage.getItem('musicMuted') !== 'true'; } catch (e) {}
