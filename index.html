@@ -4,7 +4,30 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>C.Barnickel Artwork — Virtual Gallery</title>
+<script>
+// Early fetches. paintings.json and the Victorian frame GLB are needed on
+// essentially every visit, so they (and the GLB's meshopt decoder) start
+// downloading with the HTML instead of after ~1 MB of scripts has run.
+// loadGalleryData() / loadVictorianMesh() consume each promise once and fall
+// back to a fresh request if it failed; both catch to null so nothing can
+// raise an unhandled rejection before boot. The GLB goes at low priority so
+// it never competes with the scripts the Enter button waits on.
+window.__pre = {
+  json: fetch('paintings.json', { cache: 'no-cache' }).catch(function () { return null; }),
+  glb: fetch('victorian-frame-textured.glb', { priority: 'low' })
+    .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+    .catch(function () { return null; }),
+};
+(function () {
+  var s = document.createElement('script');
+  s.id = 'meshopt-decoder'; s.async = true; s.src = 'meshopt_decoder.js';
+  s.onload = function () { window.__meshoptLoaded = true; };
+  s.onerror = function () { window.__meshoptFailed = true; };
+  document.head.appendChild(s);
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -1160,8 +1183,14 @@ body { overscroll-behavior: none; }
 </div>
 
 <!-- Background music — dark ambient track plays softly in lobby+series rooms.
-     Not autoplay (browsers block it); starts on first user gesture. -->
-<audio id="bg-music" src="dark-ambient-music-354475.mp3" loop preload="auto"></audio>
+     Not autoplay (browsers block it); starts on first user gesture. preload is
+     none so the 4 MB stays off the pre-Enter download path: boot() buffers it
+     once the Enter button enables (unless the visitor muted it last time). -->
+<audio id="bg-music" src="dark-ambient-music-354475.mp3" loop preload="none"></audio>
+<!-- The same recording pre-reversed (tools/build-reversed.py, 320 kbps CBR):
+     it streams BACKWARDS inside the mirror world through this second element,
+     fetched only once a visitor pushes the mirror. -->
+<audio id="bg-music-rev" src="dark-ambient-music-354475-reversed-320.mp3" loop preload="none"></audio>
 
 <div class="bait" id="bait">
   <span class="bait-label">do not click here</span>
@@ -1453,18 +1482,16 @@ body { overscroll-behavior: none; }
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<!-- GLTFLoader for the Victorian mesh frame (cdnjs lacks the r128 loaders dir, unpkg has it) -->
-<script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-<!-- Reflector for the lobby wall mirror (real planar reflections) -->
-<script src="https://unpkg.com/three@0.128.0/examples/js/objects/Reflector.js"></script>
-<!-- Post-processing (r128 examples) — used by fx.js; the gallery runs without them -->
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<!-- three.js r128 and its example scripts, served from this origin (vendor/): two
+     requests on the connection that is already open, instead of nine across
+     cdnjs + unpkg (two extra DNS/TLS set-ups before the gallery script can run,
+     and an outage of either CDN took the site down with it). Same bytes as
+     three@0.128.0; vendor/three-examples.r128.js is GLTFLoader (Victorian mesh
+     frame), Reflector (lobby wall mirror) and the post-processing passes
+     fx.js uses (CopyShader, LuminosityHighPassShader, EffectComposer,
+     RenderPass, ShaderPass, UnrealBloomPass), in that order. -->
+<script src="vendor/three.r128.min.js"></script>
+<script src="vendor/three-examples.r128.js"></script>
 <script>
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
@@ -1607,11 +1634,16 @@ let activeFrame = frameSettings;
 // once, its geometry cached, then cloned + scaled per painting. Because
 // loading is async but frames build synchronously, any victorian frame
 // built before the mesh arrives registers here and gets populated on load.
+// The shipped GLB is meshopt-compressed (16-bit positions/uv, no normals —
+// every frame recomputes them anyway); the uncompressed original is kept as
+// a fallback for browsers without WebAssembly or when the decoder fails.
 const VICTORIAN_GLB_URL = 'victorian-frame-textured.glb';
-let _victorianGeo = null;          // cached BufferGeometry
+const VICTORIAN_GLB_RAW_URL = 'victorian-frame-textured-raw.glb';
+let _victorianGeo = null;          // cached BufferGeometry (position + shared index/uv, no normals)
 let _victorianTexMat = null;       // cached PBR material from the GLB (polychrome paint)
 let _victorianLineTex = null;      // black-line-on-white edge map (Line Art)
 let _victorianLineTexDark = null;  // chalk-line-on-dark edge map (Line Art Dark)
+let _victorianLineTexTried = false; // the line maps are built lazily, at most once
 let _victorianBasePositions = null; // Float32Array of base vertex positions (for band-stretch)
 let _victorianLoadState = 'idle';  // idle | loading | ready | failed
 const _victorianPending = [];      // [{group, pW, pH}] awaiting the mesh
@@ -1908,10 +1940,25 @@ function formatSize(sz) {
 }
 
 async function loadGalleryData() {
-  const res = await fetch('paintings.json', { cache: 'no-cache' });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const data = await res.json();
-  if (!Array.isArray(data.paintings)) throw new Error('paintings.json missing "paintings"');
+  // The <head> pre-fetch (window.__pre.json) normally has the response in
+  // hand already. Its body can be read only once, so it is consumed here and
+  // any failure (rejected, null, !ok, bad JSON) retries once with a fresh
+  // request — the same no-cache fetch the admin edit flow relies on.
+  const pre = window.__pre && window.__pre.json;
+  if (window.__pre) window.__pre.json = null;
+  let data = null, got = false;
+  if (pre) {
+    try {
+      const res = await pre;
+      if (res && res.ok) { data = await res.json(); got = true; }
+    } catch (e) { got = false; }
+  }
+  if (!got) {
+    const res = await fetch('paintings.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  }
+  if (!data || !Array.isArray(data.paintings)) throw new Error('paintings.json missing "paintings"');
   if (!data.series || typeof data.series !== 'object') {
     data.series = { all: { name: 'Gallery', subtitle: '' } };
   }
@@ -1970,6 +2017,7 @@ function fitTextureToTier(tex) {
     g.drawImage(img, 0, 0, c.width, c.height);
     tex.image = c;
     tex.needsUpdate = true;
+    if (img.close) img.close();   // a decoded bitmap isn't needed once drawn
   } catch (e) { /* keep the original if the canvas refuses */ }
   return tex;
 }
@@ -1986,20 +2034,191 @@ function paintingSrc(file, use) {
 // weak device isn't decoding thirty JPEGs at once (a memory spike that can take
 // the whole tab down on iOS) and the rooms you see first fill in first.
 const _texQueue = { pending: [], active: 0, limit: PERF.low ? 3 : 5 };
-function queueTextureLoad(url, priority, onLoad, onError) {
-  _texQueue.pending.push({ url, priority, onLoad, onError });
+// `into`: an existing texture to reload (GL context restore) instead of
+// handing onLoad a new one.
+function queueTextureLoad(url, priority, onLoad, onError, into) {
+  _texQueue.pending.push({ url, priority, onLoad, onError, into: into || null });
   _texQueue.pending.sort((a, b) => a.priority - b.priority);
   pumpTextureQueue();
 }
 function pumpTextureQueue() {
+  if (_bmp.probing) return;          // the probe's answer dispatches the queue
+  if (_bmp.ok) _armContextRestore();
   while (_texQueue.active < _texQueue.limit && _texQueue.pending.length) {
     const job = _texQueue.pending.shift();
     _texQueue.active++;
     const done = () => { _texQueue.active--; pumpTextureQueue(); };
+    if (_bmp.ok) _loadBitmapTexture(job, done); else _loadImgTexture(job, done);
+  }
+}
+// The <img> way: the browser decodes it (on the main thread, the first frame
+// the painting is drawn) and the decoded image stays as tex.image for the visit.
+function _loadImgTexture(job, done) {
+  if (!job.into) {
     new THREE.TextureLoader().load(job.url,
       (tex) => { done(); job.onLoad(tex); },
       undefined,
       (err) => { done(); if (job.onError) job.onError(err); });
+    return;
+  }
+  new THREE.ImageLoader().load(job.url,
+    (img) => {
+      const t = job.into;
+      t.image = img; t.flipY = true; t.needsUpdate = true;
+      done(); job.onLoad(t);
+    },
+    undefined,
+    (err) => { done(); if (job.onError) job.onError(err); });
+}
+// The bitmap way: fetched and decoded off the main thread as an ImageBitmap,
+// pre-flipped so it uploads with flipY = false (the result doesn't depend on
+// whether the browser honours UNPACK_FLIP_Y for bitmaps — Chrome and Safari
+// disagree), and closed right after its GPU upload (uploadAndCloseBitmap)
+// instead of a decoded copy staying beside the GPU one for the whole visit:
+// thirty of them is ~84 MB on an iPad, the tab's scarcest resource. The
+// options match what three gives an <img> (no premultiply, no colour-space
+// conversion; the files carry no ICC or EXIF), so the pixels are the same.
+// Same HTTP-cache semantics as <img>; priority 'low' keeps the paintings
+// behind the scripts, fonts and frame model (ignored where unsupported).
+const BITMAP_OPTS = { imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
+function _fetchBitmap(url) {
+  return fetch(url, { priority: 'low' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(blob => createImageBitmap(blob, BITMAP_OPTS).catch(err => {
+      _bmp.ok = false;     // a decode the probe passed, failing: <img> for the rest of the session
+      throw err;
+    }));
+}
+function _loadBitmapTexture(job, done) {
+  _fetchBitmap(job.url).then(bmp => {
+    let tex = job.into;
+    if (tex) { tex.image = bmp; tex.needsUpdate = true; }
+    else {
+      tex = new THREE.CanvasTexture(bmp);
+      // As THREE.TextureLoader: JPEGs have no alpha, so store them as RGB
+      tex.format = /\.jpe?g($|\?)/i.test(job.url) ? THREE.RGBFormat : THREE.RGBAFormat;
+    }
+    tex.flipY = false;
+    done();
+    job.onLoad(tex);
+  }).catch(() => {
+    // Fetch or decode failed: once more the way <img> would have loaded it,
+    // so no painting goes missing where the old path worked.
+    _loadImgTexture(job, done);
+  });
+}
+// Upload a bitmap-backed texture now (the decode already happened, so the
+// first sight of the painting costs nothing) and let the upload close the
+// bitmap: r128 calls onUpdate right after each upload. Filters, anisotropy
+// and encoding are applied only at upload, so this comes after they are set.
+// The closed bitmap stays as tex.image (0×0 — three warns on undefined); the
+// context-restore handler reloads it from the file.
+function uploadAndCloseBitmap(tex) {
+  const img = tex.image;
+  if (!img || !img.close) return;
+  tex.onUpdate = (t) => {
+    const b = t.image;
+    if (b && b.close) {
+      t.userData = t.userData || {};
+      t.userData.w = b.width; t.userData.h = b.height;   // size, for anyone estimating GPU bytes
+      b.close();
+    }
+    t.onUpdate = null;
+  };
+  _armContextRestore();
+  if (renderer) renderer.initTexture(tex);
+}
+// A baked-text canvas (title 2048×512, labels 1024×256, plaques 880×400, the
+// 1024² crow emblem — 21 MB of backing stores on Safari) is only ever read by
+// its GPU upload: every redraw (font arrival, theme, neon toggle) makes a NEW
+// texture and the emblem textures are cached and swapped by identity, never
+// re-read. So empty the canvas once it is up.
+function releaseCanvasAfterUpload(tex) {
+  tex.onUpdate = (t) => {
+    const c = t.image;
+    if (c && c.getContext) {
+      t.userData = t.userData || {};
+      t.userData.w = c.width; t.userData.h = c.height;
+      c.width = 0; c.height = 0;
+    }
+    t.onUpdate = null;
+  };
+  _armContextRestore();
+  return tex;
+}
+// The bitmap path is used only after a runtime probe: a 1×2 PNG (red over
+// blue) decoded with the exact options above must draw with the rows swapped.
+// Older WebKit ignores imageOrientation, and an unflipped bitmap uploaded with
+// flipY = false would hang every painting upside down — so there, or if the
+// probe throws or never answers, THREE.TextureLoader does what it did.
+const _bmp = { ok: false, probing: true };
+(function probeBitmapDecode() {
+  const settle = (ok) => { if (!_bmp.probing) return; _bmp.probing = false; _bmp.ok = !!ok; pumpTextureQueue(); };
+  try {
+    if (typeof createImageBitmap !== 'function' || typeof fetch !== 'function' || typeof Blob === 'undefined') return settle(false);
+    const png = atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAIAAAAW4yFwAAAADUlEQVR42mP4zwAC/wEIAAH/Bs6pJQAAAABJRU5ErkJggg==');
+    const bytes = new Uint8Array(png.length);
+    for (let i = 0; i < png.length; i++) bytes[i] = png.charCodeAt(i);
+    createImageBitmap(new Blob([bytes], { type: 'image/png' }), BITMAP_OPTS).then(bm => {
+      let ok = false;
+      try {
+        const c = document.createElement('canvas');
+        c.width = 1; c.height = 2;
+        const g = c.getContext('2d');
+        g.drawImage(bm, 0, 0);
+        const d = g.getImageData(0, 0, 1, 2).data;
+        // Flipped: blue on the top row, red below
+        ok = bm.width === 1 && bm.height === 2 &&
+             d[0] < 40 && d[2] > 215 && d[3] === 255 &&
+             d[4] > 215 && d[6] < 40 && d[7] === 255;
+      } catch (e) { ok = false; }
+      if (bm.close) bm.close();
+      settle(ok);
+    }).catch(() => settle(false));
+    setTimeout(() => settle(false), 3000);   // a probe that never answers must not hold the paintings
+  } catch (e) { settle(false); }
+})();
+// After a GL context loss three re-uploads every texture from its .image —
+// which for us is a closed bitmap or an emptied canvas. Registered once the
+// renderer exists (so after three's own listener, which rebuilds the GL state
+// first) and run synchronously before any render: paintings get a small
+// placeholder and reload from the file INTO the same texture objects (the
+// materials and programs keep their references); the baked text is drawn
+// again; the crow emblem on show is redrawn in place and the cached others
+// dropped (restyleArsenal swaps them by identity, so it is re-made on demand).
+let _ctxRestoreArmed = false, _bmpPlaceholder = null;
+function _armContextRestore() {
+  if (_ctxRestoreArmed || !renderer) return;
+  _ctxRestoreArmed = true;
+  renderer.domElement.addEventListener('webglcontextrestored', onGLContextRestored, false);
+}
+function onGLContextRestored() {
+  for (const p of paintingMeshes) {
+    const tex = p.userData.wallTex, src = p.userData.texSrc;
+    if (!tex || !src || !tex.image || !tex.image.close || tex.image.width > 0) continue;
+    if (!_bmpPlaceholder) {
+      _bmpPlaceholder = document.createElement('canvas');
+      _bmpPlaceholder.width = _bmpPlaceholder.height = 2;
+      const g = _bmpPlaceholder.getContext('2d');
+      g.fillStyle = '#3a3632'; g.fillRect(0, 0, 2, 2);
+    }
+    tex.image = _bmpPlaceholder;
+    tex.needsUpdate = true;
+    queueTextureLoad(src.url, src.priority, uploadAndCloseBitmap, null, tex);
+  }
+  rebuildCanvasText();
+  for (const style of Object.keys(_crowTex)) {
+    const t = _crowTex[style];
+    if (arsenal.emblemMat && arsenal.emblemMat.map === t) {
+      const c = t.image;
+      c.width = c.height = 1024;
+      drawCrowEmblem(c.getContext('2d'), 1024, style);
+      t.needsUpdate = true;
+      releaseCanvasAfterUpload(t);
+    } else {
+      t.dispose();
+      delete _crowTex[style];
+    }
   }
 }
 // Runtime resolution governor: if the device still can't hold ~30fps, step the
@@ -3170,9 +3389,11 @@ function makeComicWallTexture(bgCss, lineCss) {
 // with its polished-marble roughness + joint-relief normal maps.
 let _duomoFloorMaps = null;
 function makeDuomoFloorTexture() { return getDuomoFloorMaps().map; }
-function getDuomoFloorMaps() {
-  if (_duomoFloorMaps) return _duomoFloorMaps;
-  const size = 512, S2 = PERF.low ? 512 : 1024;   // lean tier: a quarter of the per-pixel work
+// The inlay itself is vector art, so it is drawn on the main thread (a canvas;
+// ~10–30 ms) and its RGBA bytes at S2×S2 go to duomoFloorPixels — on a worker
+// at boot (startTextureGen) or inline here.
+function _drawDuomoInlay(S2) {
+  const size = 512;
   const c = document.createElement('canvas');
   c.width = S2; c.height = S2;
   const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -3290,28 +3511,132 @@ function getDuomoFloorMaps() {
       ctx.restore();
     }
   }
+  return ctx.getImageData(0, 0, S2, S2).data;
+}
+function getDuomoFloorMaps() {
+  if (_duomoFloorMaps) return _duomoFloorMaps;
+  const S2 = PERF.low ? 512 : 1024;   // lean tier: a quarter of the per-pixel work
+  _duomoFloorMaps = _wrapFloorMaps(duomoFloorPixels(_drawDuomoInlay(S2), S2, S2 / FLOOR_TILE_M, _texgenRand('floor')), S2);
+  return _duomoFloorMaps;
+}
+function _wrapFloorMaps(r, S2) {
+  return {
+    map: _repeatTexData(r.map, S2, S2),
+    normalMap: _repeatTexData(r.normal, S2, S2),
+    roughnessMap: _repeatTexData(r.rough, S2, S2),
+  };
+}
+
+// ── Procedural surface helpers (generated once, cached) ──
+const STONE_TILE_W = 4.0;      // metres of wall per ashlar tile (u); v spans the full LOBBY_H
+const FLOOR_TILE_M = 2.4;      // metres per marble-inlay tile (2×2 medallions)
+
+// ── Pixel generators ──
+// Pure typed-array math: they touch nothing but their parameters, each other,
+// Math and typed arrays (no DOM, no THREE, no page globals), so the very same
+// source runs inline on the main thread and, pasted into TEXGEN_SRC, on a Web
+// Worker at boot. Every output is a Uint8ClampedArray, exactly like the
+// ImageData these used to write into. `rand` is Math.random unless a test
+// seeds it (_texgenRand).
+// Tileable value-noise fBm on a W×H grid, ~[0,1]. Wraps in x (and y if wrapY).
+function fbmField(W, H, cellsX, octaves, wrapY, rand) {
+  rand = rand || Math.random;
+  const out = new Float32Array(W * H);
+  const ix0 = new Int32Array(W), ix1 = new Int32Array(W), fxs = new Float32Array(W);
+  // the x-interpolated grid rows above/below only change when the grid row
+  // does, so they are built once per grid row (f64, as the locals they replace)
+  const top = new Float64Array(W), bot = new Float64Array(W);
+  let amp = 1, norm = 0, cx = cellsX;
+  for (let o = 0; o < octaves; o++) {
+    const gx = Math.max(2, Math.round(cx));
+    const gy = Math.max(2, Math.round(cx * H / W));
+    const grid = new Float32Array(gx * (gy + 1));
+    for (let i = 0; i < grid.length; i++) grid[i] = rand();
+    for (let x = 0; x < W; x++) {
+      const f = (x / W) * gx, i0 = Math.floor(f), t = f - i0;
+      ix0[x] = i0 % gx; ix1[x] = (i0 + 1) % gx; fxs[x] = t * t * (3 - 2 * t);
+    }
+    let lastJ = -1;
+    for (let y = 0; y < H; y++) {
+      const f = (y / H) * gy, j0 = Math.floor(f), t0 = f - j0, ty = t0 * t0 * (3 - 2 * t0);
+      if (j0 !== lastJ) {
+        lastJ = j0;
+        const r0 = j0 * gx, r1 = (wrapY ? (j0 + 1) % gy : j0 + 1) * gx;
+        for (let x = 0; x < W; x++) {
+          const a = grid[r0 + ix0[x]], b = grid[r0 + ix1[x]];
+          top[x] = a + (b - a) * fxs[x];
+          const c = grid[r1 + ix0[x]], d = grid[r1 + ix1[x]];
+          bot[x] = c + (d - c) * fxs[x];
+        }
+      }
+      const row = y * W;
+      for (let x = 0; x < W; x++) {
+        const tp = top[x];
+        out[row + x] += amp * (tp + (bot[x] - tp) * ty);
+      }
+    }
+    norm += amp; amp *= 0.5; cx *= 2;
+  }
+  for (let i = 0; i < out.length; i++) out[i] /= norm;
+  return out;
+}
+// Tangent-space normal map (RGBA bytes) from a height field in metres (canvas
+// y runs down, texture v runs up). Wraps in x; in y only if wrapY.
+function normalFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY) {
+  const d = new Uint8ClampedArray(W * H * 4);
+  const sx = pxPerMX / 2, sy = pxPerMY / 2;
+  for (let y = 0; y < H; y++) {
+    const yu = y > 0 ? y - 1 : (wrapY ? H - 1 : 0);
+    const yd = y < H - 1 ? y + 1 : (wrapY ? 0 : H - 1);
+    for (let x = 0; x < W; x++) {
+      const xl = x > 0 ? x - 1 : W - 1, xr = x < W - 1 ? x + 1 : 0;
+      const nx = -(h[y * W + xr] - h[y * W + xl]) * sx;
+      const ny = -(h[yu * W + x] - h[yd * W + x]) * sy;
+      const il = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+      const i = (y * W + x) * 4;
+      d[i] = (nx * il * 0.5 + 0.5) * 255;
+      d[i + 1] = (ny * il * 0.5 + 0.5) * 255;
+      d[i + 2] = (il * 0.5 + 0.5) * 255;
+      d[i + 3] = 255;
+    }
+  }
+  return d;
+}
+// Duomo floor: the drawn inlay (px, S2×S2 RGBA, modified in place into the
+// albedo) gets marble veining, a joint-relief normal and a polished roughness.
+// Returns { map, normal, rough }.
+function duomoFloorPixels(px, S2, pxPerM, rand) {
+  rand = rand || Math.random;
   // Per-pixel pass: the joints between inlaid pieces are wherever the drawn
   // colour changes sharply, so relief/roughness line up with the pattern.
   const N = S2 * S2;
-  const img = ctx.getImageData(0, 0, S2, S2), px = img.data;
   const lum = new Float32Array(N);
   for (let i = 0; i < N; i++) lum[i] = px[i * 4] * 0.3 + px[i * 4 + 1] * 0.59 + px[i * 4 + 2] * 0.11;
-  const low = _fbmField(S2, S2, 3, 3, true);     // cloudy marble drift / wax wear
-  const warp = _fbmField(S2, S2, 4, 3, true);    // bends the vein runs
-  const crack = _fbmField(S2, S2, 28, 2, true);  // jags them like real fracture veins
-  const vmask = _fbmField(S2, S2, 2, 2, true);   // where a slab carries veins at all
-  const fine = _fbmField(S2, S2, 96, 1, true);   // crystalline speckle
+  const low = fbmField(S2, S2, 3, 3, true, rand);     // cloudy marble drift / wax wear
+  const warp = fbmField(S2, S2, 4, 3, true, rand);    // bends the vein runs
+  const crack = fbmField(S2, S2, 28, 2, true, rand);  // jags them like real fracture veins
+  const vmask = fbmField(S2, S2, 2, 2, true, rand);   // where a slab carries veins at all
+  const fine = fbmField(S2, S2, 96, 1, true, rand);   // crystalline speckle
   // 3×3 box blur of the drawing: joints between pieces are eased (ground and
-  // waxed, not a printed hard edge)
+  // waxed, not a printed hard edge). Only the joint pixels ever read it, so it
+  // is filled just there — in a pass of its own over the untouched drawing.
   const soft = new Float32Array(N * 3);
+  const jointA = new Float32Array(N);
   for (let y = 0; y < S2; y++) {
     const r0 = ((y + S2 - 1) % S2) * S2, r1 = y * S2, r2 = ((y + 1) % S2) * S2;
     for (let x = 0; x < S2; x++) {
-      const c0 = (x + S2 - 1) % S2, c2 = (x + 1) % S2, o = (r1 + x) * 3;
-      for (let ch = 0; ch < 3; ch++) {
-        soft[o + ch] = (px[(r0 + c0) * 4 + ch] + px[(r0 + x) * 4 + ch] + px[(r0 + c2) * 4 + ch] +
-          px[(r1 + c0) * 4 + ch] + px[(r1 + x) * 4 + ch] + px[(r1 + c2) * 4 + ch] +
-          px[(r2 + c0) * 4 + ch] + px[(r2 + x) * 4 + ch] + px[(r2 + c2) * 4 + ch]) / 9;
+      const p = r1 + x, c0 = (x + S2 - 1) % S2, c2 = (x + 1) % S2;
+      const g = Math.max(Math.abs(lum[r1 + c2] - lum[r1 + c0]), Math.abs(lum[r2 + x] - lum[r0 + x]));
+      const e = Math.min(1, Math.max(0, (g - 14) / 50));
+      const joint = e * e * (3 - 2 * e);
+      jointA[p] = joint;
+      if (joint > 0) {
+        const o = p * 3;
+        for (let ch = 0; ch < 3; ch++) {
+          soft[o + ch] = (px[(r0 + c0) * 4 + ch] + px[(r0 + x) * 4 + ch] + px[(r0 + c2) * 4 + ch] +
+            px[(r1 + c0) * 4 + ch] + px[(r1 + x) * 4 + ch] + px[(r1 + c2) * 4 + ch] +
+            px[(r2 + c0) * 4 + ch] + px[(r2 + x) * 4 + ch] + px[(r2 + c2) * 4 + ch]) / 9;
+        }
       }
     }
   }
@@ -3319,23 +3644,17 @@ function getDuomoFloorMaps() {
   // across it (a few long drifts + hairlines), with its own tone.
   const half = S2 / 2, slabs = [];
   for (let i = 0; i < 4; i++) {
-    const a = Math.random() * Math.PI, a2 = a + (Math.random() < 0.5 ? 1 : -1) * (0.25 + Math.random() * 0.3);
+    const a = rand() * Math.PI, a2 = a + (rand() < 0.5 ? 1 : -1) * (0.25 + rand() * 0.3);
     slabs.push({ ca: Math.cos(a), sa: Math.sin(a), ca2: Math.cos(a2), sa2: Math.sin(a2),
-      f: 1.1 + Math.random() * 0.9, ph: Math.random() * 4, tone: 0.95 + Math.random() * 0.08 });
+      f: 1.1 + rand() * 0.9, ph: rand() * 4, tone: 0.95 + rand() * 0.08 });
   }
   const hgt = new Float32Array(N);
-  const rc = document.createElement('canvas');
-  rc.width = S2; rc.height = S2;
-  const rctx = rc.getContext('2d', { willReadFrequently: true });
-  const rimg = rctx.createImageData(S2, S2), rpx = rimg.data;
+  const rpx = new Uint8ClampedArray(N * 4);
   for (let y = 0; y < S2; y++) {
-    const yu = (y + S2 - 1) % S2, yd = (y + 1) % S2;
     for (let x = 0; x < S2; x++) {
-      const p = y * S2 + x, xl = (x + S2 - 1) % S2, xr = (x + 1) % S2;
+      const p = y * S2 + x;
       const l = lum[p];
-      const g = Math.max(Math.abs(lum[y * S2 + xr] - lum[y * S2 + xl]), Math.abs(lum[yd * S2 + x] - lum[yu * S2 + x]));
-      const e = Math.min(1, Math.max(0, (g - 14) / 50));
-      const joint = e * e * (3 - 2 * e);
+      const joint = jointA[p];
       const sl = slabs[(x >= half ? 1 : 0) + (y >= half ? 2 : 0)];
       const lx = (x % half) / half, ly = (y % half) / half, w = warp[p] - 0.5, cj = crack[p] - 0.5;
       // Sparse directional veins: a gently bowed main run with a jagged edge,
@@ -3370,118 +3689,51 @@ function getDuomoFloorMaps() {
       rpx[i4] = r; rpx[i4 + 1] = r; rpx[i4 + 2] = r; rpx[i4 + 3] = 255;
     }
   }
-  ctx.putImageData(img, 0, 0);
-  rctx.putImageData(rimg, 0, 0);
-  const pxPerM = S2 / FLOOR_TILE_M;
-  _duomoFloorMaps = {
-    map: _repeatTex(c),
-    normalMap: _repeatTex(_normalCanvasFromHeight(hgt, S2, S2, pxPerM, pxPerM, true)),
-    roughnessMap: _repeatTex(rc),
-  };
-  return _duomoFloorMaps;
+  return { map: px, normal: normalFromHeight(hgt, S2, S2, pxPerM, pxPerM, true), rough: rpx };
 }
-
-// ── Procedural surface helpers (generated once, cached) ──
-const STONE_TILE_W = 4.0;      // metres of wall per ashlar tile (u); v spans the full LOBBY_H
-const FLOOR_TILE_M = 2.4;      // metres per marble-inlay tile (2×2 medallions)
-// Tileable value-noise fBm on a W×H grid, ~[0,1]. Wraps in x (and y if wrapY).
-function _fbmField(W, H, cellsX, octaves, wrapY) {
-  const out = new Float32Array(W * H);
-  const ix0 = new Int32Array(W), ix1 = new Int32Array(W), fxs = new Float32Array(W);
-  let amp = 1, norm = 0, cx = cellsX;
-  for (let o = 0; o < octaves; o++) {
-    const gx = Math.max(2, Math.round(cx));
-    const gy = Math.max(2, Math.round(cx * H / W));
-    const grid = new Float32Array(gx * (gy + 1));
-    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
-    for (let x = 0; x < W; x++) {
-      const f = (x / W) * gx, i0 = Math.floor(f), t = f - i0;
-      ix0[x] = i0 % gx; ix1[x] = (i0 + 1) % gx; fxs[x] = t * t * (3 - 2 * t);
-    }
-    for (let y = 0; y < H; y++) {
-      const f = (y / H) * gy, j0 = Math.floor(f), t0 = f - j0, ty = t0 * t0 * (3 - 2 * t0);
-      const r0 = j0 * gx, r1 = (wrapY ? (j0 + 1) % gy : j0 + 1) * gx;
-      const row = y * W;
-      for (let x = 0; x < W; x++) {
-        const a = grid[r0 + ix0[x]], b = grid[r0 + ix1[x]];
-        const top = a + (b - a) * fxs[x];
-        const c = grid[r1 + ix0[x]], d = grid[r1 + ix1[x]];
-        const bot = c + (d - c) * fxs[x];
-        out[row + x] += amp * (top + (bot - top) * ty);
-      }
-    }
-    norm += amp; amp *= 0.5; cx *= 2;
-  }
-  for (let i = 0; i < out.length; i++) out[i] /= norm;
-  return out;
-}
-// Tangent-space normal map from a height field in metres (canvas y runs down,
-// texture v runs up). Wraps in x; in y only if wrapY.
-function _normalCanvasFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY) {
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.createImageData(W, H), d = img.data;
-  const sx = pxPerMX / 2, sy = pxPerMY / 2;
-  for (let y = 0; y < H; y++) {
-    const yu = y > 0 ? y - 1 : (wrapY ? H - 1 : 0);
-    const yd = y < H - 1 ? y + 1 : (wrapY ? 0 : H - 1);
-    for (let x = 0; x < W; x++) {
-      const xl = x > 0 ? x - 1 : W - 1, xr = x < W - 1 ? x + 1 : 0;
-      const nx = -(h[y * W + xr] - h[y * W + xl]) * sx;
-      const ny = -(h[yu * W + x] - h[yd * W + x]) * sy;
-      const il = 1 / Math.sqrt(nx * nx + ny * ny + 1);
-      const i = (y * W + x) * 4;
-      d[i] = (nx * il * 0.5 + 0.5) * 255;
-      d[i + 1] = (ny * il * 0.5 + 0.5) * 255;
-      d[i + 2] = (il * 0.5 + 0.5) * 255;
-      d[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  return c;
-}
-function _repeatTex(canvas) {
-  const t = new THREE.CanvasTexture(canvas);
-  t.wrapS = THREE.RepeatWrapping;
-  t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  return t;
-}
-
-// Coursed ashlar generator: lays out irregular courses of dressed blocks, then
+// Coursed ashlar: lays out irregular courses of dressed blocks, then
 // rasterises colour AND height from that one layout so relief matches colour —
 // recessed mortar joints, rounded + chipped arrises, per-block face tilt and
 // undulation, fine chisel tooling and pitting. Colour stays in one grey family:
 // variation comes only from grain, faint veins, pores and baked joint AO.
-function _genAshlar(o) {
+// o.courseKind picks the course-height distribution ('wall' | 'web' | 'rib').
+// Returns { map, W, H } plus { normal, rough, RW, RH } when o.normals.
+function ashlarPixels(o, rand) {
+  rand = rand || Math.random;
   const W = o.W, H = o.H, pxX = W / o.tileW, pxY = H / o.tileH;
-  const low = _fbmField(W, H, o.tileW * 1.3, 2, o.wrapY);
-  const mid = _fbmField(W, H, o.tileW * 8, 2, o.wrapY);
-  const fine = _fbmField(W, H, o.tileW * 44, 1, o.wrapY);
+  const course = o.courseKind === 'wall' ? function () {
+    const r = rand();
+    if (r < 0.22) return 0.17 + rand() * 0.12;   // thin band
+    if (r < 0.62) return 0.37 + rand() * 0.18;   // medium
+    return 0.58 + rand() * 0.22;                 // tall
+  } : o.courseKind === 'web' ? function () { return 0.19 + rand() * 0.1; }
+    : function () { return 1; };
+  const low = fbmField(W, H, o.tileW * 1.3, 2, o.wrapY, rand);
+  const mid = fbmField(W, H, o.tileW * 8, 2, o.wrapY, rand);
+  const fine = fbmField(W, H, o.tileW * 44, 1, o.wrapY, rand);
   const blocks = [];
   const mk = (x, w, y0, y1) => ({
     x, w, y0, y1,
-    tone: o.tone * (1 + (Math.random() * 2 - 1) * o.toneVar),
-    tx: (Math.random() * 2 - 1) * 0.004, ty: (Math.random() * 2 - 1) * 0.003,
-    freq: (2 * Math.PI) / (0.01 + Math.random() * 0.008),
+    tone: o.tone * (1 + (rand() * 2 - 1) * o.toneVar),
+    tx: (rand() * 2 - 1) * 0.004, ty: (rand() * 2 - 1) * 0.003,
+    freq: (2 * Math.PI) / (0.01 + rand() * 0.008),
   });
   let yM = 0;
   while (yM < o.tileH - 1e-4) {
-    let h = o.course();
+    let h = course();
     if (o.tileH - yM - h < o.minCourse) h = o.tileH - yM;
     const y0 = H - (yM + h) * pxY, y1 = H - yM * pxY;
     const widths = [];
     let x = 0;
-    while (x < W) { const bw = (o.minW + Math.random() * (o.maxW - o.minW)) * pxX; widths.push(bw); x += bw; }
+    while (x < W) { const bw = (o.minW + rand() * (o.maxW - o.minW)) * pxX; widths.push(bw); x += bw; }
     widths[widths.length - 1] -= x - W;    // close the course exactly around the tile
     if (widths.length > 1 && widths[widths.length - 1] < o.minW * pxX * 0.6) {
       const w = widths.pop(); widths[widths.length - 1] += w;
     }
-    let bx = Math.random() * W;
+    let bx = rand() * W;
     for (const bw of widths) {
-      if (h > o.splitMin && Math.random() < o.splitP) {
-        const ym = y0 + (y1 - y0) * (0.4 + Math.random() * 0.2);
+      if (h > o.splitMin && rand() < o.splitP) {
+        const ym = y0 + (y1 - y0) * (0.4 + rand() * 0.2);
         blocks.push(mk(bx, bw, y0, ym), mk(bx, bw, ym, y1));
       } else {
         blocks.push(mk(bx, bw, y0, y1));
@@ -3490,17 +3742,14 @@ function _genAshlar(o) {
     }
     yM += h;
   }
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.createImageData(W, H), px = img.data;
+  const px = new Uint8ClampedArray(W * H * 4);
   const hgt = o.normals ? new Float32Array(W * H) : null;
   // Roughness at half resolution (box-filtered): matte mortar and weathered
   // arrises, slightly smoother dressed faces that catch a soft spot sheen.
   const RW = W >> 1, RH = H >> 1, rgh = o.normals ? new Float32Array(RW * RH) : null;
   const jh = o.joint / 2, bev = o.bevel, depth = o.depth;
   for (const b of blocks) {
-    const ang = (Math.random() * 0.5 + 0.2) * (Math.random() < 0.5 ? 1 : -1) + Math.PI / 2;
+    const ang = (rand() * 0.5 + 0.2) * (rand() < 0.5 ? 1 : -1) + Math.PI / 2;
     const ca = Math.cos(ang) / pxX * b.freq, sa = Math.sin(ang) / pxY * b.freq;
     const stc = Math.cos(ca), sts = Math.sin(ca);
     const ya = Math.max(0, Math.ceil(b.y0 - 0.5)), yb = Math.min(H, Math.ceil(b.y1 - 0.5));
@@ -3547,20 +3796,108 @@ function _genAshlar(o) {
       }
     }
   }
-  ctx.putImageData(img, 0, 0);
-  const out = { map: _repeatTex(c) };
+  const out = { map: px, W, H };
   if (hgt) {
-    out.normalMap = _repeatTex(_normalCanvasFromHeight(hgt, W, H, pxX, pxY, o.wrapY));
-    const rc = document.createElement('canvas');
-    rc.width = RW; rc.height = RH;
-    const rctx = rc.getContext('2d');
-    const rimg = rctx.createImageData(RW, RH), rd = rimg.data;
+    out.normal = normalFromHeight(hgt, W, H, pxX, pxY, o.wrapY);
+    const rd = new Uint8ClampedArray(RW * RH * 4);
     for (let i = 0; i < RW * RH; i++) {
       const v = Math.min(1, rgh[i]) * 255;
       rd[i * 4] = rd[i * 4 + 1] = rd[i * 4 + 2] = v; rd[i * 4 + 3] = 255;
     }
-    rctx.putImageData(rimg, 0, 0);
-    out.roughnessMap = _repeatTex(rc);
+    out.rough = rd; out.RW = RW; out.RH = RH;
+  }
+  return out;
+}
+// Honed stone for the plain painting walls: no joints or pattern at all, just
+// a faint grain and surface undulation so the calm field still reads as stone.
+// Returns { map, normal } at S×S for `tile` metres.
+function honedPixels(S, tile, rand) {
+  rand = rand || Math.random;
+  const low = fbmField(S, S, 2.5, 3, true, rand), mid = fbmField(S, S, 14, 3, true, rand), fine = fbmField(S, S, 90, 2, true, rand);
+  const px = new Uint8ClampedArray(S * S * 4);
+  const hgt = new Float32Array(S * S);
+  for (let p = 0; p < S * S; p++) {
+    const f = fine[p];
+    let L = 244 * (0.955 + 0.05 * low[p] + 0.03 * mid[p]) * (0.985 + 0.03 * f);
+    hgt[p] = (low[p] - 0.5) * 0.003 + (mid[p] - 0.5) * 0.0006;
+    if (f > 0.8) { hgt[p] -= (f - 0.8) * 0.003; L *= 1 - (f - 0.8) * 0.3; }
+    px[p * 4] = L; px[p * 4 + 1] = L; px[p * 4 + 2] = L; px[p * 4 + 3] = 255;
+  }
+  return { map: px, normal: normalFromHeight(hgt, S, S, S / tile, S / tile, true) };
+}
+// Seeded PRNG (mulberry32) — only so tests can ask for deterministic maps.
+function _mulberry32(seed) {
+  let s = seed | 0;
+  return function () {
+    let t = (s += 0x6D2B79F5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function _texgenSeed(kind) {   // tests only: window.__texgenSeeds = { floor: 1, ashlar: 2, … }
+  const s = window.__texgenSeeds && window.__texgenSeeds[kind];
+  return s == null ? undefined : s;
+}
+function _texgenRand(kind) {
+  const s = _texgenSeed(kind);
+  return s == null ? Math.random : _mulberry32(s);
+}
+
+// Main-thread wrappers over the pixel generators for the callers that want a
+// field, a canvas or a CanvasTexture (wood floor, damask, dark ceiling): same
+// bytes as ever.
+function _fbmField(W, H, cellsX, octaves, wrapY) { return fbmField(W, H, cellsX, octaves, wrapY); }
+function _normalCanvasFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY) {
+  return _canvasFromRGBA(normalFromHeight(h, W, H, pxPerMX, pxPerMY, wrapY), W, H);
+}
+function _canvasFromRGBA(data, W, H) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const img = ctx.createImageData(W, H);
+  img.data.set(data);
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+function _repeatTex(canvas) {
+  const t = new THREE.CanvasTexture(canvas);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
+}
+// RGBA bytes → a repeating texture with exactly a CanvasTexture's sampling
+// state (DataTexture's own defaults are nearest, no mips, no flip). The bytes
+// stay referenced in image.data, so a dispose()d map re-uploads when its theme
+// returns, as the canvases did.
+function _repeatTexData(data, W, H) {
+  const pot = (n) => (n & (n - 1)) === 0;
+  if (renderer && !renderer.capabilities.isWebGL2 && !(pot(W) && pot(H))) {
+    // WebGL1 tiles only power-of-two sizes: three resizes a canvas to one but
+    // uploads a DataTexture as-is (clamped, no mips), so keep the canvas path
+    return _repeatTex(_canvasFromRGBA(data, W, H));
+  }
+  const t = new THREE.DataTexture(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), W, H,
+    THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.flipY = true;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  t.needsUpdate = true;
+  return t;
+}
+
+// Coursed ashlar generator (see ashlarPixels), wrapped into textures.
+function _genAshlar(o, rand) { return _wrapAshlar(ashlarPixels(o, rand)); }
+function _wrapAshlar(r) {
+  const out = { map: _repeatTexData(r.map, r.W, r.H) };
+  if (r.normal) {
+    out.normalMap = _repeatTexData(r.normal, r.W, r.H);
+    out.roughnessMap = _repeatTexData(r.rough, r.RW, r.RH);
   }
   return out;
 }
@@ -3573,79 +3910,197 @@ function _genAshlar(o) {
 // (see syncDuomoSurfaces): u = metres / STONE_TILE_W, v = height / LOBBY_H, so
 // the coursing runs level and unbroken across every wall, lintel and reveal.
 let _stoneWallMaps = null;
+function _stoneWallOpts() {
+  return {
+    W: PERF.low ? 768 : 1024, H: PERF.low ? 1536 : 2048, tileW: STONE_TILE_W, tileH: LOBBY_H, wrapY: false, normals: true,
+    courseKind: 'wall',   // thin bands / medium / tall courses
+    minCourse: 0.15, minW: 0.55, maxW: 1.45, splitMin: 0.5, splitP: 0.2,
+    joint: 0.011, bevel: 0.016, depth: 0.009, chip: 0.05, undul: 0.005,
+    tool: 0.00035, grain: 0.0012, pit: 0.02, tone: 131, toneVar: 0.075, mortar: 116, vein: 0.07,
+  };
+}
 function getStoneWallMaps() {
-  if (!_stoneWallMaps) {
-    _stoneWallMaps = _genAshlar({
-      W: PERF.low ? 768 : 1024, H: PERF.low ? 1536 : 2048, tileW: STONE_TILE_W, tileH: LOBBY_H, wrapY: false, normals: true,
-      course() {
-        const r = Math.random();
-        if (r < 0.22) return 0.17 + Math.random() * 0.12;   // thin band
-        if (r < 0.62) return 0.37 + Math.random() * 0.18;   // medium
-        return 0.58 + Math.random() * 0.22;                 // tall
-      },
-      minCourse: 0.15, minW: 0.55, maxW: 1.45, splitMin: 0.5, splitP: 0.2,
-      joint: 0.011, bevel: 0.016, depth: 0.009, chip: 0.05, undul: 0.005,
-      tool: 0.00035, grain: 0.0012, pit: 0.02, tone: 131, toneVar: 0.075, mortar: 116, vein: 0.07,
-    });
-  }
+  if (!_stoneWallMaps) _stoneWallMaps = _genAshlar(_stoneWallOpts(), _texgenRand('ashlar'));
   return _stoneWallMaps;
 }
 function makeStoneWallTexture() { return getStoneWallMaps().map; }
-// Honed stone for the plain painting walls: no joints or pattern at all, just
-// a faint grain and surface undulation so the calm field still reads as stone.
+// Honed stone for the plain painting walls (see honedPixels).
 let _honedStoneMaps = null;
 function getHonedStoneMaps() {
   if (_honedStoneMaps) return _honedStoneMaps;
   const S = 512, tile = 2.0;
-  const low = _fbmField(S, S, 2.5, 3, true), mid = _fbmField(S, S, 14, 3, true), fine = _fbmField(S, S, 90, 2, true);
-  const c = document.createElement('canvas');
-  c.width = S; c.height = S;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const img = ctx.createImageData(S, S), px = img.data;
-  const hgt = new Float32Array(S * S);
-  for (let p = 0; p < S * S; p++) {
-    const f = fine[p];
-    let L = 244 * (0.955 + 0.05 * low[p] + 0.03 * mid[p]) * (0.985 + 0.03 * f);
-    hgt[p] = (low[p] - 0.5) * 0.003 + (mid[p] - 0.5) * 0.0006;
-    if (f > 0.8) { hgt[p] -= (f - 0.8) * 0.003; L *= 1 - (f - 0.8) * 0.3; }
-    px[p * 4] = L; px[p * 4 + 1] = L; px[p * 4 + 2] = L; px[p * 4 + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  _honedStoneMaps = {
-    map: _repeatTex(c),
-    normalMap: _repeatTex(_normalCanvasFromHeight(hgt, S, S, S / tile, S / tile, true)),
+  _honedStoneMaps = _wrapHoned(honedPixels(S, tile, _texgenRand('honed')), S, tile);
+  return _honedStoneMaps;
+}
+function _wrapHoned(r, S, tile) {
+  return {
+    map: _repeatTexData(r.map, S, S),
+    normalMap: _repeatTexData(r.normal, S, S),
     tile,
   };
-  return _honedStoneMaps;
 }
 // Small coursed stone for the vault webbing (u/v in metres / 2.5 by arc length).
 let _vaultWebMap = null;
+function _vaultWebOpts() {
+  return {
+    W: 512, H: 512, tileW: 2.5, tileH: 2.5, wrapY: true, normals: false,
+    courseKind: 'web',    // 0.19–0.29 m courses
+    minCourse: 0.16, minW: 0.32, maxW: 0.72, splitMin: 9, splitP: 0,
+    joint: 0.009, bevel: 0.01, depth: 0.004, chip: 0.03, undul: 0.002,
+    tool: 0, grain: 0, pit: 0.01, tone: 168, toneVar: 0.04, mortar: 150, vein: 0.04,
+  };
+}
 function getVaultWebMap() {
-  if (!_vaultWebMap) {
-    _vaultWebMap = _genAshlar({
-      W: 512, H: 512, tileW: 2.5, tileH: 2.5, wrapY: true, normals: false,
-      course() { return 0.19 + Math.random() * 0.1; },
-      minCourse: 0.16, minW: 0.32, maxW: 0.72, splitMin: 9, splitP: 0,
-      joint: 0.009, bevel: 0.01, depth: 0.004, chip: 0.03, undul: 0.002,
-      tool: 0, grain: 0, pit: 0.01, tone: 168, toneVar: 0.04, mortar: 150, vein: 0.04,
-    }).map;
-  }
+  if (!_vaultWebMap) _vaultWebMap = _genAshlar(_vaultWebOpts(), _texgenRand('vaultWeb')).map;
   return _vaultWebMap;
 }
 // Voussoirs for the ribs, cornice and shafts: one course of dressed blocks
 // (u = metres / 2 along the member, v = across its moulded profile).
 let _vaultRibMap = null;
+function _vaultRibOpts() {
+  return {
+    W: 512, H: 64, tileW: 2.0, tileH: 0.25, wrapY: false, normals: false,
+    courseKind: 'rib',    // a single course
+    minCourse: 0.01, minW: 0.38, maxW: 0.62, splitMin: 9, splitP: 0,
+    joint: 0.007, bevel: 0.012, depth: 0.004, chip: 0.03, undul: 0.002,
+    tool: 0, grain: 0, pit: 0.012, tone: 214, toneVar: 0.07, mortar: 172, vein: 0.05,
+  };
+}
 function getVaultRibMap() {
-  if (!_vaultRibMap) {
-    _vaultRibMap = _genAshlar({
-      W: 512, H: 64, tileW: 2.0, tileH: 0.25, wrapY: false, normals: false,
-      course() { return 1; },
-      minCourse: 0.01, minW: 0.38, maxW: 0.62, splitMin: 9, splitP: 0,
-      joint: 0.007, bevel: 0.012, depth: 0.004, chip: 0.03, undul: 0.002,
-      tool: 0, grain: 0, pit: 0.012, tone: 214, toneVar: 0.07, mortar: 172, vein: 0.05,
-    }).map;
-  }
+  if (!_vaultRibMap) _vaultRibMap = _genAshlar(_vaultRibOpts(), _texgenRand('vaultRib')).map;
   return _vaultRibMap;
+}
+
+// ── Boot-time generation on Web Workers ──
+// The Duomo maps are the heaviest synchronous work in boot (≈0.6–0.8 s of
+// typed-array math on a desktop, 2–3× that on an iPad). startTextureGen()
+// posts them to one or two workers while initScene runs; the bytes come back
+// transferred (not copied) and are wrapped into the very cache objects the
+// lazy getters fill, so getDuomoFloorMaps() etc. simply return them. Any
+// failure — no Worker, a worker error, no reply in time — just leaves the
+// caches empty and the getters generate inline exactly as before. Only what
+// today's boot would generate is started: the saved theme decides.
+const TEXGEN_SRC = "'use strict';\n" +
+  [fbmField, normalFromHeight, duomoFloorPixels, ashlarPixels, honedPixels, _mulberry32].map(String).join('\n') + `
+onmessage = function (e) {
+  const job = e.data, rand = job.seed == null ? Math.random : _mulberry32(job.seed);
+  try {
+    let r;
+    if (job.kind === 'floor') r = duomoFloorPixels(job.px, job.S2, job.pxPerM, rand);
+    else if (job.kind === 'ashlar') r = ashlarPixels(job.o, rand);
+    else r = honedPixels(job.S, job.tile, rand);
+    const out = { id: job.id, ok: true, W: r.W, H: r.H, RW: r.RW, RH: r.RH }, bufs = [];
+    for (const k of ['map', 'normal', 'rough']) if (r[k]) { out[k] = r[k]; bufs.push(r[k].buffer); }
+    postMessage(out, bufs);
+  } catch (err) {
+    postMessage({ id: job.id, ok: false, error: String(err && err.message || err) });
+  }
+};`;
+const TEXGEN_TIMEOUT_MS = 6000;   // past this boot stops waiting; missing maps generate inline (today's timing)
+let _texgen = null;               // { workers, jobs, fallback } while generating; for tests
+function startTextureGen() {
+  const duomo = theme === 'duomo', dark = theme === 'dark';
+  const jobs = [];
+  if (duomo) {
+    const S2 = PERF.low ? 512 : 1024;
+    jobs.push({ kind: 'floor', msg: { kind: 'floor', px: _drawDuomoInlay(S2), S2, pxPerM: S2 / FLOOR_TILE_M },
+      apply(r) { if (!_duomoFloorMaps) _duomoFloorMaps = _wrapFloorMaps(r, S2); } });
+    jobs.push({ kind: 'ashlar', msg: { kind: 'ashlar', o: _stoneWallOpts() },
+      apply(r) { if (!_stoneWallMaps) _stoneWallMaps = _wrapAshlar(r); } });
+    jobs.push({ kind: 'vaultWeb', msg: { kind: 'ashlar', o: _vaultWebOpts() },
+      apply(r) { if (!_vaultWebMap) _vaultWebMap = _wrapAshlar(r).map; } });
+    jobs.push({ kind: 'vaultRib', msg: { kind: 'ashlar', o: _vaultRibOpts() },
+      apply(r) { if (!_vaultRibMap) _vaultRibMap = _wrapAshlar(r).map; } });
+  }
+  if (duomo || dark) {
+    jobs.push({ kind: 'honed', msg: { kind: 'honed', S: 512, tile: 2.0 },
+      apply(r) { if (!_honedStoneMaps) _honedStoneMaps = _wrapHoned(r, 512, 2.0); } });
+  }
+  if (!jobs.length || typeof Worker === 'undefined' || typeof Blob === 'undefined' ||
+      typeof URL === 'undefined' || !URL.createObjectURL) return Promise.resolve();
+  const n = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, jobs.length));
+  const T = _texgen = { workers: [], url: null, jobs, pending: jobs.length, fallback: false, timer: 0, t0: performance.now() };
+  const finish = () => {
+    clearTimeout(T.timer);
+    for (const w of T.workers) { try { w.terminate(); } catch (e) {} }
+    T.workers = [];
+    if (T.url) { try { URL.revokeObjectURL(T.url); } catch (e) {} T.url = null; }
+  };
+  return new Promise(resolve => {
+    const fail = (why) => {
+      if (T.fallback) return;
+      T.fallback = true;            // late replies are ignored; the getters generate inline
+      finish();
+      console.warn('texture workers: ' + why + ' — generating inline');
+      resolve();
+    };
+    try {
+      T.url = URL.createObjectURL(new Blob([TEXGEN_SRC], { type: 'application/javascript' }));
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(T.url);
+        w.onerror = (e) => fail('error' + (e && e.message ? ' (' + e.message + ')' : ''));
+        w.onmessageerror = () => fail('message error');
+        w.onmessage = (e) => {
+          if (T.fallback) return;
+          const r = e.data, job = jobs[r.id];
+          if (!job || job.done) return;
+          if (!r.ok) return fail(r.error);
+          job.done = true;
+          try { job.apply(r); } catch (err) { return fail(String(err)); }
+          if (--T.pending === 0) { T.ms = performance.now() - T.t0; finish(); resolve(); }
+        };
+        T.workers.push(w);
+      }
+      for (let i = 0; i < jobs.length; i++) {
+        const msg = jobs[i].msg, w = T.workers[i % n];
+        msg.id = i; msg.seed = _texgenSeed(jobs[i].kind);
+        try { w.postMessage(msg, msg.px ? [msg.px.buffer] : []); }
+        catch (e) { w.postMessage(msg); }   // no transfer: clone instead
+      }
+      // A slow or starved device: boot goes on and the getters generate inline
+      // whatever is still missing — but the workers keep running, and a reply
+      // that lands later still fills any cache that has not been generated yet
+      // (apply() only ever fills an empty cache), so finished work is not thrown away.
+      T.timer = setTimeout(() => {
+        if (T.pending === 0 || T.fallback) return;
+        T.slow = true;
+        console.warn('texture workers: no reply in ' + TEXGEN_TIMEOUT_MS + ' ms — boot continues, late replies still accepted');
+        resolve();
+      }, TEXGEN_TIMEOUT_MS);
+    } catch (e) {
+      fail(String(e && e.message || e));
+    }
+  });
+}
+
+// ── Boot sequencing ──
+// One macrotask boundary (a MessageChannel message: neither throttled in a
+// hidden tab nor clamped like nested timeouts) so boot runs as a few tasks
+// rather than one multi-second one, letting the texture replies land between.
+const _tickPort = (typeof MessageChannel === 'function') ? new MessageChannel() : null;
+const _tickWaiters = [];
+if (_tickPort) _tickPort.port1.onmessage = () => { const r = _tickWaiters.shift(); if (r) r(); };
+function _tick() {
+  return new Promise(r => {
+    if (_tickPort) { _tickWaiters.push(r); _tickPort.port2.postMessage(0); }
+    else setTimeout(r, 0);
+  });
+}
+// Work boot can put off (the mirror-world arsenal, then the staggered neon
+// plants) runs one job per macrotask once boot is done — independent of
+// whether frames are running yet; runDeferred() flushes all of it
+// synchronously, so enterGallery can make sure the whole set exists before
+// anything is seen or pushed.
+const _deferred = [];
+function _runDeferredJob() {
+  if (_deferred.length) { const job = _deferred.shift(); try { job(); } catch (e) { console.error(e); } }
+  else if (_np.pending.length && !_np.offAt) npBuildNext();
+}
+function _runDeferredSoon() {
+  if (_deferred.length || _np.pending.length) setTimeout(() => { _runDeferredJob(); _runDeferredSoon(); }, 0);
+}
+function runDeferred() {
+  while (_deferred.length || (_np.pending.length && !_np.offAt)) _runDeferredJob();
 }
 
 // Theme-aware texture pickers used by both initial build and applyTheme.
@@ -3870,7 +4325,7 @@ function makeLobbyTitleTexture() {
     const tex = new THREE.CanvasTexture(c);
     tex.needsUpdate = true;
     tex.anisotropy = 4;
-    return tex;
+    return releaseCanvasAfterUpload(tex);
   }
   ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
   ctx.shadowBlur = 14;
@@ -3890,7 +4345,7 @@ function makeLobbyTitleTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* ─── Lobby plaques (Bio + Contact, clickable from inside the gallery) ─── */
@@ -3934,26 +4389,29 @@ function redrawCanvasTextWhenFontsReady() {
     document.fonts.load('300 130px "Cormorant Garamond"'),
     document.fonts.load('500 130px "Cormorant Garamond"'),
     document.fonts.load('italic 400 38px "Cormorant Garamond"'),
-  ]).then(() => {
-    for (const mesh of lobbyPlaques) {
-      const tex = makePlaqueTexture(mesh.userData.label, mesh.userData.sub);
-      if (mesh.material.map) mesh.material.map.dispose();
-      mesh.material.map = tex;
-      mesh.material.needsUpdate = true;
-    }
-    if (lobbyTitleMesh) {
-      const tex = makeLobbyTitleTexture();
-      if (lobbyTitleMesh.material.map) lobbyTitleMesh.material.map.dispose();
-      lobbyTitleMesh.material.map = tex;
-      lobbyTitleMesh.material.needsUpdate = true;
-    }
-    for (const lbl of seriesLabels) {
-      const tex = makeLabelTexture(lbl.name, lbl.subtitle);
-      if (lbl.mesh.material.map) lbl.mesh.material.map.dispose();
-      lbl.mesh.material.map = tex;
-      lbl.mesh.material.needsUpdate = true;
-    }
-  }).catch(() => {});
+  ]).then(rebuildCanvasText).catch(() => {});
+}
+// Bake the plaques, sign and room labels again, as new textures (font
+// arrival; a GL context restore, since the uploaded canvases are emptied).
+function rebuildCanvasText() {
+  for (const mesh of lobbyPlaques) {
+    const tex = makePlaqueTexture(mesh.userData.label, mesh.userData.sub);
+    if (mesh.material.map) mesh.material.map.dispose();
+    mesh.material.map = tex;
+    mesh.material.needsUpdate = true;
+  }
+  if (lobbyTitleMesh) {
+    const tex = makeLobbyTitleTexture();
+    if (lobbyTitleMesh.material.map) lobbyTitleMesh.material.map.dispose();
+    lobbyTitleMesh.material.map = tex;
+    lobbyTitleMesh.material.needsUpdate = true;
+  }
+  for (const lbl of seriesLabels) {
+    const tex = makeLabelTexture(lbl.name, lbl.subtitle);
+    if (lbl.mesh.material.map) lbl.mesh.material.map.dispose();
+    lbl.mesh.material.map = tex;
+    lbl.mesh.material.needsUpdate = true;
+  }
 }
 
 function makePlaqueTexture(label, sub) {
@@ -4002,7 +4460,7 @@ function makePlaqueTexture(label, sub) {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* ─── Decorative plants in the lobby ───
@@ -4024,6 +4482,351 @@ let MIRROR_W = 1.5, MIRROR_H = 2.3, MIRROR_Y = 1.75;
 // Duomo lancet head: two arcs of this radius (a drop arch — radius < span)
 // meeting at the top of the glass's bounding box.
 const MIRROR_LANCET_R = 1.0;
+
+/* ─── Portal occlusion culling ───
+   Every painting hangs in a series room that the lobby only sees through the
+   room's one 2.4 × 2.8 m archway, yet three.js only frustum-culls: from the
+   lobby it draws every canvas and frame part behind the walls (21 Victorian
+   frames × 62 k triangles), and the two Reflectors repeat the waste in their
+   nested passes. scene.onBeforeRender fires once per render pass, after the
+   matrices are current and before the render list is built, so for each pass
+   we hide the paintings and frame parts that no straight line from that
+   pass's eye can reach through the (inflated) openings — exact occlusion, so
+   the pixels are identical — and show them again when the outermost pass
+   ends, so raycasts, the launcher and rocketTargets() always see the whole
+   scene between frames. ?cull=0 (or _portal.enabled = false) switches it off. */
+const _portal = {
+  enabled: true,
+  installed: false,
+  depth: 0,              // render passes in flight (restore when it returns to 0)
+  pass: null,            // 'mirror' while the wall mirror re-renders the scene
+  mirrorStale: false,    // a mirror refresh was skipped: force the next one
+  passNo: 0,             // stamps the per-pass arch frustums
+  hidden: [],            // exactly the objects this code set invisible
+  rooms: null,           // series rooms with their archway (room-local coords)
+  lobby: null,           // ROOMS.lobby the room list was built from
+  glass: { open: true, n: new Float64Array(20) },   // mirror-pass glass frustum
+  skip: { open: true, n: new Float64Array(20) },    // glass-behind-wall test
+  warned: false,
+};
+// Scratch for the per-pass path (it allocates nothing).
+const _pv = {
+  eye: new THREE.Vector3(), leye: new THREE.Vector3(), mid: new THREE.Vector3(),
+  a: new THREE.Vector3(), b: new THREE.Vector3(), n: new THREE.Vector3(),
+  c: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()],
+};
+const _pBox = new THREE.Box3(), _pBox2 = new THREE.Box3();
+const _obj3dAfterRender = THREE.Object3D.prototype.onAfterRender;
+
+// Series rooms and their archway, in room-local (worldRoot) coordinates. The
+// layout never changes after buildGallery, so this is built once.
+function portalRooms() {
+  if (_portal.rooms && _portal.lobby === ROOMS.lobby) return _portal.rooms;
+  if (!ROOMS.lobby) return null;
+  const list = [];
+  for (const id of Object.keys(ROOMS)) {
+    if (id === 'lobby') continue;
+    const R = ROOMS[id];
+    const a = R.archways && R.archways[0];
+    if (!a) continue;
+    const ns = (a.dir === 'north' || a.dir === 'south');
+    list.push({
+      id, R,
+      axis: ns ? 'z' : 'x',                                   // wall plane axis
+      at: ns ? (a.dir === 'south' ? R.cz + R.d / 2 : R.cz - R.d / 2)
+             : (a.dir === 'east' ? R.cx + R.w / 2 : R.cx - R.w / 2),
+      center: ns ? (a.worldX !== undefined ? a.worldX : R.cx)
+                 : (a.worldZ !== undefined ? a.worldZ : R.cz),
+      P: { open: true, n: new Float64Array(20) },             // this pass's frustum
+      stamp: -1,
+    });
+  }
+  _portal.rooms = list;
+  _portal.lobby = ROOMS.lobby;
+  return list;
+}
+// Room containing a room-local (x, z), the lobby tested last; null outside all.
+function portalRoomAt(x, z) {
+  const rooms = portalRooms();
+  for (let i = 0; i < rooms.length; i++) {
+    const R = rooms[i].R;
+    if (x >= R.cx - R.w / 2 && x <= R.cx + R.w / 2 && z >= R.cz - R.d / 2 && z <= R.cz + R.d / 2) return rooms[i].id;
+  }
+  const L = ROOMS.lobby;
+  if (x >= L.cx - L.w / 2 && x <= L.cx + L.w / 2 && z >= L.cz - L.d / 2 && z <= L.cz + L.d / 2) return 'lobby';
+  return null;
+}
+// The room whose arch lane holds a room-local eye (within 0.3 m of the wall's
+// mid-plane and the opening's width + 0.3 m): both rooms count as the eye's.
+function portalArchRoomNear(x, z) {
+  const rooms = portalRooms();
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i];
+    const d = r.axis === 'z' ? z - r.at : x - r.at;
+    const s = r.axis === 'z' ? x - r.center : z - r.center;
+    if (Math.abs(d) < 0.3 && Math.abs(s) < ARCH_WIDTH / 2 + 0.3) return r.id;
+  }
+  return null;
+}
+// Frame group → room: its painting's roomId once the texture has arrived,
+// otherwise the wall point placePainting stamped on it (room-local, like
+// the group itself — never a world position, which the mirror world flips).
+function portalFrameRoom(fg) {
+  const u = fg.userData;
+  if (u.roomId) return u.roomId;
+  const x = u.wallX !== undefined ? u.wallX + (u.normalX || 0) * 0.1 : fg.position.x;
+  const z = u.wallZ !== undefined ? u.wallZ + (u.normalZ || 0) * 0.1 : fg.position.z;
+  const rid = portalRoomAt(x, z);
+  if (rid) u.roomId = rid;
+  return rid;
+}
+// Frustum through a rectangle (4 world corners in order) from the eye: four
+// planes through the eye and each edge, facing the rectangle's centre, plus
+// the rectangle's own plane facing away from the eye. Every plane is oriented
+// numerically (the mirror world's x-flip reverses the winding). Degenerate
+// cases — the eye in the rectangle's plane, a vanishing normal — leave the
+// portal fully open (nothing culled through it).
+function portalBuild(P, eye, c) {
+  const n = P.n, mid = _pv.mid, a = _pv.a, b = _pv.b, nv = _pv.n;
+  P.open = true;
+  mid.copy(c[0]).add(c[1]).add(c[2]).add(c[3]).multiplyScalar(0.25);
+  for (let i = 0; i < 4; i++) {
+    a.subVectors(c[i], eye);
+    b.subVectors(c[(i + 1) & 3], eye);
+    nv.crossVectors(a, b);
+    const len = nv.length();
+    if (len < 1e-6) return;
+    nv.divideScalar(len);
+    let d = -nv.dot(eye);
+    const s = nv.dot(mid) + d;
+    if (Math.abs(s) < 1e-9) return;
+    if (s < 0) { nv.negate(); d = -d; }
+    n[i * 4] = nv.x; n[i * 4 + 1] = nv.y; n[i * 4 + 2] = nv.z; n[i * 4 + 3] = d;
+  }
+  a.subVectors(c[1], c[0]);
+  b.subVectors(c[2], c[0]);
+  nv.crossVectors(a, b);
+  const len = nv.length();
+  if (len < 1e-6) return;
+  nv.divideScalar(len);
+  let d = -nv.dot(c[0]);
+  const s = nv.dot(eye) + d;
+  if (Math.abs(s) < 0.02) return;
+  if (s > 0) { nv.negate(); d = -d; }
+  n[16] = nv.x; n[17] = nv.y; n[18] = nv.z; n[19] = d;
+  P.open = false;
+}
+// A box passes when it is not wholly outside any plane (positive-vertex test).
+function portalBoxPasses(box, P) {
+  if (P.open) return true;
+  const n = P.n, mn = box.min, mx = box.max;
+  for (let i = 0; i < 20; i += 4) {
+    const nx = n[i], ny = n[i + 1], nz = n[i + 2];
+    if (nx * (nx >= 0 ? mx.x : mn.x) + ny * (ny >= 0 ? mx.y : mn.y) + nz * (nz >= 0 ? mx.z : mn.z) + n[i + 3] < 0) return false;
+  }
+  return true;
+}
+// The room's archway as a rectangle in its wall's mid-plane, spanning
+// y0..y1 and the opening's width + m each side (room-local → world through
+// worldRoot), then its frustum from the eye.
+function portalBuildArch(r, eye, y0, y1, m) {
+  const c = _pv.c, hw = ARCH_WIDTH / 2 + m;
+  if (r.axis === 'z') {
+    c[0].set(r.center - hw, y0, r.at); c[1].set(r.center + hw, y0, r.at);
+    c[2].set(r.center + hw, y1, r.at); c[3].set(r.center - hw, y1, r.at);
+  } else {
+    c[0].set(r.at, y0, r.center - hw); c[1].set(r.at, y0, r.center + hw);
+    c[2].set(r.at, y1, r.center + hw); c[3].set(r.at, y1, r.center - hw);
+  }
+  if (worldRoot) for (let i = 0; i < 4; i++) c[i].applyMatrix4(worldRoot.matrixWorld);
+  portalBuild(r.P, eye, c);
+}
+// World AABB of an object and everything under it (fires are children of
+// their painting, outline shells of their frame mesh). False when any part
+// has no bounding box — that object stays visible.
+let _sbFirst = true, _sbOk = true;
+function _portalSubtreeBox(o, box) {
+  const g = o.geometry;
+  if (g) {
+    if (g.boundingBox === null) g.computeBoundingBox();
+    if (!g.boundingBox || g.boundingBox.isEmpty()) { _sbOk = false; return; }
+    _pBox2.copy(g.boundingBox).applyMatrix4(o.matrixWorld);
+    if (_sbFirst) { box.copy(_pBox2); _sbFirst = false; } else box.union(_pBox2);
+  }
+  const ch = o.children;
+  for (let i = 0; i < ch.length && _sbOk; i++) _portalSubtreeBox(ch[i], box);
+}
+function portalSubtreeBox(o, box) {
+  _sbFirst = true; _sbOk = true;
+  _portalSubtreeBox(o, box);
+  return _sbOk && !_sbFirst;
+}
+// Marks an object once it has really been drawn (not the bloom depth
+// pre-pass): until then it is never culled, so geometry and texture uploads
+// still happen the first time it is in view, exactly as before.
+function _portalDrawnHook(renderer, scene) {
+  if (scene.overrideMaterial === null) this.userData._portalDrawn = true;
+}
+// Show everything this code hid (and nothing else).
+function portalRestore() {
+  const h = _portal.hidden;
+  for (let i = 0; i < h.length; i++) h[i].visible = true;
+  h.length = 0;
+}
+// Per-pass state shared by portalCullForCamera and portalConsider.
+const _pp = { kind: 'main', openLobby: true, openRoom: null, y0: 0, y1: 0, m: 0, glass: false, warnBox: false };
+function portalRoomFrustum(rid) {
+  const rooms = _portal.rooms;
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i];
+    if (r.id !== rid) continue;
+    if (r.stamp !== _portal.passNo) { portalBuildArch(r, _pv.eye, _pp.y0, _pp.y1, _pp.m); r.stamp = _portal.passNo; }
+    return r.P;
+  }
+  return null;
+}
+function portalConsider(o, rid) {
+  if (!o.visible || !rid) return;
+  if (o.onAfterRender !== _portalDrawnHook) {
+    if (o.onAfterRender !== _obj3dAfterRender) return;   // someone else's hook: leave it
+    o.onAfterRender = _portalDrawnHook;
+  }
+  if (!o.userData._portalDrawn) return;
+  const box = _pBox;
+  if (!portalSubtreeBox(o, box)) return;
+  if (box.max.x - box.min.x > 5 || box.max.y - box.min.y > 5 || box.max.z - box.min.z > 5) {
+    if (!_portal.warned) { _portal.warned = true; console.warn('portal culling: oversized bounding box, object left visible', o); }
+    return;
+  }
+  box.expandByScalar(0.05);
+  let pass = true;
+  if (_pp.glass) pass = portalBoxPasses(box, _portal.glass);
+  const own = rid === 'lobby' ? _pp.openLobby : rid === _pp.openRoom;
+  if (pass && !own) {
+    if (rid !== 'lobby') { const P = portalRoomFrustum(rid); pass = !P || portalBoxPasses(box, P); }
+    if (pass && !_pp.openLobby) { const P = portalRoomFrustum(_pp.openRoom); pass = !P || portalBoxPasses(box, P); }
+  }
+  if (!pass) { o.visible = false; _portal.hidden.push(o); }
+}
+// Cull for one render pass. The main pass uses the arch openings; the floor
+// reflection (fx.js, eye mirrored below the floor) each opening joined with
+// its mirror image below the floor, widened for the shader's blur; the wall
+// mirror additionally the glass outline from its virtual eye. Any other
+// camera culls nothing.
+function portalCullForCamera(cam) {
+  portalRestore();
+  if (!_portal.enabled || !camera || !portalRooms()) return;
+  const eye = _pv.eye.setFromMatrixPosition(cam.matrixWorld);
+  let kind;
+  if (cam === camera) kind = 'main';
+  else if (_portal.pass === 'mirror') kind = 'mirror';
+  else if (eye.y < 0) kind = 'floor';
+  else return;
+  const pe = cam.projectionMatrix.elements;
+  // the wider half-angle of the view: tan(hfov / 2) or tan(vfov / 2)
+  const tanH = Math.max(pe[0] ? 1 / Math.abs(pe[0]) : 1, pe[5] ? 1 / Math.abs(pe[5]) : 1);
+  _pp.kind = kind;
+  _pp.glass = false;
+  _portal.passNo++;
+  const leye = _pv.leye.copy(eye);
+  if (worldRoot) worldRoot.worldToLocal(leye);
+  if (kind === 'mirror') {
+    // Ripples warp the sampled reflection anywhere across the glass: cull nothing.
+    const U = mirrorMesh && mirrorMesh.material && mirrorMesh.material.uniforms;
+    if (!U || !U.uCount || U.uCount.value > 0) return;
+    const g = mirrorMesh.geometry;
+    if (g.boundingBox === null) g.computeBoundingBox();
+    if (!g.boundingBox || g.boundingBox.isEmpty()) return;
+    const gb = _pBox.copy(g.boundingBox).applyMatrix4(mirrorMesh.matrixWorld);
+    if (gb.max.x - gb.min.x > 0.05) return;                  // not a plane x = const
+    const gx = (gb.min.x + gb.max.x) / 2;
+    const mg = 0.05 + 0.01 * tanH * Math.abs(eye.x - gx);     // a few RT texels
+    const c = _pv.c;
+    c[0].set(gx, gb.min.y - mg, gb.min.z - mg); c[1].set(gx, gb.min.y - mg, gb.max.z + mg);
+    c[2].set(gx, gb.max.y + mg, gb.max.z + mg); c[3].set(gx, gb.max.y + mg, gb.min.z - mg);
+    portalBuild(_portal.glass, eye, c);
+    if (_portal.glass.open) return;
+    _pp.glass = true;
+    // The virtual eye stands behind the glass: everything it sees passes
+    // through the glass into the lobby, then through the arches.
+    _pp.openLobby = true; _pp.openRoom = null;
+  } else {
+    const rid = portalRoomAt(leye.x, leye.z) || 'lobby';
+    _pp.openLobby = rid === 'lobby';
+    _pp.openRoom = _pp.openLobby ? null : rid;
+    const near = portalArchRoomNear(leye.x, leye.z);
+    if (near) { _pp.openLobby = true; _pp.openRoom = near; }
+  }
+  if (kind === 'floor') {
+    // Doubled rectangle: a line from the sunken eye crosses a wall plane once,
+    // either above the floor (the real opening) or below it (the opening's
+    // reflection). Margin covers the 0.004-uv disk blur plus a texel.
+    let dist = 0;
+    const rooms = _portal.rooms;
+    for (let i = 0; i < rooms.length; i++) {
+      const r = rooms[i];
+      dist = Math.max(dist, Math.abs((r.axis === 'z' ? leye.z : leye.x) - r.at));
+    }
+    _pp.m = 0.1 + 0.02 * tanH * dist;
+    _pp.y0 = -(ARCH_HEIGHT + _pp.m); _pp.y1 = ARCH_HEIGHT + _pp.m;
+  } else {
+    _pp.m = 0.05; _pp.y0 = -0.05; _pp.y1 = ARCH_HEIGHT + 0.05;
+  }
+  for (let i = 0; i < paintingMeshes.length; i++) {
+    const p = paintingMeshes[i], rid = p.userData.roomId;
+    const fg = p.userData.frameGroup;
+    if (fg && rid && !fg.userData.roomId) fg.userData.roomId = rid;
+    portalConsider(p, rid);
+  }
+  for (let i = 0; i < paintingFrames.length; i++) {
+    const fg = paintingFrames[i], rid = portalFrameRoom(fg), ch = fg.children;
+    for (let j = 0; j < ch.length; j++) portalConsider(ch[j], rid);
+  }
+}
+// Is the wall mirror's glass hidden behind a series-room wall from this
+// camera? Then its reflection cannot be seen and the re-render is skipped.
+function portalMirrorHidden(cam) {
+  if (!_portal.enabled || !mirrorMesh || !portalRooms()) return false;
+  const eye = _pv.eye.setFromMatrixPosition(cam.matrixWorld);
+  const leye = _pv.leye.copy(eye);
+  if (worldRoot) worldRoot.worldToLocal(leye);
+  const rid = portalRoomAt(leye.x, leye.z);
+  if (!rid || rid === 'lobby' || portalArchRoomNear(leye.x, leye.z)) return false;
+  const rooms = _portal.rooms;
+  let r = null;
+  for (let i = 0; i < rooms.length; i++) if (rooms[i].id === rid) r = rooms[i];
+  if (!r) return false;
+  const g = mirrorMesh.geometry;
+  if (g.boundingBox === null) g.computeBoundingBox();
+  if (!g.boundingBox || g.boundingBox.isEmpty()) return false;
+  const saveP = r.P;
+  r.P = _portal.skip;
+  portalBuildArch(r, eye, -0.05, ARCH_HEIGHT + 0.05, 0.05);
+  r.P = saveP;
+  if (_portal.skip.open) return false;
+  _pBox.copy(g.boundingBox).applyMatrix4(mirrorMesh.matrixWorld).expandByScalar(0.05);
+  return !portalBoxPasses(_pBox, _portal.skip);
+}
+function installPortalCulling() {
+  if (_portal.installed || !scene) return;
+  _portal.installed = true;
+  try { if (new URLSearchParams(location.search).get('cull') === '0') _portal.enabled = false; } catch (e) {}
+  const before = scene.onBeforeRender, after = scene.onAfterRender;
+  scene.onBeforeRender = function (r, s, cam, rt) {
+    before.call(this, r, s, cam, rt);
+    // A main-camera render is always outermost: whatever an aborted pass left
+    // hidden comes back here.
+    if (cam === camera || _portal.depth === 0) { _portal.depth = 0; portalRestore(); }
+    _portal.depth++;
+    try { portalCullForCamera(cam); }
+    catch (e) { portalRestore(); _portal.enabled = false; console.warn('portal culling disabled:', e); }
+  };
+  scene.onAfterRender = function (r, s, cam) {
+    if (--_portal.depth <= 0) { _portal.depth = 0; portalRestore(); }
+    after.call(this, r, s, cam);
+  };
+}
+
 function buildMirror() {
   const lobby = ROOMS.lobby;
   const wallX = lobby.cx + lobby.w / 2 - WALL_THICKNESS / 2;  // inner face of east wall
@@ -4149,15 +4952,20 @@ function buildMirror() {
       color: 0x9aa0a0,
       shader: rippleShader,
     });
-    // The reflection is a second full render of the scene. On the lean tier it
-    // refreshes every other frame — the last one stays on the glass between.
-    if (PERF.low) {
-      const reflect = mirrorMesh.onBeforeRender;
-      mirrorMesh.onBeforeRender = function (...args) {
-        if (_frameNo & 1) return;
-        reflect.apply(this, args);
-      };
-    }
+    // The reflection is a second full render of the scene. It is skipped
+    // outright while the glass is hidden behind a series-room wall (nothing
+    // samples the stale image), and on the lean tier it refreshes every other
+    // frame — the last one stays on the glass between; a skip forces the next
+    // refresh so the glass never shows up with a view from another room.
+    // While it renders, portalCullForCamera culls through the glass too.
+    const reflect = mirrorMesh.onBeforeRender;
+    mirrorMesh.onBeforeRender = function (r, s, cam) {
+      if (cam === camera && portalMirrorHidden(cam)) { _portal.mirrorStale = true; return; }
+      if (PERF.low && (_frameNo & 1) && !_portal.mirrorStale) return;
+      _portal.mirrorStale = false;
+      _portal.pass = 'mirror';
+      try { reflect.call(this, r, s, cam); } finally { _portal.pass = null; }
+    };
   } else {
     mirrorMesh = new THREE.Mesh(
       makeMirrorGlassGeometry(glassKind),
@@ -4176,6 +4984,7 @@ function buildMirror() {
   scene.add(g);
   mirrorSurround.group = g;
   syncMirrorSurround();
+  installPortalCulling();
 }
 
 /* ─── Mirror surround ─── */
@@ -4973,11 +5782,12 @@ function handleMirrorPush(hitPoint) {
     tapWalkTarget = { x: c.x, z: c.z, faceX: MIRROR_PX, faceZ: MIRROR_Z };
     return;
   }
-  // Use the push GESTURE to unlock/resume audio and pre-decode the reversed
-  // track, so the backwards music can actually sound when we cross (iOS
-  // requires AudioContext activation from within a user gesture).
+  // Use the push GESTURE to unlock/resume audio and start the reversed track
+  // loading (and bless its element), so the backwards music can actually sound
+  // when we cross (iOS requires AudioContext activation from within a user
+  // gesture, and a media element must have played in one).
   ensureAudio();
-  if (localStorage.getItem('musicMuted') !== 'true') preloadReversedMusic();
+  if (localStorage.getItem('musicMuted') !== 'true') primeReversedMusic();
   const now = performance.now();
   if (now - _mirrorPush.last > 6000) _mirrorPush.count = 0;
   _mirrorPush.last = now;
@@ -5206,6 +6016,7 @@ function buildLobbyPlants() {
     group.position.set(pos.x, 0, pos.z);
     // Slight rotation for variety
     group.rotation.y = Math.random() * Math.PI * 2;
+    group.userData.deferCompile = 'plants';   // shader queue: last while a theme hides them
     scene.add(group);
     lobbyPlants.push(group);
   }
@@ -5451,7 +6262,7 @@ function makeLabelTexture(label, subtitle) {
     }
     const tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
-    return tex;
+    return releaseCanvasAfterUpload(tex);
   }
   ctx.fillText(label.toUpperCase(), c.width / 2, yMain);
   // Same-colour stroke so the serif keeps its body when mipmapped across
@@ -5473,7 +6284,7 @@ function makeLabelTexture(label, subtitle) {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* ─── Track lighting bars (visual only, ceiling) ─── */
@@ -6195,58 +7006,95 @@ function syncContactAO() {
 // Additive, very low opacity, fading out well above the art so it can never
 // veil a painting. One mesh for all beams, one Points cloud for all motes; the
 // motion is entirely in the vertex shader (a single time uniform per frame).
-const _atmo = { beams: null, dust: null, spots: 0, time: { value: 0 } };
-function _buildDuomoAtmosphere() {
-  const spots = lightingRefs.spots;
-  const bp = [], bt = [], bi = [], dp = [], dr = [];
-  const SEG = 18;
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), dir = new THREE.Vector3();
-  const u = new THREE.Vector3(), v = new THREE.Vector3();
-  for (const s of spots) {
-    a.copy(s.position); b.copy(s.target.position);
-    dir.subVectors(b, a);
-    const len = dir.length();
-    dir.normalize();
-    u.set(0, 1, 0).cross(dir);
-    if (u.lengthSq() < 1e-4) u.set(1, 0, 0);
-    u.normalize(); v.crossVectors(dir, u).normalize();
-    const r0 = 0.07, r1 = len * Math.tan(0.2);
-    const RINGS = 6;
-    const base = bp.length / 3;
-    for (let k = 0; k <= RINGS; k++) {
-      const t = k / RINGS, rr = r0 + (r1 - r0) * t;
-      for (let i = 0; i <= SEG; i++) {
-        const ang = (i / SEG) * Math.PI * 2;
-        const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
-        bp.push(a.x + dir.x * len * t + u.x * cx + v.x * cy,
-                a.y + dir.y * len * t + u.y * cx + v.y * cy,
-                a.z + dir.z * len * t + u.z * cx + v.z * cy);
-        bt.push(t, a.x + dir.x * len * t, a.y + dir.y * len * t, a.z + dir.z * len * t);
-      }
+// Spot i of lightingRefs.spots owns a fixed block of both buffers (133 beam
+// vertices, 16 motes), so when the lean tier's spotlight pool re-seats a light
+// its block is rewritten in place: no geometry or material is rebuilt and the
+// two shader programs stay compiled while walking. The materials live for the
+// whole Duomo visit and go only on leaving the theme.
+const _atmo = { beams: null, dust: null, spots: 0, time: { value: 0 },
+                beamMat: null, dustMat: null,   // created on the first build, reused by every later one
+                dirty: false,                   // a pool re-seat arrived before the systems existed
+                keys: null,                     // per spot: lamp + target position (6 floats) as last written
+                rnd: null };                    // per mote: the four random draws of its placement
+const _ATMO = { SEG: 18, RINGS: 6, VERTS: 7 * 19, MOTES: 16,
+                a: new THREE.Vector3(), b: new THREE.Vector3(), dir: new THREE.Vector3(),
+                u: new THREE.Vector3(), v: new THREE.Vector3() };
+// Writes spot i's share of the beam + mote buffers. The build and the in-place
+// refresh both come through here, so a refreshed slot is bit-identical to a
+// fresh build. A mote keeps its random draws (_atmo.rnd) for the session: a
+// re-seated light carries the same motes to its new beam instead of re-rolling.
+function _writeDuomoAtmosphereSlot(i, s, bp, bt, dp, dr) {
+  const { SEG, RINGS, VERTS, MOTES, a, b, dir, u, v } = _ATMO;
+  a.copy(s.position); b.copy(s.target.position);
+  dir.subVectors(b, a);
+  const len = dir.length();
+  dir.normalize();
+  u.set(0, 1, 0).cross(dir);
+  if (u.lengthSq() < 1e-4) u.set(1, 0, 0);
+  u.normalize(); v.crossVectors(dir, u).normalize();
+  const r0 = 0.07, r1 = len * Math.tan(0.2);
+  let o = i * VERTS * 3, q = i * VERTS * 4;
+  for (let k = 0; k <= RINGS; k++) {
+    const t = k / RINGS, rr = r0 + (r1 - r0) * t;
+    for (let j = 0; j <= SEG; j++) {
+      const ang = (j / SEG) * Math.PI * 2;
+      const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
+      bp[o++] = a.x + dir.x * len * t + u.x * cx + v.x * cy;
+      bp[o++] = a.y + dir.y * len * t + u.y * cx + v.y * cy;
+      bp[o++] = a.z + dir.z * len * t + u.z * cx + v.z * cy;
+      bt[q++] = t; bt[q++] = a.x + dir.x * len * t; bt[q++] = a.y + dir.y * len * t; bt[q++] = a.z + dir.z * len * t;
     }
+  }
+  const rnd = _atmo.rnd;
+  o = i * MOTES * 3; q = i * MOTES * 2;
+  for (let m = 0; m < MOTES; m++) {
+    const r = (i * MOTES + m) * 4;
+    const t = 0.12 + rnd[r] * 0.5, rr = (r0 + (r1 - r0) * t) * Math.sqrt(rnd[r + 1]) * 0.9;
+    const ang = rnd[r + 2] * Math.PI * 2;
+    const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
+    dp[o++] = a.x + dir.x * len * t + u.x * cx + v.x * cy;
+    dp[o++] = a.y + dir.y * len * t + u.y * cx + v.y * cy;
+    dp[o++] = a.z + dir.z * len * t + u.z * cx + v.z * cy;
+    dr[q++] = rnd[r + 3] * 100; dr[q++] = t;
+  }
+}
+// Records spot i's lamp + target position; true when either moved since the last record.
+function _atmoSlotKey(i, s) {
+  const k = _atmo.keys, o = i * 6, p = s.position, t = s.target.position;
+  if (k[o] === p.x && k[o + 1] === p.y && k[o + 2] === p.z &&
+      k[o + 3] === t.x && k[o + 4] === t.y && k[o + 5] === t.z) return false;
+  k[o] = p.x; k[o + 1] = p.y; k[o + 2] = p.z; k[o + 3] = t.x; k[o + 4] = t.y; k[o + 5] = t.z;
+  return true;
+}
+function _buildDuomoAtmosphere() {
+  const spots = lightingRefs.spots, n = spots.length;
+  const { SEG, RINGS, VERTS, MOTES } = _ATMO;
+  if (!_atmo.rnd || _atmo.rnd.length !== n * MOTES * 4) {
+    _atmo.rnd = new Float64Array(n * MOTES * 4);
+    for (let k = 0; k < _atmo.rnd.length; k++) _atmo.rnd[k] = Math.random();
+  }
+  const bp = new Float32Array(n * VERTS * 3), bt = new Float32Array(n * VERTS * 4), bi = [];
+  const dp = new Float32Array(n * MOTES * 3), dr = new Float32Array(n * MOTES * 2);
+  _atmo.keys = new Float64Array(n * 6);
+  for (let i = 0; i < n; i++) {
+    _atmoSlotKey(i, spots[i]);
+    _writeDuomoAtmosphereSlot(i, spots[i], bp, bt, dp, dr);
+    const base = i * VERTS;
     for (let k = 0; k < RINGS; k++) {
-      for (let i = 0; i < SEG; i++) {
-        const p = base + k * (SEG + 1) + i, q = p + SEG + 1;
+      for (let j = 0; j < SEG; j++) {
+        const p = base + k * (SEG + 1) + j, q = p + SEG + 1;
         bi.push(p, q, p + 1, p + 1, q, q + 1);
       }
     }
-    for (let m = 0; m < 16; m++) {
-      const t = 0.12 + Math.random() * 0.5, rr = (r0 + (r1 - r0) * t) * Math.sqrt(Math.random()) * 0.9;
-      const ang = Math.random() * Math.PI * 2;
-      const cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
-      dp.push(a.x + dir.x * len * t + u.x * cx + v.x * cy,
-              a.y + dir.y * len * t + u.y * cx + v.y * cy,
-              a.z + dir.z * len * t + u.z * cx + v.z * cy);
-      dr.push(Math.random() * 100, t);
-    }
   }
-  const col = new THREE.Color(T().spot.color);
+  const col = T().spot.color;
   const bg = new THREE.BufferGeometry();
-  bg.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
-  bg.setAttribute('aAxis', new THREE.Float32BufferAttribute(bt, 4));
+  bg.setAttribute('position', new THREE.BufferAttribute(bp, 3));
+  bg.setAttribute('aAxis', new THREE.BufferAttribute(bt, 4));
   bg.setIndex(bi);
-  const beamMat = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: col }, uOpacity: { value: 0.07 } },
+  if (_atmo.beamMat) _atmo.beamMat.uniforms.uColor.value.set(col);
+  else _atmo.beamMat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(col) }, uOpacity: { value: 0.07 } },
     vertexShader: [
       'attribute vec4 aAxis;',
       'varying float vT; varying vec3 vN; varying vec3 vV;',
@@ -6270,12 +7118,13 @@ function _buildDuomoAtmosphere() {
     ].join('\n'),
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
   });
-  _atmo.beams = new THREE.Mesh(bg, beamMat);
+  _atmo.beams = new THREE.Mesh(bg, _atmo.beamMat);
   const dg = new THREE.BufferGeometry();
-  dg.setAttribute('position', new THREE.Float32BufferAttribute(dp, 3));
-  dg.setAttribute('aSeed', new THREE.Float32BufferAttribute(dr, 2));
-  const dustMat = new THREE.ShaderMaterial({
-    uniforms: { uTime: _atmo.time, uColor: { value: col }, uScale: { value: 1 }, uGain: { value: 0.5 } },
+  dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+  dg.setAttribute('aSeed', new THREE.BufferAttribute(dr, 2));
+  if (_atmo.dustMat) _atmo.dustMat.uniforms.uColor.value.set(col);
+  else _atmo.dustMat = new THREE.ShaderMaterial({
+    uniforms: { uTime: _atmo.time, uColor: { value: new THREE.Color(col) }, uScale: { value: 1 }, uGain: { value: 0.5 } },
     vertexShader: [
       'attribute vec2 aSeed;',
       'uniform float uTime; uniform float uScale;',
@@ -6299,24 +7148,54 @@ function _buildDuomoAtmosphere() {
     ].join('\n'),
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
-  _atmo.dust = new THREE.Points(dg, dustMat);
+  _atmo.dust = new THREE.Points(dg, _atmo.dustMat);
   _atmo.beams.renderOrder = 3; _atmo.dust.renderOrder = 3;   // after beach-hole discs (2.5)
   _atmo.beams.frustumCulled = false; _atmo.dust.frustumCulled = false;
   scene.add(_atmo.beams); scene.add(_atmo.dust);
-  _atmo.spots = spots.length;
+  _atmo.spots = n;
+  _atmo.dirty = false;
 }
-function _teardownDuomoAtmosphere() {
+// Lean tier: a pooled spotlight was re-seated on another painting. Rewrites
+// only the slots whose lamp or target moved; the index, the materials and
+// their programs are untouched. A no-op until the systems exist or while the
+// spot count differs (updateDuomoAtmosphere rebuilds for that).
+function _refreshDuomoAtmosphere() {
+  const spots = lightingRefs.spots;
+  if (!_atmo.beams || !spots || spots.length !== _atmo.spots) return;
+  _atmo.dirty = false;
+  const bg = _atmo.beams.geometry, dg = _atmo.dust.geometry;
+  const bp = bg.attributes.position, bt = bg.attributes.aAxis, dp = dg.attributes.position, dr = dg.attributes.aSeed;
+  let moved = false;
+  for (let i = 0; i < spots.length; i++) {
+    if (!_atmoSlotKey(i, spots[i])) continue;
+    _writeDuomoAtmosphereSlot(i, spots[i], bp.array, bt.array, dp.array, dr.array);
+    moved = true;
+  }
+  if (!moved) return;
+  bp.needsUpdate = bt.needsUpdate = dp.needsUpdate = dr.needsUpdate = true;
+  bg.boundingSphere = bg.boundingBox = null;
+  dg.boundingSphere = dg.boundingBox = null;
+}
+// Drops the meshes (a rebuild follows); with disposeMats the materials too,
+// which releases their two shader programs — only on leaving the Duomo.
+function _teardownDuomoAtmosphere(disposeMats) {
   for (const k of ['beams', 'dust']) {
     const m = _atmo[k];
     if (!m) continue;
-    scene.remove(m); m.geometry.dispose(); m.material.dispose();
+    scene.remove(m); m.geometry.dispose();
     _atmo[k] = null;
   }
   _atmo.spots = 0;
+  if (!disposeMats) return;
+  for (const k of ['beamMat', 'dustMat']) {
+    if (_atmo[k]) _atmo[k].dispose();
+    _atmo[k] = null;
+  }
 }
 function syncDuomoAtmosphere() {
   const spots = lightingRefs.spots ? lightingRefs.spots.length : 0;
-  if (theme !== 'duomo' || spots !== _atmo.spots) _teardownDuomoAtmosphere();
+  if (theme !== 'duomo') _teardownDuomoAtmosphere(true);
+  else if (spots !== _atmo.spots) _teardownDuomoAtmosphere();
   if (theme === 'duomo' && !_atmo.beams && spots > 0 && scene) _buildDuomoAtmosphere();
   syncDuomoLightingGain();
 }
@@ -6340,6 +7219,8 @@ function updateDuomoAtmosphere(now) {
       wallMeshes.length !== _uvSyncedWalls) {
     _syncSurfaceUVs();
     syncDuomoAtmosphere();
+  } else if (_atmo.dirty) {
+    _refreshDuomoAtmosphere();     // a pool re-seat the systems missed
   }
   _atmo.time.value = now;
   if (_atmo.dust) _atmo.dust.material.uniforms.uScale.value = renderer.getPixelRatio() * window.innerHeight / 760;
@@ -6998,6 +7879,12 @@ function addVictorianMesh(group, pW, pH) {
   const fc = group.userData.frameColor;
   const isLineDark = (fc === 'linework-dark');
   const isLine = (fc === 'linework' || isLineDark);
+  // The line-art maps are derived from the GLB's baseColor map on first use
+  // (no default painting needs them) — once only, even if the build fails.
+  if (isLine && !_victorianLineTexTried && _victorianTexMat && _victorianTexMat.map) {
+    _victorianLineTexTried = true;
+    buildVictorianLineTextures(_victorianTexMat.map);
+  }
   const lineTex = isLineDark ? _victorianLineTexDark : _victorianLineTex;
   const useTexture = (fc === 'painted') && _victorianTexMat;
   const useLineTex = isLine && lineTex;       // line art from the carved detail
@@ -7038,9 +7925,16 @@ function addVictorianMesh(group, pW, pH) {
   // opening zone (X: |x|<openHX, Y: rail band) so that AFTER the fixed world
   // scale, the opening equals pW × pH. Border/ornament vertices outside the
   // opening zone are shifted rigidly (never scaled), preserving their size.
-  const geo = _victorianGeo.clone();
-  const pos = geo.attributes.position;
+  //
+  // The index and uv buffers never change, so every frame shares the cached
+  // geometry's attribute objects (one GPU upload for all of them); only the
+  // stretched positions — and the normals recomputed from them — are per
+  // frame. rebuildSingleFrame detaches the shared buffers before disposing.
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(_victorianGeo.index);
+  if (_victorianGeo.attributes.uv) geo.setAttribute('uv', _victorianGeo.attributes.uv);
   const base = _victorianBasePositions;
+  const out = new Float32Array(base.length);
 
   // Fixed world scale: pick so the side rail (0.588 model units, measured in
   // the straight section of the new mesh) renders at ~0.07 m — a believable
@@ -7101,16 +7995,27 @@ function addVictorianMesh(group, pW, pH) {
     return [nx, ny];
   };
 
-  for (let i = 0; i < pos.count; i++) {
-    const [nx, ny] = stretchXY(base[i*3], base[i*3+1]);
-    pos.setXYZ(i, nx, ny, base[i*3+2]);
+  // stretchXY inlined for the 54k mesh vertices (same branches, same
+  // arithmetic, no per-vertex array allocation).
+  const xScale = wantHX / openHX;
+  const yShift = yExtra / 2;
+  for (let i = 0, n = base.length; i < n; i += 3) {
+    const x = base[i], y = base[i + 1];
+    if (x > openHX)       out[i] = x + xExtraHalf;
+    else if (x < -openHX) out[i] = x - xExtraHalf;
+    else                  out[i] = x * xScale;
+    if (y > bandHi)       out[i + 1] = y + yShift;
+    else if (y < bandLo)  out[i + 1] = y - yShift;
+    else                  out[i + 1] = bandCenter + (y - bandCenter) * bandScale;
+    out[i + 2] = base[i + 2];
   }
-  pos.needsUpdate = true;
+  geo.setAttribute('position', new THREE.BufferAttribute(out, 3));
   geo.computeVertexNormals();
   geo.computeBoundingBox();
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.scale.setScalar(FIXED_SCALE);
+  mesh.userData.sharesVictorianBuffers = true;
 
   // The opening center sits at bandCenter and scales about itself, so it is
   // invariant under the stretch. Shift the mesh so that point lands on the
@@ -7226,6 +8131,44 @@ function buildVictorianLineTextures(srcMap) {
   } catch (e) { /* tainted canvas or no image — fall back to silhouette only */ }
 }
 
+// Resolves with the meshopt decoder (meshopt_decoder.js, started from <head>
+// so it downloads alongside the GLB) once its WebAssembly module is ready.
+// Rejects when it cannot be used — no WebAssembly, script blocked/failed,
+// decoder unsupported — so the caller can fall back to the raw GLB instead of
+// sitting in 'loading' forever.
+let _meshoptReady = null;
+function _ensureMeshopt() {
+  if (_meshoptReady) return _meshoptReady;
+  _meshoptReady = new Promise((resolve, reject) => {
+    if (typeof WebAssembly === 'undefined') { reject(new Error('WebAssembly unavailable')); return; }
+    const done = () => {
+      const D = window.MeshoptDecoder;
+      if (!D) { reject(new Error('meshopt_decoder.js loaded without MeshoptDecoder')); return; }
+      if (D.supported === false) { reject(new Error('MeshoptDecoder unsupported')); return; }
+      Promise.resolve(D.ready).then(() => resolve(D), reject);
+    };
+    if (window.MeshoptDecoder) { done(); return; }
+    if (window.__meshoptLoaded) { done(); return; }   // fired before we listened, without a decoder: falls to the raw file
+    if (window.__meshoptFailed) { reject(new Error('meshopt_decoder.js failed to load')); return; }
+    let s = document.getElementById('meshopt-decoder');
+    if (!s) {   // the <head> snippet did not run (e.g. a stripped copy): inject once
+      s = document.createElement('script');
+      s.id = 'meshopt-decoder'; s.async = true; s.src = 'meshopt_decoder.js';
+      document.head.appendChild(s);
+    }
+    s.addEventListener('load', done);
+    s.addEventListener('error', () => reject(new Error('meshopt_decoder.js failed to load')));
+  });
+  return _meshoptReady;
+}
+
+// Denormalisation divisor for a normalized integer attribute — r128's
+// getX/getY/getZ hand back the raw integers.
+function _normDivisor(arr) {
+  return arr instanceof Int16Array ? 32767 : arr instanceof Uint16Array ? 65535
+       : arr instanceof Int8Array ? 127 : arr instanceof Uint8Array ? 255 : 1;
+}
+
 // Lazy-load the Victorian GLB once; populate all pending frames on success.
 function loadVictorianMesh() {
   if (_victorianLoadState === 'loading' || _victorianLoadState === 'ready') return;
@@ -7236,31 +8179,65 @@ function loadVictorianMesh() {
   }
   _victorianLoadState = 'loading';
   const loader = new THREE.GLTFLoader();
-  loader.load(
-    VICTORIAN_GLB_URL,
-    (gltf) => {
-      let geo = null;
-      gltf.scene.traverse(o => {
-        if (o.isMesh && !geo) {
-          // Keep the GLB's own normals (they carry the baked carving detail);
-          // the textured asset already ships correct smooth normals.
-          geo = o.geometry;
-          // Cache the GLB's PBR material (baked polychrome paint + normal map).
-          // Used when frame color is AUTO; specific colors use a flat material.
-          if (o.material) {
-            _victorianTexMat = o.material;
-            _victorianTexMat.side = THREE.FrontSide;
-            // Derive the line-art edge textures from the painted baseColor map.
-            if (_victorianTexMat.map) buildVictorianLineTextures(_victorianTexMat.map);
-          }
-        }
-      });
-      if (!geo) { _victorianLoadState = 'failed'; return; }
+
+  const onErr = (err) => {
+    console.warn('Victorian GLB failed to load:', err);
+    if (_victorianLoadState === 'loading') _victorianLoadState = 'failed';
+  };
+
+  const onLoad = (gltf) => {
+    try {
+      gltf.scene.updateMatrixWorld(true);
+      let src = null;
+      gltf.scene.traverse(o => { if (o.isMesh && !src) src = o; });
+      if (!src || !src.geometry || !src.geometry.attributes.position) { onErr(new Error('no mesh in the Victorian GLB')); return; }
+      const sg = src.geometry;
+      // The meshopt file carries normalized int16 positions (interleaved —
+      // read through getX/Y/Z, never .array directly) and uint16 uv, with the
+      // dequantisation scale + offset on the node. Bake both into plain
+      // Float32Arrays in the original model units, so VIC_OPEN_* and
+      // FIXED_SCALE keep meaning exactly what they did for the raw file (for
+      // which this is a straight copy: not normalized, identity matrix).
+      const pa = sg.attributes.position;
+      const n = pa.count;
+      const basePos = new Float32Array(n * 3);
+      const pDiv = pa.normalized ? _normDivisor(pa.array) : 1;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < n; i++) {
+        v.set(pa.getX(i), pa.getY(i), pa.getZ(i));
+        if (pDiv !== 1) v.multiplyScalar(1 / pDiv);
+        v.applyMatrix4(src.matrixWorld);
+        basePos[i * 3] = v.x; basePos[i * 3 + 1] = v.y; basePos[i * 3 + 2] = v.z;
+      }
+      const ua = sg.attributes.uv;
+      let uvArr = null;
+      if (ua) {
+        uvArr = new Float32Array(n * 2);
+        const uDiv = ua.normalized ? _normDivisor(ua.array) : 1;
+        for (let i = 0; i < n; i++) { uvArr[i * 2] = ua.getX(i) / uDiv; uvArr[i * 2 + 1] = ua.getY(i) / uDiv; }
+      }
+      // No normals on the cached geometry: every frame recomputes its own
+      // from the stretched positions (as before — the GLB's were never drawn).
+      const geo = new THREE.BufferGeometry();
+      geo.setIndex(sg.index);
+      sg.setIndex(null);   // the index now belongs to the cached geometry
+      geo.setAttribute('position', new THREE.BufferAttribute(basePos, 3));
+      if (uvArr) geo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+      geo.computeBoundingBox();
+      // Cache the GLB's PBR material (baked polychrome paint + normal map).
+      // Used by the "Painted" color; specific colors use a flat material.
+      if (src.material) {
+        _victorianTexMat = src.material;
+        _victorianTexMat.side = THREE.FrontSide;
+        // GLTFLoader hands back a flat-shaded clone when the file has no
+        // NORMAL attribute; the frames carry smooth recomputed normals.
+        _victorianTexMat.flatShading = false;
+        _victorianTexMat.needsUpdate = true;
+      }
       _victorianGeo = geo;
       // Cache the base position array so each painting can build a
       // band-stretched copy (top/bottom ornament fixed, side rails stretch).
-      _victorianBasePositions = geo.attributes.position.array.slice();
-      geo.computeBoundingBox();
+      _victorianBasePositions = basePos;
       const bb = geo.boundingBox;
       _victorianNativeSize = {
         x: bb.max.x - bb.min.x,
@@ -7268,27 +8245,68 @@ function loadVictorianMesh() {
         z: bb.max.z - bb.min.z,
         minY: bb.min.y, maxY: bb.max.y,
       };
+      // Let the loader's decoded buffers and the pre-fetched bytes go.
+      sg.dispose();
+      if (window.__pre) window.__pre.glb = null;
       _victorianLoadState = 'ready';
-      // Populate every pending frame: clear placeholder, add real mesh.
-      for (const p of _victorianPending) {
-        // Remove placeholder children
-        const toRemove = [];
-        p.group.traverse(o => { if (o.userData && o.userData.isVictorianPlaceholder) toRemove.push(o); });
-        for (const o of toRemove) {
-          if (o.geometry) o.geometry.dispose();
-          if (o.material) o.material.dispose();
-          p.group.remove(o);
-        }
-        addVictorianMesh(p.group, p.pW, p.pH);
+      // Populate the pending frames nearest the visitor first, in ~8 ms
+      // slices on a timer (rAF stalls headlessly) so the swap never stalls a
+      // frame. The array object is kept: rebuildSingleFrame / rebuildAllFrames
+      // splice or clear it, which simply ends the chain early.
+      if (_victorianPending.length > 1 && typeof camera !== 'undefined' && camera) {
+        const cp = camera.getWorldPosition(new THREE.Vector3());
+        const w = new THREE.Vector3();
+        const dist = new Map();
+        for (const p of _victorianPending) dist.set(p, p.group.getWorldPosition(w).distanceToSquared(cp));
+        _victorianPending.sort((a, b) => dist.get(a) - dist.get(b));
       }
-      _victorianPending.length = 0;
+      const drain = () => {
+        const t0 = performance.now();
+        while (_victorianPending.length && performance.now() - t0 < 8) {
+          const p = _victorianPending.shift();
+          // Remove placeholder children
+          const toRemove = [];
+          p.group.traverse(o => { if (o.userData && o.userData.isVictorianPlaceholder) toRemove.push(o); });
+          for (const o of toRemove) {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) o.material.dispose();
+            p.group.remove(o);
+          }
+          addVictorianMesh(p.group, p.pW, p.pH);
+        }
+        if (_victorianPending.length) setTimeout(drain, 16);
+      };
+      drain();
+    } catch (e) { onErr(e); }
+  };
+
+  // The <head> pre-fetch usually has the bytes already; its promise is
+  // consumed once (nulled here) so a later retry re-requests the file.
+  const pre = window.__pre && window.__pre.glb;
+  if (window.__pre) window.__pre.glb = null;
+  // A fresh request of the compressed file; if that fails too (an odd decoder
+  // on an odd browser), the uncompressed copy is the last resort.
+  const loadFresh = () => loader.load(VICTORIAN_GLB_URL, onLoad, undefined,
+    () => loader.load(VICTORIAN_GLB_RAW_URL, onLoad, undefined, onErr));
+  _ensureMeshopt().then(
+    (dec) => {
+      loader.setMeshoptDecoder(dec);
+      Promise.resolve(pre).then((buf) => {
+        if (!buf) { loadFresh(); return; }
+        loader.parse(buf, '', onLoad, (err) => {
+          console.warn('Pre-fetched Victorian GLB did not parse; re-requesting:', err);
+          loadFresh();
+        });
+      }, loadFresh);
     },
-    undefined,
     (err) => {
-      console.warn('Victorian GLB failed to load:', err);
-      _victorianLoadState = 'failed';
+      // No usable decoder (no WebAssembly, script blocked…): the compressed
+      // file cannot be parsed, so load the uncompressed copy instead — no
+      // browser is left with placeholder surrounds for the Victorian frames.
+      console.warn('meshopt decoder unavailable, loading the raw Victorian GLB:', err);
+      loader.load(VICTORIAN_GLB_RAW_URL, onLoad, undefined, onErr);
     }
-  );
+  ).catch(onErr);
 }
 
 // ── Lathe profile helpers ──
@@ -7628,7 +8646,19 @@ function rebuildSingleFrame(fg) {
   while (fg.children.length) {
     const c = fg.children[0];
     c.traverse(n => {
-      if (n.geometry && n.geometry !== _victorianGeo) n.geometry.dispose();
+      if (n.geometry && n.geometry !== _victorianGeo) {
+        // Victorian frames share _victorianGeo's index + uv buffers: detach
+        // them first so dispose() only frees this frame's own position and
+        // normal buffers (otherwise the renderer would delete the shared GPU
+        // buffers under every other frame). The Line Art outline shell uses
+        // the same geometry object and is visited after its parent, so its
+        // dispose() is a harmless no-op.
+        if (n.userData && n.userData.sharesVictorianBuffers) {
+          n.geometry.setIndex(null);
+          n.geometry.deleteAttribute('uv');
+        }
+        n.geometry.dispose();
+      }
     });
     if (c.userData && c.userData.isVictorianMeshChild && c.material) c.material.dispose();
     fg.remove(c);
@@ -7807,13 +8837,17 @@ function placePainting(art, dir, localCoord, room) {
   };
 
   // Painting (texture loaded async, nearest to the entrance first)
+  const texSrc = { url: paintingSrc(art.file, 'wall'), priority: Math.hypot(px, pz - 4.5) };
   queueTextureLoad(
-    paintingSrc(art.file, 'wall'),
-    Math.hypot(px, pz - 4.5),
+    texSrc.url,
+    texSrc.priority,
     (tex) => {
       fitTextureToTier(tex);
       tex.encoding = THREE.sRGBEncoding;
       tex.anisotropy = Math.min(PERF.aniso, renderer.capabilities.getMaxAnisotropy());
+      // A bitmap-decoded painting goes to the GPU now, and the bitmap is
+      // closed by that upload (last, so the filters above are what it uploads with)
+      uploadAndCloseBitmap(tex);
       const pMat = new THREE.MeshStandardMaterial({
         map: tex,
         roughness: 0.62,
@@ -7846,6 +8880,9 @@ function placePainting(art, dir, localCoord, room) {
       p.userData.normalZ = normalZ;
       p.userData.yCenter = yCenter;
       p.userData.spotSpec = spotSpec;
+      // The wall texture and where it came from, for the GL context-restore reload
+      p.userData.wallTex = tex;
+      p.userData.texSrc = texSrc;
       spotSpec.mesh = p;
       scene.add(p);
       paintingMeshes.push(p);
@@ -7910,8 +8947,15 @@ function _seatSpot(slot, spec) {
   _spotPoolMoved();
 }
 function _spotPoolMoved() {
-  _teardownDuomoAtmosphere();                       // rebuilt from the new positions next frame
-  if (window.FX && FX.atmosDirty) FX.atmosDirty();
+  // The Duomo beams and the fx cones follow the light in place — nothing is
+  // disposed, so no shader program is lost and recompiled while walking.
+  // Before the systems exist (the seating burst in ensureSpotPool) they are
+  // simply built later from the final positions.
+  const spots = lightingRefs.spots;
+  if (_atmo.beams && spots && spots.length === _atmo.spots) _refreshDuomoAtmosphere();
+  else _atmo.dirty = true;
+  if (window.FX && FX.atmosMove) FX.atmosMove();
+  else if (window.FX && FX.atmosDirty) FX.atmosDirty();   // a cached older fx.js
 }
 function updateSpotPool(now, dt) {
   const slots = _spotPool.slots;
@@ -8413,10 +9457,12 @@ function handleTap(clientX, clientY) {
   }
 
   // Inside the mirror world, use any tap (a gesture) to retry the reversed
-  // soundtrack if it hasn't managed to start (iOS audio-unlock timing).
-  if (mirrorWorld && !_musicReversed.node && _musicStarted
+  // soundtrack if it hasn't managed to start (iOS audio-unlock timing) or was
+  // paused by a system interruption; it resumes in place, never re-seeks.
+  if (mirrorWorld && _musicStarted && !_rev.failed
       && localStorage.getItem('musicMuted') !== 'true') {
-    setMirrorMusic(true);
+    const rev = revEl();
+    if (rev && (rev.paused || !_rev.started)) setMirrorMusic(true);
   }
 
   // The mirror — pushable
@@ -11126,8 +12172,177 @@ function warmShaderPrograms(delay) {
   _warmTimer = setTimeout(() => {
     if (!renderer || !scene || !camera) return;
     warmMeltProgram();
-    try { renderer.compile(scene, camera); } catch (e) {}
+    if ((delay || 0) < 500) {
+      // Gesture-driven (first mirror push, lighter armed): the programs are
+      // needed within a few frames, so build whatever is still missing now —
+      // normally nothing, the queue below has long since drained them.
+      try { renderer.compile(scene, camera); } catch (e) {}
+    } else {
+      // At rest after the intro: queue everything (hidden mirror-world pieces
+      // and FX pools included) and drain it one program per frame.
+      enqueueCompiles(scene, null, true);
+      if (_cq.items.length) _cq.urgent = true;
+    }
   }, delay || 0);
+}
+
+/* ─── Shader program queue ───
+   r128 can only compile synchronously, so the ~40 programs the gallery uses
+   are built one per frame behind the opaque entry screen instead of in one
+   burst (the first render used to compile 26 inside boot(), the post-intro
+   renderer.compile() another 14 while the visitor was already walking).
+   Each queued object is compiled through a one-object probe scene that
+   carries the live lights, fog and environment — the program cache key
+   depends on exactly those plus the object/material flags — so the real
+   render later finds its program ready and only re-binds light uniforms.
+   The Enter button enables once the set the first visible frame needs has
+   drained (hard cap below); anything still queued keeps draining at quiet
+   moments after entering. Behind the entry screen (and the opaque Index /
+   Slideshow views) the frame itself is skipped: only a slow heartbeat render
+   keeps texture uploads and FX.init flowing. */
+const ENTRY_READY_CAP_MS = 6000;    // a pathological device still gets the button
+const COVERED_RENDER_MS = 300;      // > the fx governor's 250 ms gap cut-off
+const _cq = {
+  items: [],                 // {o, m, d: deferred (hidden mirror/plant set), f: force}
+  seen: new WeakMap(),       // material → version it was queued at
+  probe: null, started: false, t0: 0, scanAt: 0, lastRender: 0, renders: 0,
+  bootDrained: false, ready: false, onReady: null, urgent: false,
+  // ?return=painting auto-enters at +250 ms: render from frame 1 exactly as before
+  showThrough: /[?&]return=painting/.test(location.search),
+};
+// Queue every material under `root` that has no program yet (visible objects
+// first, so the lobby is ready soonest). `filter(o)` picks the current set;
+// objects it rejects are NOT marked seen, so a later unfiltered call still
+// picks them up. A material whose version changed since it was queued is
+// queued again (a new variant may be needed).
+function enqueueCompiles(root, filter, deferred) {
+  if (!root || !renderer) return;
+  const visit = (o) => {
+    if (!(o.isMesh || o.isLine || o.isPoints || o.isSprite) || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      const v = _cq.seen.get(m);
+      if (v === m.version) continue;
+      if (filter && !filter(o)) continue;
+      _cq.seen.set(m, m.version);
+      if (v === undefined && renderer.properties.get(m).currentProgram) continue;
+      _cq.items.push({ o, m, d: !!deferred, f: v !== undefined });
+    }
+  };
+  root.traverseVisible(visit);
+  root.traverse(visit);
+}
+// Boot set: everything except subtrees tagged deferCompile that are hidden
+// right now (the mirror-world arsenal; the ficus plants under a theme that
+// hides them). Whatever is visible is never deferred, tag or not.
+function notDeferred(o) {
+  let tagged = false, hidden = false;
+  for (let p = o; p; p = p.parent) {
+    if (p.userData && p.userData.deferCompile) tagged = true;
+    if (p.visible === false) hidden = true;
+  }
+  return !(tagged && hidden);
+}
+// Compile one object through the probe. Assigning probe.children never
+// reparents (parents stay the real scene); the subtree of the object is
+// compiled with it (a plinth box brings its edge-line child along).
+function probeCompile(o) {
+  const probe = _cq.probe || (_cq.probe = new THREE.Scene());
+  probe.fog = scene.fog;                     // theme switches replace these
+  probe.environment = scene.environment;
+  const kids = [];
+  scene.traverseVisible(x => { if (x.isLight) kids.push(x); });
+  kids.push(o);
+  probe.children = kids;
+  try { renderer.compile(probe, camera); } catch (e) {}
+  finally { probe.children = []; }
+}
+// Build the next queued program. One NEW program per call: items that only
+// hit the program cache (the 30 paintings share one key) are folded in, up to
+// 8. Items whose object has left the scene, no longer holds the material, or
+// already has its program (compiled as part of a subtree, or drawn by a
+// heartbeat render) are dropped. Returns false once the queue is empty.
+function pumpCompiles() {
+  let n = 0;
+  while (_cq.items.length) {
+    const it = _cq.items.shift();
+    const o = it.o, m = it.m;
+    let attached = false;
+    for (let p = o; p; p = p.parent) if (p === scene) { attached = true; break; }
+    if (!attached) continue;
+    const cur = o.material;
+    if (!(cur === m || (Array.isArray(cur) && cur.includes(m)))) continue;
+    if (!it.f && renderer.properties.get(m).currentProgram) continue;
+    const before = renderer.info.programs.length;
+    probeCompile(o);
+    n++;
+    if (renderer.info.programs.length > before || n >= 8) break;
+  }
+  if (!_cq.items.length) _cq.urgent = false;
+  return n > 0;
+}
+// Entry-screen frame (overlay opaque). Queues on the first frame, rescans
+// every 30 frames for paintings and frames as they arrive, compiles within a
+// ~45 ms budget, and says whether this frame needs a heartbeat render: the
+// first once the boot set is built (so it carries no compile burst), then at
+// most every COVERED_RENDER_MS.
+function entryCompileFrame(now) {
+  if (!_cq.started) {
+    _cq.started = true;
+    _cq.t0 = now;
+    _cq.scanAt = _frameNo;
+    // Four synchronous GPU-process queries per program; diagnostics under ?debug
+    renderer.debug.checkShaderErrors = /[?&]debug/.test(location.search);
+    warmMeltProgram();
+    enqueueCompiles(scene, notDeferred, false);
+    enqueueCompiles(scene, null, true);     // hidden mirror / plant set last
+  } else if (_frameNo - _cq.scanAt >= 30) {
+    _cq.scanAt = _frameNo;
+    if (!_meltWarmMesh) warmMeltProgram();  // needs a painting with its map
+    enqueueCompiles(scene, notDeferred, false);
+    enqueueCompiles(scene, null, true);
+  }
+  const t = performance.now();
+  do { if (!pumpCompiles()) break; } while (performance.now() - t < 45);
+  if (!_cq.bootDrained && !_cq.items.some(it => !it.d)) _cq.bootDrained = true;
+  if (_cq.showThrough) return true;
+  if (!_cq.bootDrained && now - _cq.t0 <= ENTRY_READY_CAP_MS) return false;
+  return !_cq.renders || now - _cq.lastRender >= COVERED_RENDER_MS;
+}
+// Enter enables once the boot set is built (or the cap passed) AND one
+// heartbeat render has run, so FX.init and the first texture uploads are
+// behind us before the overlay lifts. Never re-disables.
+function entryReadyCheck(now) {
+  if (_cq.ready) return;
+  if (!_cq.renders) return;
+  if (_cq.bootDrained || entered || now - _cq.t0 > ENTRY_READY_CAP_MS) {
+    _cq.ready = true;
+    const f = _cq.onReady;
+    _cq.onReady = null;
+    if (f) f();
+  }
+}
+function onEntryReady(fn) {
+  if (_cq.ready) fn(); else _cq.onReady = fn;
+}
+function fxPoolsBusy() {
+  for (const k of ['fire', 'blaze', 'smoke', 'debris']) {
+    for (const e of _fxPools[k]) if (e.busy) return true;
+  }
+  return false;
+}
+// After entering: one program per quiet frame — never while a crossing, the
+// intro, a glide (tap-walk, wheel, snap) or a projectile / smoke / rocket /
+// flame is in motion. Urgent (the post-intro warm-up) skips only the idle
+// test, so a visitor who never stops looking around still gets the programs.
+function idleCompileFrame() {
+  if (!_cq.items.length) return;
+  if (mirrorCross || paintingCross || intro.active || snapTween || tapWalkTarget || wheelImpulse !== 0) return;
+  if (projectiles.length || activeSmoke.length || (destruction.active && activeFires.length)) return;
+  if (arsenal.rockets.length || fxPoolsBusy()) return;
+  if (!_cq.urgent && timeSinceInput <= 0.3) return;
+  pumpCompiles();
 }
 // Burn state for a painting, created (and its material patched) on first ignition.
 // Returns null when the painting isn't showing its standard material (portal ripple).
@@ -11152,11 +12367,19 @@ function beginPaintingBurn(painting) {
   mat.onBeforeCompile = meltOnBeforeCompile;
   mat.dispose();   // renderer state only (textures untouched): forces onBeforeCompile to rebind uniforms
   mat.needsUpdate = true;
-  // Generate the charred texture once per painting (cached on the painting)
+  // Generate the charred texture once per painting (cached on the painting).
+  // A bitmap-decoded painting has nothing to read back (its bitmap was closed
+  // after the upload), so its char is built from the ≤1024 px file, async:
+  // it is only consumed at 95% burn, the better part of a minute from now.
   let charredMap = painting.userData.charredMap;
   if (!charredMap && mat.map) {
-    charredMap = makeCharredTexture(mat.map);
-    painting.userData.charredMap = charredMap;
+    const img = mat.map.image;
+    if (img && img.width > 0) {
+      charredMap = makeCharredTexture(mat.map);
+      painting.userData.charredMap = charredMap;
+    } else {
+      requestCharredTexture(painting, mat.map);
+    }
   }
   const st = {
     painting, mat, fires: [],
@@ -11408,6 +12631,14 @@ function makeFlameTexture() {
 function makeCharredTexture(sourceTex) {
   const img = sourceTex.image;
   if (!img || !img.width) return null;
+  const tex = _charredFromImage(img, sourceTex);
+  // The canvas holds the source's pixels as they are, so it uploads with the
+  // source's orientation (true for an <img>; a pre-flipped bitmap drawn to a
+  // canvas by fitTextureToTier would be false)
+  tex.flipY = sourceTex.flipY;
+  return tex;
+}
+function _charredFromImage(img, sourceTex) {
   // The char is nearly black: 1024 px on the long side is plenty, keeps the
   // canvas under the 2048 texture cap and the per-pixel pass quick on iPad
   // (full-size photos made the first flame on each painting stall).
@@ -11433,6 +12664,51 @@ function makeCharredTexture(sourceTex) {
   tex.wrapS = sourceTex.wrapS;
   tex.wrapT = sourceTex.wrapT;
   return tex;
+}
+// The charred map for a painting whose decoded image is gone (bitmap path):
+// the ≤1024 px file (paintings/lo — the same pixels, remapped to 8..36, that
+// the md image downscaled to 1024 gave) decoded off the main thread, drawn
+// to a canvas the way an <img> is (no flip: it uploads with the CanvasTexture
+// default flipY = true, exactly as makeCharredTexture's does) and remapped.
+// Lands in painting.userData.charredMap and in the burn that is live then —
+// updateLighterBurn swaps st.charredMap in. One request per painting at a
+// time, so an end + re-ignition can't build it twice. If the file won't
+// come, the decoded image is used if one is at hand, else a flat near-black
+// (the remap's mid value), so burnout always chars.
+function requestCharredTexture(painting, sourceTex) {
+  if (painting.userData.charredPending) return;
+  painting.userData.charredPending = true;
+  const settle = (tex) => {
+    painting.userData.charredPending = false;
+    if (!tex) return;
+    painting.userData.charredMap = tex;
+    const st = painting.userData.burn;
+    if (st && !st.charredMap) st.charredMap = tex;
+  };
+  const fallback = () => {
+    try {
+      const img = sourceTex.image;
+      if (img && img.width > 0) return settle(makeCharredTexture(sourceTex));
+      const c = document.createElement('canvas');
+      c.width = c.height = 4;
+      const g = c.getContext('2d');
+      g.fillStyle = 'rgb(128,128,128)';     // mid luminance → the remap's rgb(26,20,18)
+      g.fillRect(0, 0, 4, 4);
+      settle(_charredFromImage(c, sourceTex));
+    } catch (e) { settle(null); }
+  };
+  const art = ARTWORKS[painting.userData.artIndex];
+  if (!art || typeof createImageBitmap !== 'function' || typeof fetch !== 'function') return fallback();
+  fetch(paintingSrc(art.file, 'thumb'), { cache: 'force-cache', priority: 'low' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(blob => createImageBitmap(blob))
+    .then(bmp => {
+      let tex = null;
+      try { tex = _charredFromImage(bmp, sourceTex); }
+      finally { bmp.close(); }
+      settle(tex);
+    })
+    .catch(fallback);
 }
 
 function updateProjectiles(dt) {
@@ -11721,7 +12997,7 @@ function makeCrowEmblemTexture(style) {
   const tex = new THREE.CanvasTexture(c);
   tex.anisotropy = 4;
   _crowTex[style] = tex;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* Shared canvas textures (generated once) */
@@ -12019,6 +13295,7 @@ function buildMirrorArsenal() {
     em.translateX(ARCH_WIDTH / 2 + 0.2 + 0.4 + D / 2);   // casing edge + a clear margin
     em.translateZ(0.008);
     em.visible = false;
+    em.userData.deferCompile = 'mirror';   // shader queue: hidden until the mirror world
     scene.add(em);
     arsenal.emblem = em;
   }
@@ -12115,6 +13392,7 @@ function buildMirrorArsenal() {
   disp.add(pool);
   arsenal.spotPool = pool;
   disp.visible = false;
+  disp.userData.deferCompile = 'mirror';   // shader queue: hidden until the mirror world
   scene.add(disp);
   arsenal.display = disp;
   // The mirror shouldn't reflect the first-person launcher floating in the air
@@ -13785,6 +15063,13 @@ function openModal(idx) {
 function closeModal() {
   document.getElementById('modal').classList.remove('show');
   updatePaintNavVis();
+  // Let go of the full-size image (the original: up to 45 MB decoded on a
+  // desktop) once the modal is away; openModal sets it again, and a re-open
+  // in the meantime keeps its own.
+  setTimeout(() => {
+    const m = document.getElementById('modal');
+    if (!m.classList.contains('show')) document.getElementById('modal-img').removeAttribute('src');
+  }, 400);
 }
 function modalNav(delta) {
   const m = document.getElementById('modal');
@@ -13794,12 +15079,24 @@ function modalNav(delta) {
 }
 
 let slideIdx = 0;
+// The Index and Slideshow views are opaque black over the whole canvas: while
+// one is up the animate loop skips the scene render (heartbeat only).
+let _viewCovered = false;
 function openSlideshow() {
   document.getElementById('slideshow').classList.add('show');
+  _viewCovered = true;
   showSlide(0);
 }
 function closeSlideshow() {
   document.getElementById('slideshow').classList.remove('show');
+  _viewCovered = false;
+  releaseSlideImage();
+}
+// The slide is display:none once hidden; drop the decoded full-size image
+// (showSlide sets a fresh src on every open).
+function releaseSlideImage() {
+  const img = document.getElementById('slide-img');
+  if (img && img.getAttribute('src')) img.removeAttribute('src');
 }
 function showSlide(i) {
   if (ARTWORKS.length === 0) return;
@@ -13822,6 +15119,7 @@ function setView(view) {
   const bio = document.getElementById('bio-view');
   const contact = document.getElementById('contact-view');
   const closeBtn = document.getElementById('overlay-close');
+  const leavingSlides = slide.classList.contains('show') && view !== 'slideshow';
   // Hide all overlays first, then show the active one.
   idx.classList.remove('show');
   slide.classList.remove('show');
@@ -13841,6 +15139,8 @@ function setView(view) {
     const next = document.getElementById('contact-next');
     if (next) next.value = location.origin + location.pathname + '#contact-sent';
   }
+  if (leavingSlides) releaseSlideImage();
+  _viewCovered = view === 'index' || view === 'slideshow';   // bio/contact/modal are translucent
   updatePaintNavVis();
 }
 
@@ -14129,6 +15429,7 @@ function wireUI() {
 }
 
 function enterGallery() {
+  runDeferred();   // the arsenal and any plants still pending exist before the first visible frame
   ensureAudio();   // critical: must call from user gesture for iOS
   startBackgroundMusic();   // also a user gesture — autoplay rules require this
   const entry = document.getElementById('entry');
@@ -14167,110 +15468,266 @@ function startBackgroundMusic() {
 }
 
 /* ─── Mirror-world music: the ambient track plays BACKWARDS inside ───
-   The mp3 is decoded once into a WebAudio buffer, sample-reversed, and looped
-   through the shared AudioContext while the <audio> element is paused; leaving
-   the mirror stops the node and resumes the normal track. */
-const _musicReversed = { buffer: null, node: null, gain: null, loading: false };
-// Fetch + decode + sample-reverse the track once. Called from the PUSH gesture
-// so the buffer is ready by the time the crossing completes.
-function preloadReversedMusic() {
-  if (_musicReversed.buffer || _musicReversed.loading) return;
-  const audio = document.getElementById('bg-music');
-  const ctx = ensureAudio();
-  if (!audio || !ctx) return;
-  _musicReversed.loading = true;
-  fetch(audio.currentSrc || audio.getAttribute('src'))
-    .then(r => r.arrayBuffer())
-    .then(ab => new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej)))
-    .then(buf => {
-      const rev = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
-      for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-        const a = buf.getChannelData(ch), b = rev.getChannelData(ch);
-        for (let i = 0, n = buf.length; i < n; i++) b[i] = a[n - 1 - i];
-      }
-      _musicReversed.buffer = rev;
-      _musicReversed.loading = false;
-      // If we're already inside the mirror when the decode lands, start now
-      if (mirrorWorld) setMirrorMusic(true);
-    })
-    .catch(() => { _musicReversed.loading = false; });
+   A pre-reversed copy of the mp3 (dark-ambient-music-354475-reversed-320.mp3:
+   the same recording sample-reversed and re-encoded at 320 kbps CBR by
+   tools/build-reversed.py) streams through a second <audio> element while the
+   forward element is paused; leaving the mirror fades it out and resumes the
+   normal track. Streaming it keeps the two ~46 MB decoded-PCM copies (and the
+   main-thread reverse loop) of the old decode-and-reverse path out of the tab.
+   Routed through the music bus like the forward element once the context
+   runs (createMediaElementSource is irreversible, hence the clone dance in
+   bypassMusicBus); straight out at MUSIC_LEVEL until then. */
+const revEl = () => document.getElementById('bg-music-rev');   // bypassMusicBus swaps nodes: always look it up
+// The reversed stream's state. Decisions come from here, not from rev.paused:
+// a bless promise or an iOS interruption can pause the element underneath us.
+const _rev = {
+  primed: false,     // load() called (once: it resets a playing element)
+  started: false,    // the mirror seeked + played it; a paused element then just resumes in place
+  failed: false,     // no file / undecodable: the mirror keeps the forward track
+  pauseTimer: 0,     // the deferred pause behind a fade-out
+  onMeta: null,      // pending 'loadedmetadata' seek listener (at most one)
+  onPlaying: null,   // pending 'playing' fade-in listener (at most one)
+  hooked: new WeakSet(),
+};
+// Start the reversed file downloading once (its preload is none, so it costs
+// nothing until a push) and, inside the push gesture, bless the element for
+// iOS: a media element only plays programmatically later if it once played
+// in a gesture. bless === false (the ?return boot, no gesture) only loads.
+function primeReversedMusic(bless) {
+  const rev = revEl();
+  if (!rev || _rev.failed) return;
+  if (_rev.pauseTimer) { clearTimeout(_rev.pauseTimer); _rev.pauseTimer = 0; }
+  if (!_rev.primed) {
+    _rev.primed = true;
+    hookReversedElement(rev);
+    rev.preload = 'auto';
+    rev.load();   // the only load() call: it would reset a playing element
+  }
+  if (bless === false || _rev.started || rev.played.length > 0) return;
+  const B = _musicBus, ctx = _audioCtx;
+  const fwd = document.getElementById('bg-music');
+  // Pause only if the crossing hasn't started it meanwhile (the promise can
+  // resolve late on a slow link). An older WebKit may have paused the room
+  // track's session for the second element: put it back.
+  const after = () => {
+    rev.muted = false;
+    if (!_rev.started) rev.pause();
+    if (!mirrorWorld && _musicStarted && fwd && fwd.paused
+        && localStorage.getItem('musicMuted') !== 'true') fwd.play().catch(() => {});
+  };
+  if (B && !B.bypassed && ctx && ctx.state === 'running' && routeReversedMusic(B)) {
+    // routed: its bus gain sits at 0 until the crossing fades it in
+    B.revG.gain.cancelScheduledValues(ctx.currentTime);
+    B.revG.gain.setValueAtTime(0, ctx.currentTime);
+    rev.play().then(after).catch(() => {});
+  } else {
+    rev.muted = true;
+    rev.play().then(after).catch(() => { rev.muted = false; });
+  }
+}
+// Route the reversed element through the bus, once per element (a second
+// createMediaElementSource throws). False: it has to play straight out.
+function routeReversedMusic(B) {
+  if (B.revSrc) return true;
+  const rev = revEl();
+  if (!rev) return false;
+  let src;
+  try { src = B.ctx.createMediaElementSource(rev); } catch (e) { return false; }
+  const g = B.ctx.createGain();
+  g.gain.value = 0;
+  src.connect(g); g.connect(B.revIn);
+  B.revSrc = src;
+  B.revG = g;
+  rev.volume = 1;   // routed: the bus applies the level
+  return true;
+}
+function hookReversedElement(rev) {
+  if (_rev.hooked.has(rev)) return;
+  _rev.hooked.add(rev);
+  rev.addEventListener('error', () => markReversedFailed(rev.error));
+}
+// The reversed file is missing or undecodable: the forward track sounds in
+// the mirror instead, as the bypass fallback always did. Sticky, so the
+// gesture retries stop pausing the forward track on every tap.
+function markReversedFailed(err) {
+  if (_rev.failed) return;
+  _rev.failed = true;
+  _rev.started = false;
+  console.warn('Reversed soundtrack unavailable; the mirror keeps the forward track:', err && (err.message || err));
+  const rev = revEl();
+  if (rev) { dropReversedListeners(rev); try { rev.pause(); } catch (e) {} }
+  if (mirrorWorld) forwardInMirror(document.getElementById('bg-music'), localStorage.getItem('musicMuted') === 'true');
+}
+// Without a reversed stream the forward track plays in the mirror: reopen its
+// bus path (applyMusicMirror closes it in there; it honours _rev.failed too).
+function forwardInMirror(audio, muted) {
+  if (!audio) return;
+  if (muted || !_musicStarted) { audio.pause(); return; }
+  const B = _musicBus;
+  if (B && !B.bypassed) {
+    const t = B.ctx.currentTime;
+    B.fwd.gain.cancelScheduledValues(t);
+    B.fwd.gain.setTargetAtTime(1, t, 0.05);
+    audio.volume = 1;
+  } else audio.volume = MUSIC_LEVEL;
+  audio.play().catch(() => {});
+}
+function dropReversedListeners(rev) {
+  if (_rev.onMeta) { rev.removeEventListener('loadedmetadata', _rev.onMeta); _rev.onMeta = null; }
+  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); rev.removeEventListener('seeked', _rev.onPlaying); _rev.onPlaying = null; }
+}
+// Begin at the mirrored position of where the forward track paused. The
+// reversed file's duration is unknown until its metadata lands (the forward
+// element's stands in; the two differ by one mp3 frame), and a position set
+// before that is re-applied on 'loadedmetadata', before any sound.
+function seekReversedMusic(rev, audio) {
+  if (_rev.onMeta) { rev.removeEventListener('loadedmetadata', _rev.onMeta); _rev.onMeta = null; }
+  const apply = () => {
+    const dur = (rev.duration > 0 && isFinite(rev.duration)) ? rev.duration
+      : (audio.duration > 0 && isFinite(audio.duration)) ? audio.duration : 0;
+    if (!dur) return false;
+    let off = ((dur - (audio.currentTime % dur)) % dur) || 0;
+    // A fresh load (the painting-portal return) would open on the forward
+    // track's fade-out tail (or its first second, then loop into that tail),
+    // several near-silent seconds: begin just past it instead
+    if (audio.currentTime < 1) off = Math.min(4, dur / 2);
+    try { rev.currentTime = off; } catch (e) { return false; }
+    return true;
+  };
+  if (!apply() || rev.readyState < 1) {
+    _rev.onMeta = () => { _rev.onMeta = null; if (_rev.started) apply(); };
+    rev.addEventListener('loadedmetadata', _rev.onMeta, { once: true });
+  }
+}
+// Fade the routed stream in over 0.6 s from the moment sound actually starts
+// (a seek into an un-buffered stretch of the file arrives later than play()),
+// taken from the 'playing' event or the play() promise, whichever is first.
+function armReversedFadeIn(rev) {
+  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); rev.removeEventListener('seeked', _rev.onPlaying); _rev.onPlaying = null; }
+  const B = _musicBus;
+  if (!B || !B.revG) return;
+  const t = B.ctx.currentTime;
+  B.revG.gain.cancelScheduledValues(t);
+  B.revG.gain.setValueAtTime(0, t);
+  _rev.onPlaying = () => fireReversedFadeIn();
+  rev.addEventListener('playing', _rev.onPlaying);
+  // WebKit can dispatch 'playing' before a seek into already-buffered data
+  // lands and then nothing else — 'seeked' covers that case (the guard below
+  // still waits for 'playing' when the data is not there yet)
+  rev.addEventListener('seeked', _rev.onPlaying);
+}
+function fireReversedFadeIn() {
+  if (!_rev.onPlaying) return;   // not armed, or already through
+  const rev = revEl();
+  if (!rev) { _rev.onPlaying = null; return; }
+  // Still seeking or buffering (a 'playing' queued before the deferred seek
+  // landed): no sound yet — the one after the data arrives fires the ramp
+  if (_rev.started && (rev.seeking || rev.readyState < 3)) return;
+  rev.removeEventListener('playing', _rev.onPlaying);
+  rev.removeEventListener('seeked', _rev.onPlaying);
+  _rev.onPlaying = null;
+  const B = _musicBus;
+  if (!_rev.started || !B || !B.revG) return;
+  const t = B.ctx.currentTime;
+  B.revG.gain.cancelScheduledValues(t);
+  B.revG.gain.setValueAtTime(0, t);
+  B.revG.gain.linearRampToValueAtTime(1, t + 0.6);
+}
+// play() is a no-op on a playing element, so this is safe to repeat. A
+// NotAllowedError (no gesture yet) is left to the tap retries; an aborted
+// play (paused meanwhile) is nothing; anything else is a file that cannot
+// play — the failure case.
+function playReversedMusic(rev) {
+  let p;
+  try { p = rev.play(); } catch (e) { return; }
+  if (!p || !p.then) return;
+  p.then(() => { if (_rev.started) fireReversedFadeIn(); }, err => {
+    const n = err && err.name;
+    if (n && n !== 'NotAllowedError' && n !== 'AbortError') markReversedFailed(err);
+  });
 }
 function setMirrorMusic(reversed) {
   const audio = document.getElementById('bg-music');
   if (!audio) return;
+  const rev = revEl();
   const muted = localStorage.getItem('musicMuted') === 'true';
+  const B = _musicBus;
   if (reversed) {
+    if (_rev.pauseTimer) { clearTimeout(_rev.pauseTimer); _rev.pauseTimer = 0; }
+    if (!rev && !_rev.failed) markReversedFailed(new Error('no #bg-music-rev element'));
+    if (_rev.failed) { forwardInMirror(audio, muted); return; }
     const wasPlaying = !audio.paused;
-    // iOS fallback: while the context won't run, the bus is bypassed and the
-    // reversed stream (WebAudio only) would be silent — keep the unrouted
-    // element playing forward instead; onMusicCtxState hands back on 'running'.
-    const B = _musicBus;
-    if (B && B.bypassed && (!_audioCtx || _audioCtx.state !== 'running')) {
-      if (_musicReversed.node) stopReversedMusicNode(0);
-      if (!muted && _musicStarted) { audio.volume = MUSIC_LEVEL; audio.play().catch(() => {}); }
-      else audio.pause();
+    const running = !!_audioCtx && _audioCtx.state === 'running';
+    // iOS fallback: while the context won't run, the bus is bypassed and a
+    // routed element would be silent — play the (unrouted) reversed element
+    // straight at the level; onMusicCtxState routes it on 'running'.
+    if (B && B.bypassed && !running && !B.revSrc) {
+      audio.pause();
+      if (muted || !_musicStarted) return;
+      if (!_rev.primed) primeReversedMusic(false);
+      if (!_rev.started) { _rev.started = true; seekReversedMusic(rev, audio); }
+      rev.muted = false;
+      rev.volume = MUSIC_LEVEL;
+      playReversedMusic(rev);
       return;
     }
     audio.pause();
     if (muted || (!wasPlaying && !_musicStarted)) return;
     const ctx = ensureAudio();
-    if (!ctx) return;
     const start = () => {
-      if (!mirrorWorld || _musicReversed.node || !_musicReversed.buffer) return;
-      const src = ctx.createBufferSource();
-      src.buffer = _musicReversed.buffer;
-      src.loop = true;
-      const g = ctx.createGain();
+      if (!mirrorWorld || _rev.failed) return;
+      const B = _musicBus;
+      if (!_rev.primed) primeReversedMusic(false);
       // Through the music bus when it exists (it applies the level); straight
-      // out otherwise
-      const bus = _musicBus ? _musicBus.revIn : null;
-      const t0 = ctx.currentTime;
-      g.gain.setValueAtTime(0, t0);
-      g.gain.linearRampToValueAtTime(bus ? 1 : 0.35, t0 + 0.6);
-      src.connect(g); g.connect(bus || ctx.destination);
-      // begin at the mirrored position of where the forward track paused
-      const dur = _musicReversed.buffer.duration;
-      let off = ((dur - (audio.currentTime % dur)) % dur) || 0;
-      // A fresh load (the painting-portal return) would open on the forward
-      // track's fade-out tail (or its first second, then loop into that tail),
-      // several near-silent seconds: begin just past it instead
-      if (audio.currentTime < 1) off = Math.min(4, dur / 2);
-      src.start(0, off);
-      _musicReversed.node = src;
-      _musicReversed.gain = g;
+      // out otherwise. Routing an already-routed element is a no-op.
+      const routed = !!B && routeReversedMusic(B);
+      rev.muted = false;
+      rev.volume = routed ? 1 : MUSIC_LEVEL;
+      if (!_rev.started) {
+        // first start on this side: position it and fade it in
+        _rev.started = true;
+        seekReversedMusic(rev, audio);
+        if (routed) armReversedFadeIn(rev);
+      }
+      // started already (interruption, or a rejected play() being retried
+      // from a gesture): resume in place, no re-seek, no new ramp
+      playReversedMusic(rev);
     };
     // iOS: the context only truly runs when resumed from a gesture; the pushes
     // call ensureAudio() in-gesture, but belt-and-braces resume here too.
-    if (ctx.state === 'suspended') {
+    if (ctx && ctx.state === 'suspended') {
       ctx.resume().then(start).catch(() => {});
     }
-    if (_musicReversed.buffer) { start(); return; }
-    preloadReversedMusic();   // starts itself on decode if still inside
+    start();
   } else {
-    if (_musicReversed.node) {
-      stopReversedMusicNode(0.25);
-    }
+    // The forward element first, the reversed pause on the same tick after
+    // it, so an unrouted (bypassed) hand-back leaves no silent gap
     if (!muted && _musicStarted) audio.play().catch(() => {});
+    stopReversedMusic(0.25);
   }
 }
-// Stop the reversed stream with a short fade so it never clicks off.
-function stopReversedMusicNode(fade) {
-  const node = _musicReversed.node, g = _musicReversed.gain;
-  _musicReversed.node = null;
-  _musicReversed.gain = null;
-  if (!node) return;
-  const ctx = _audioCtx;
-  try {
-    if (ctx && g && ctx.state === 'running') {
-      const t = ctx.currentTime;
-      g.gain.cancelScheduledValues(t);
-      g.gain.setValueAtTime(g.gain.value, t);
-      g.gain.linearRampToValueAtTime(0, t + fade);
-      node.stop(t + fade + 0.02);
-    } else {
-      node.stop();
-    }
-  } catch (e) { try { node.stop(); } catch (e2) {} }
+// Stop the reversed stream with a short fade so it never clicks off; the
+// element pauses once the fade is through (unless it was started again).
+function stopReversedMusic(fade) {
+  const rev = revEl();
+  _rev.started = false;
+  if (_rev.pauseTimer) { clearTimeout(_rev.pauseTimer); _rev.pauseTimer = 0; }
+  if (!rev) return;
+  dropReversedListeners(rev);
+  const B = _musicBus, ctx = _audioCtx;
+  if (B && B.revG && ctx && ctx.state === 'running' && fade > 0) {
+    const t = ctx.currentTime, g = B.revG.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0, t + fade);
+    _rev.pauseTimer = setTimeout(() => {
+      _rev.pauseTimer = 0;
+      const r = revEl();
+      if (r && !_rev.started) r.pause();
+    }, fade * 1000 + 20);
+  } else {
+    rev.pause();   // unrouted (iOS locks the element volume: no fade possible)
+  }
 }
 
 function toggleMusic() {
@@ -14286,8 +15743,8 @@ function toggleMusic() {
     updateMusicButtonState(willMute);
     syncMusicBusMute();
     if (willMute) {
-      stopReversedMusicNode(0.06);
-      if (_musicBus && _musicBus.bypassed) audio.pause();   // the forward fallback
+      stopReversedMusic(0.06);
+      if (_rev.failed || (_musicBus && _musicBus.bypassed)) audio.pause();   // the forward fallback
     } else {
       setMirrorMusic(true);
       musicGestureKick();
@@ -14691,12 +16148,10 @@ function buildMusicBus(ctx) {
   B.chimeIn.connect(B.chimeSend); B.chimeSend.connect(B.sendHP);
   _musicBus = B;
   el.volume = 1;   // routed: the bus applies the level
-  // A reversed stream already playing straight out moves onto the bus
-  if (_musicReversed.gain) {
-    try { _musicReversed.gain.disconnect(); } catch (e) {}
-    _musicReversed.gain.gain.cancelScheduledValues(ctx.currentTime);
-    _musicReversed.gain.gain.value = 1;
-    _musicReversed.gain.connect(B.revIn);
+  // A reversed stream already playing straight out moves onto the bus, at
+  // level and without a ramp, so its sound is continuous
+  if (_rev.started && routeReversedMusic(B)) {
+    B.revG.gain.setValueAtTime(1, ctx.currentTime);
   }
   const t = ctx.currentTime;
   applyMusicSpace(B, musicSpaceKey(B.room), t);
@@ -14781,8 +16236,9 @@ function applyMusicSpace(B, key, t) {
 
 function applyMusicMirror(B, on, t) {
   B.mirror = on;
-  // The forward element is paused in there; keep its path closed too
-  B.fwd.gain.setTargetAtTime(on ? 0 : 1, t, 0.05);
+  // The forward element is paused in there; keep its path closed too (unless
+  // it is standing in for a reversed stream that could not load)
+  B.fwd.gain.setTargetAtTime(on && !_rev.failed ? 0 : 1, t, 0.05);
   if (on) {
     const ir = musicImpulseReady(B.ctx, 'shimmer');
     if (!ir) {
@@ -14900,7 +16356,8 @@ function updateMusicAmbience() {
   }
   if (B.muted && !B.idle && t - B.mutedAt > 0.6) setMusicBusIdle(B, true);
   // Layers only ever sound alongside the track
-  const sounding = !B.muted && (mirrorWorld ? !!_musicReversed.node : !B.el.paused);
+  const rev = mirrorWorld && !_rev.failed ? revEl() : null;
+  const sounding = !B.muted && (rev ? !rev.paused : !B.el.paused);
   if (sounding !== B.sounding && t >= B.padHoldUntil) {
     B.sounding = sounding;
     B.padGate.gain.cancelScheduledValues(t);
@@ -14974,12 +16431,20 @@ function musicGestureKick(e) {
   const el = document.getElementById('bg-music');
   if (!el) return;
   if (mirrorWorld) {
-    if (!_musicReversed.node) setMirrorMusic(true);
+    const rev = revEl();
+    if (_rev.failed) {
+      // no reversed stream: the forward track stands in (never re-paused)
+      if (el.paused) forwardInMirror(el, false);
+      return;
+    }
+    // not started yet (iOS unlock timing), or paused by a system
+    // interruption: it starts, or resumes in place without a re-seek
+    if (!rev || rev.paused || !_rev.started) setMirrorMusic(true);
     // A return-flow page load never played the element in a gesture; bless it
     // now (silently — its bus path is closed in here) so leaving the mirror can
     // start it programmatically on iOS.
     if (B && !B.bypassed && el.paused && el.played.length === 0) {
-      el.play().then(() => { if (mirrorWorld) el.pause(); }).catch(() => {});
+      el.play().then(() => { if (mirrorWorld && !_rev.failed) el.pause(); }).catch(() => {});
     }
   } else if (el.paused) {
     // dropped by a system interruption, or blocked from autoplaying
@@ -15004,8 +16469,38 @@ function bypassMusicBus() {
   B.el = el;
   B.bypassed = true;
   B.stallAt = 0; B.stallTaps = 0;
-  if (localStorage.getItem('musicMuted') !== 'true') {
-    if (mirrorWorld) stopReversedMusicNode(0);   // silent in a stalled context anyway
+  // The reversed element gets the same swap if it is routed (its source node
+  // is just as irreversible); an unrouted one already plays straight out
+  const rev = revEl();
+  if (rev && B.revSrc) {
+    const clone = rev.cloneNode(false);   // keeps id, src, loop, preload
+    const rpos = rev.currentTime;
+    dropReversedListeners(rev);
+    rev.pause();
+    rev.removeAttribute('id');
+    if (rev.parentNode) rev.parentNode.replaceChild(clone, rev);
+    try { B.revSrc.disconnect(); } catch (e) {}
+    try { B.revG.disconnect(); } catch (e) {}
+    B.revSrc = null; B.revG = null;
+    hookReversedElement(clone);
+    clone.volume = MUSIC_LEVEL;
+    try { clone.currentTime = rpos; } catch (e) {
+      clone.addEventListener('loadedmetadata', () => { try { clone.currentTime = rpos; } catch (e2) {} }, { once: true });
+    }
+  }
+  if (localStorage.getItem('musicMuted') === 'true') return;
+  if (mirrorWorld && !_rev.failed) {
+    // In the mirror only the reversed clone sounds, from where it was. The
+    // forward clone is blessed silently in this same gesture so leaving the
+    // mirror can resume it programmatically on iOS.
+    const r = revEl();
+    if (r) {
+      if (!_rev.started) setMirrorMusic(true);
+      else { r.muted = false; r.volume = MUSIC_LEVEL; playReversedMusic(r); }
+    }
+    el.muted = true;
+    el.play().then(() => { if (mirrorWorld) el.pause(); el.muted = false; }).catch(() => { el.muted = false; });
+  } else {
     el.play().catch(() => {});
   }
 }
@@ -15019,6 +16514,13 @@ function rerouteMusicBus(B) {
   src.connect(B.fwd);
   B.el.volume = 1;
   B.bypassed = false;
+  // The reversed element too (a clone has no source node yet); one already
+  // sounding goes straight to level so the hand-back is seamless
+  if (routeReversedMusic(B) && _rev.started) {
+    const t = B.ctx.currentTime;
+    B.revG.gain.cancelScheduledValues(t);
+    B.revG.gain.setValueAtTime(1, t);
+  }
 }
 
 /* ─── 13. Animate loop ─── */
@@ -15122,8 +16624,23 @@ function animate() {
   // Music bus: reverb follows the space, layers, modal duck
   updateMusicAmbience();
 
-  // Optional visual layer (fx.js); plain render when it's absent
-  if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
+  // Behind an opaque overlay (entry screen, Index, Slideshow) the frame is
+  // invisible: spend it compiling shader programs instead and skip the render
+  // except for the heartbeat (see the shader program queue).
+  let draw = true;
+  if (!entered) draw = entryCompileFrame(now);
+  else { idleCompileFrame(); draw = !_viewCovered || now - _cq.lastRender >= COVERED_RENDER_MS; }
+  if (draw) {
+    // Optional visual layer (fx.js); plain render when it's absent
+    if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
+    _cq.lastRender = now;
+    _cq.renders++;
+  } else {
+    // What renderer.render would have refreshed (input code reads the camera matrices)
+    camera.updateMatrixWorld();
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+  }
+  if (!_cq.ready) entryReadyCheck(now);
   perfGovernor(now);
 }
 
@@ -15143,18 +16660,27 @@ async function boot() {
     document.getElementById('enter-btn').textContent = 'No paintings';
     return;
   }
+  // The heavy Duomo maps generate on workers while the scene is set up; the
+  // rest of boot runs as a few tasks (one yield between steps) instead of one.
+  const gen = startTextureGen();
   initScene();
+  await _tick();
+  await gen;
   buildGallery();
+  await _tick();
   syncDuomoVaultRibs();   // saved theme may be Duomo on first load
   syncDuomoSurfaces();
-  syncNeonPlants();       // saved neon-plants preference
+  await _tick();
+  syncNeonPlants(true);   // saved neon-plants preference: first plant now, the rest one per frame
   buildMirror();
-  buildMirrorArsenal();   // crow emblem + launcher display (shown only in the mirror world)
+  _deferred.push(buildMirrorArsenal);   // crow emblem + launcher display (shown only in the mirror world)
+  await _tick();
   placeAllPaintings();
   markPaintingWallsPlain();
   buildIndex();
   redrawCanvasTextWhenFontsReady();
   wireUI();
+  _runDeferredSoon();
   // ── Returning from inside the painting? Skip the intro, slip back into the
   // mirror world, and stand where the canvas hangs — as if stepping out of it.
   const _ret = new URLSearchParams(location.search).get('return') === 'painting';
@@ -15179,15 +16705,18 @@ async function boot() {
         flashCustomHint('back through the paint…', 2600);
         warmShaderPrograms(2500);   // no intro on this path
         // Backwards music should be playing on this side. A fresh page load has
-        // no gesture, so try immediately (works where the origin is trusted)
-        // and rearm on the first gesture for strict autoplay policies (iOS).
-        preloadReversedMusic();
+        // no gesture, so start the reversed file loading (no bless: nothing to
+        // bless it in), try immediately (works where the origin is trusted —
+        // enterGallery started the music a tick ago) and rearm on the first
+        // gesture for strict autoplay policies (iOS). A started stream that
+        // is merely paused resumes in place, never re-seeks.
+        if (localStorage.getItem('musicMuted') !== 'true') primeReversedMusic(false);
         const kickReverse = () => {
-          if (!mirrorWorld) return;
+          if (!mirrorWorld || localStorage.getItem('musicMuted') === 'true') return;
+          const rev = revEl();
+          if (!rev || _rev.failed) return;
           ensureAudio();
-          if (!_musicReversed.node && localStorage.getItem('musicMuted') !== 'true') {
-            setMirrorMusic(true);
-          }
+          if (rev.paused || !_rev.started) setMirrorMusic(true);
         };
         kickReverse();
         ['pointerdown', 'touchstart', 'keydown'].forEach(ev =>
@@ -15209,12 +16738,28 @@ async function boot() {
   yaw = k0.yaw; pitch = k0.pitch;
   lastTime = performance.now();
   animate();
-  // Mark loaded
-  const entry = document.getElementById('entry');
-  entry.classList.add('loaded');
-  const btn = document.getElementById('enter-btn');
-  btn.disabled = false;
-  btn.textContent = 'Enter the gallery';
+  // Mark loaded — once the shader program queue has built what the first
+  // visible frame needs (entryReadyCheck; hard cap ENTRY_READY_CAP_MS)
+  onEntryReady(() => {
+    const entry = document.getElementById('entry');
+    entry.classList.add('loaded');
+    const btn = document.getElementById('enter-btn');
+    btn.disabled = false;
+    btn.textContent = 'Enter the gallery';
+    // The music (preload none, so it stayed off the boot download path) buffers
+    // while the visitor reads the entry screen — unless they muted it last
+    // time, in which case it is never fetched. Only ever on an untouched
+    // element: load() would reset one that is already playing (on the ?return
+    // path enterGallery's play() may already have run — the guards below then
+    // leave the element alone).
+    const a = document.getElementById('bg-music');
+    let want = true;
+    try { want = localStorage.getItem('musicMuted') !== 'true'; } catch (e) {}
+    if (a && want && a.paused && a.readyState === 0 && a.networkState !== 2) {   // 2 = NETWORK_LOADING
+      a.preload = 'auto';
+      a.load();
+    }
+  });
 
   // If user is returning from a non-AJAX formsubmit redirect, show a thanks
   // message in the contact view automatically.
