@@ -3824,7 +3824,7 @@ onmessage = function (e) {
     postMessage({ id: job.id, ok: false, error: String(err && err.message || err) });
   }
 };`;
-const TEXGEN_TIMEOUT_MS = 6000;   // past this the getters generate inline (today's timing)
+const TEXGEN_TIMEOUT_MS = 6000;   // past this boot stops waiting; missing maps generate inline (today's timing)
 let _texgen = null;               // { workers, jobs, fallback } while generating; for tests
 function startTextureGen() {
   const duomo = theme === 'duomo', dark = theme === 'dark';
@@ -3885,7 +3885,16 @@ function startTextureGen() {
         try { w.postMessage(msg, msg.px ? [msg.px.buffer] : []); }
         catch (e) { w.postMessage(msg); }   // no transfer: clone instead
       }
-      T.timer = setTimeout(() => fail('no reply in ' + TEXGEN_TIMEOUT_MS + ' ms'), TEXGEN_TIMEOUT_MS);
+      // A slow or starved device: boot goes on and the getters generate inline
+      // whatever is still missing — but the workers keep running, and a reply
+      // that lands later still fills any cache that has not been generated yet
+      // (apply() only ever fills an empty cache), so finished work is not thrown away.
+      T.timer = setTimeout(() => {
+        if (T.pending === 0 || T.fallback) return;
+        T.slow = true;
+        console.warn('texture workers: no reply in ' + TEXGEN_TIMEOUT_MS + ' ms — boot continues, late replies still accepted');
+        resolve();
+      }, TEXGEN_TIMEOUT_MS);
     } catch (e) {
       fail(String(e && e.message || e));
     }
