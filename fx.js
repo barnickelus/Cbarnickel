@@ -529,42 +529,65 @@ const FX = (() => {
         gl_FragColor = vec4(color * a, 1.0);
       }`,
   };
-  const atmos = { group: null, beams: [], dust: null, spotCount: -1 };
+  // The materials (one per spot slot, one for the dust) outlive the group:
+  // the lean tier's spotlight pool moves lights between paintings, and a cone
+  // that keeps its material keeps its compiled program — only the geometry
+  // ever changes. Spot i's MOTES motes sit at i * MOTES in the dust attributes.
+  const atmos = { group: null, beams: [], dust: null, spotCount: -1, beamMats: [], dustMat: null };
+  const MOTES = 14;
   const _up = new THREE.Vector3(0, 1, 0);
+  const _dir = new THREE.Vector3(), _neg = new THREE.Vector3();
+  function beamMaterial(i) {
+    let mat = atmos.beamMats[i];
+    if (!mat) atmos.beamMats[i] = mat = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.clone(BeamShader.uniforms),
+      vertexShader: BeamShader.vertexShader,
+      fragmentShader: BeamShader.fragmentShader,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+    return mat;
+  }
+  // Cone: apex at the lamp (+Y in geometry space), open end at the wall
+  function coneGeometry(len, endR) {
+    const geo = new THREE.CylinderGeometry(0.035, endR, len, 28, 1, true);
+    geo.translate(0, -len / 2, 0);
+    return geo;
+  }
+  // Aims a cone from the lamp a at the wall point b and records what it was
+  // aimed with, so atmosMove can tell an unchanged slot from a moved one.
+  function aimCone(cone, sp, a, b, dir, len, endR) {
+    cone.position.copy(a);
+    cone.quaternion.setFromUnitVectors(_up, _neg.copy(dir).negate());
+    const U = cone.material.uniforms;
+    U.color.value.copy(sp.color);
+    // Wall plane: the target sits on the wall; the lamp hangs out along its normal.
+    U.wallP.value.copy(b);
+    U.wallN.value.set(a.x - b.x, 0, a.z - b.z).normalize();
+    const c = cone.userData;
+    c.len = len; c.endR = endR;
+    c.ax = a.x; c.ay = a.y; c.az = a.z; c.bx = b.x; c.by = b.y; c.bz = b.z;
+  }
   function buildAtmos() {
     const group = new THREE.Group();
     group.name = 'fx-atmos';
     const beams = [];
     const spots = lightingRefs.spots;
-    const MOTES = 14;
     const seeds = [], apexes = [], axes = [], dimsArr = [], pos = [];
-    for (const sp of spots) {
+    for (let i = 0; i < spots.length; i++) {
+      const sp = spots[i];
       const a = sp.position, b = sp.target.position;
-      const dir = new THREE.Vector3().subVectors(b, a);
+      const dir = _dir.subVectors(b, a);
       const len = dir.length();
       dir.normalize();
       const endR = Math.tan(sp.angle * 0.62) * len;
-      // Cone: apex at the lamp (+Y in geometry space), open end at the wall
-      const geo = new THREE.CylinderGeometry(0.035, endR, len, 28, 1, true);
-      geo.translate(0, -len / 2, 0);
-      const mat = new THREE.ShaderMaterial({
-        uniforms: THREE.UniformsUtils.clone(BeamShader.uniforms),
-        vertexShader: BeamShader.vertexShader,
-        fragmentShader: BeamShader.fragmentShader,
-        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-      });
-      mat.uniforms.color.value.copy(sp.color);
-      // Wall plane: the target sits on the wall; the lamp hangs out along its normal.
-      mat.uniforms.wallP.value.copy(b);
-      mat.uniforms.wallN.value.set(a.x - b.x, 0, a.z - b.z).normalize();
-      const cone = new THREE.Mesh(geo, mat);
-      cone.position.copy(a);
-      cone.quaternion.setFromUnitVectors(_up, dir.clone().negate());
+      const cone = new THREE.Mesh(coneGeometry(len, endR), beamMaterial(i));
       cone.renderOrder = 2;
       cone.userData.spot = sp;
+      cone.userData.slot = i;
+      aimCone(cone, sp, a, b, dir, len, endR);
       group.add(cone);
       beams.push(cone);
-      for (let i = 0; i < MOTES; i++) {
+      for (let m = 0; m < MOTES; m++) {
         seeds.push(Math.random(), Math.random(), Math.random());
         apexes.push(a.x, a.y, a.z);
         axes.push(dir.x, dir.y, dir.z);
@@ -579,12 +602,12 @@ const FX = (() => {
       g.setAttribute('apex', new THREE.Float32BufferAttribute(apexes, 3));
       g.setAttribute('axis', new THREE.Float32BufferAttribute(axes, 3));
       g.setAttribute('dims', new THREE.Float32BufferAttribute(dimsArr, 2));
-      const m = new THREE.ShaderMaterial({
+      const m = atmos.dustMat || (atmos.dustMat = new THREE.ShaderMaterial({
         uniforms: THREE.UniformsUtils.clone(DustShader.uniforms),
         vertexShader: DustShader.vertexShader,
         fragmentShader: DustShader.fragmentShader,
         transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-      });
+      }));
       m.uniforms.pr.value = renderer.getPixelRatio();
       const pts = new THREE.Points(g, m);
       pts.frustumCulled = false;
@@ -597,16 +620,66 @@ const FX = (() => {
     atmos.spotCount = spots.length;
     scene.add(group);
   }
-  function disposeAtmos() {
-    if (!atmos.group) return;
-    scene.remove(atmos.group);
-    atmos.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
-    atmos.group = null; atmos.beams = []; atmos.dust = null;
+  // The lean tier's spotlight pool re-seated a light on another painting:
+  // move that light's cone and motes in place (its material, and so its
+  // program, stays). Nothing to do before the first build or when the pool
+  // size changed — syncAtmos builds from the current positions then. A
+  // hidden group (mirror world) is kept current too, so it is right on return.
+  function atmosMove() {
+    if (!atmos.group || atmos.spotCount !== lightingRefs.spots.length) return;
+    const dust = atmos.dust && atmos.dust.geometry.attributes;
+    let motesMoved = false;
+    for (const cone of atmos.beams) {
+      const sp = cone.userData.spot, c = cone.userData;
+      const a = sp.position, b = sp.target.position;
+      if (c.ax === a.x && c.ay === a.y && c.az === a.z && c.bx === b.x && c.by === b.y && c.bz === b.z) continue;
+      const dir = _dir.subVectors(b, a);
+      const len = dir.length();
+      dir.normalize();
+      const endR = Math.tan(sp.angle * 0.62) * len;
+      if (c.len !== len || c.endR !== endR) {
+        cone.geometry.dispose();
+        cone.geometry = coneGeometry(len, endR);
+      }
+      aimCone(cone, sp, a, b, dir, len, endR);
+      if (!dust) continue;
+      const apex = dust.apex.array, axis = dust.axis.array, dims = dust.dims.array, pos = dust.position.array;
+      let o3 = c.slot * MOTES * 3, o2 = c.slot * MOTES * 2;
+      for (let m = 0; m < MOTES; m++, o3 += 3, o2 += 2) {
+        apex[o3] = a.x; apex[o3 + 1] = a.y; apex[o3 + 2] = a.z;
+        axis[o3] = dir.x; axis[o3 + 1] = dir.y; axis[o3 + 2] = dir.z;
+        pos[o3] = a.x; pos[o3 + 1] = a.y; pos[o3 + 2] = a.z;
+        dims[o2] = len; dims[o2 + 1] = endR;
+      }
+      motesMoved = true;
+    }
+    if (!motesMoved) return;
+    dust.apex.needsUpdate = dust.axis.needsUpdate = dust.dims.needsUpdate = dust.position.needsUpdate = true;
+    atmos.dust.geometry.boundingSphere = null; atmos.dust.geometry.boundingBox = null;
+  }
+  // Drops the group (geometries only; a rebuild reuses the materials). With
+  // mats, the materials go too and their programs with them.
+  function disposeAtmos(mats) {
+    if (atmos.group) {
+      scene.remove(atmos.group);
+      atmos.group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+      atmos.group = null; atmos.beams = []; atmos.dust = null;
+    }
+    if (!mats) return;
+    for (const m of atmos.beamMats) m.dispose();
+    atmos.beamMats = [];
+    if (atmos.dustMat) { atmos.dustMat.dispose(); atmos.dustMat = null; }
   }
   function syncAtmos(now) {
     const k = ATMOS[theme] || 0;
-    const want = settings.atmos && k > 0 && !(typeof mirrorWorld !== 'undefined' && mirrorWorld);
-    if (!want) { if (atmos.group) atmos.group.visible = false; return; }
+    const mirror = typeof mirrorWorld !== 'undefined' && mirrorWorld;
+    const want = settings.atmos && k > 0 && !mirror;
+    if (!want) {
+      // Only hidden for the mirror world (atmosMove keeps it current there);
+      // switched off, or a theme without beams, frees the lot — programs too.
+      if (mirror) { if (atmos.group) atmos.group.visible = false; } else disposeAtmos(true);
+      return;
+    }
     if (atmos.group && atmos.spotCount !== lightingRefs.spots.length) disposeAtmos();
     if (!atmos.group) { if (!lightingRefs.spots.length) return; buildAtmos(); }
     atmos.group.visible = true;
@@ -622,6 +695,7 @@ const FX = (() => {
     if (atmos.dust) {
       atmos.dust.material.uniforms.time.value = t;
       atmos.dust.material.uniforms.strength.value = 0.28 * k * lightingMul;
+      atmos.dust.material.uniforms.pr.value = renderer.getPixelRatio();   // follows the resolution governor
     }
   }
 
@@ -997,14 +1071,16 @@ const FX = (() => {
     return out;
   }
   // Render-scale changes from the resolution governor in index.html
-  // The lean tier's spotlight pool moves lights between paintings; the beams
-  // are rebuilt from the new positions on the next frame.
+  // The lean tier's spotlight pool moves lights between paintings: atmosMove
+  // (above) follows them in place. atmosDirty is the older entry point — a
+  // cached index.html may still call it — and rebuilds the beams from the new
+  // positions on the next frame, keeping the materials.
   function atmosDirty() { disposeAtmos(); }
   function setPixelRatio(pr) {
     if (composer) { composer.setPixelRatio(pr); composer.setSize(window.innerWidth, window.innerHeight); }
     resizeReflector();
     resizeBloom();
   }
-  return { settings, render, set, exportable, lowTier, setPixelRatio, atmosDirty, shed: gov.shed };
+  return { settings, render, set, exportable, lowTier, setPixelRatio, atmosDirty, atmosMove, shed: gov.shed };
 })();
 window.FX = FX;
