@@ -2017,6 +2017,7 @@ function fitTextureToTier(tex) {
     g.drawImage(img, 0, 0, c.width, c.height);
     tex.image = c;
     tex.needsUpdate = true;
+    if (img.close) img.close();   // a decoded bitmap isn't needed once drawn
   } catch (e) { /* keep the original if the canvas refuses */ }
   return tex;
 }
@@ -2033,20 +2034,191 @@ function paintingSrc(file, use) {
 // weak device isn't decoding thirty JPEGs at once (a memory spike that can take
 // the whole tab down on iOS) and the rooms you see first fill in first.
 const _texQueue = { pending: [], active: 0, limit: PERF.low ? 3 : 5 };
-function queueTextureLoad(url, priority, onLoad, onError) {
-  _texQueue.pending.push({ url, priority, onLoad, onError });
+// `into`: an existing texture to reload (GL context restore) instead of
+// handing onLoad a new one.
+function queueTextureLoad(url, priority, onLoad, onError, into) {
+  _texQueue.pending.push({ url, priority, onLoad, onError, into: into || null });
   _texQueue.pending.sort((a, b) => a.priority - b.priority);
   pumpTextureQueue();
 }
 function pumpTextureQueue() {
+  if (_bmp.probing) return;          // the probe's answer dispatches the queue
+  if (_bmp.ok) _armContextRestore();
   while (_texQueue.active < _texQueue.limit && _texQueue.pending.length) {
     const job = _texQueue.pending.shift();
     _texQueue.active++;
     const done = () => { _texQueue.active--; pumpTextureQueue(); };
+    if (_bmp.ok) _loadBitmapTexture(job, done); else _loadImgTexture(job, done);
+  }
+}
+// The <img> way: the browser decodes it (on the main thread, the first frame
+// the painting is drawn) and the decoded image stays as tex.image for the visit.
+function _loadImgTexture(job, done) {
+  if (!job.into) {
     new THREE.TextureLoader().load(job.url,
       (tex) => { done(); job.onLoad(tex); },
       undefined,
       (err) => { done(); if (job.onError) job.onError(err); });
+    return;
+  }
+  new THREE.ImageLoader().load(job.url,
+    (img) => {
+      const t = job.into;
+      t.image = img; t.flipY = true; t.needsUpdate = true;
+      done(); job.onLoad(t);
+    },
+    undefined,
+    (err) => { done(); if (job.onError) job.onError(err); });
+}
+// The bitmap way: fetched and decoded off the main thread as an ImageBitmap,
+// pre-flipped so it uploads with flipY = false (the result doesn't depend on
+// whether the browser honours UNPACK_FLIP_Y for bitmaps — Chrome and Safari
+// disagree), and closed right after its GPU upload (uploadAndCloseBitmap)
+// instead of a decoded copy staying beside the GPU one for the whole visit:
+// thirty of them is ~84 MB on an iPad, the tab's scarcest resource. The
+// options match what three gives an <img> (no premultiply, no colour-space
+// conversion; the files carry no ICC or EXIF), so the pixels are the same.
+// Same HTTP-cache semantics as <img>; priority 'low' keeps the paintings
+// behind the scripts, fonts and frame model (ignored where unsupported).
+const BITMAP_OPTS = { imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
+function _fetchBitmap(url) {
+  return fetch(url, { priority: 'low' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(blob => createImageBitmap(blob, BITMAP_OPTS).catch(err => {
+      _bmp.ok = false;     // a decode the probe passed, failing: <img> for the rest of the session
+      throw err;
+    }));
+}
+function _loadBitmapTexture(job, done) {
+  _fetchBitmap(job.url).then(bmp => {
+    let tex = job.into;
+    if (tex) { tex.image = bmp; tex.needsUpdate = true; }
+    else {
+      tex = new THREE.CanvasTexture(bmp);
+      // As THREE.TextureLoader: JPEGs have no alpha, so store them as RGB
+      tex.format = /\.jpe?g($|\?)/i.test(job.url) ? THREE.RGBFormat : THREE.RGBAFormat;
+    }
+    tex.flipY = false;
+    done();
+    job.onLoad(tex);
+  }).catch(() => {
+    // Fetch or decode failed: once more the way <img> would have loaded it,
+    // so no painting goes missing where the old path worked.
+    _loadImgTexture(job, done);
+  });
+}
+// Upload a bitmap-backed texture now (the decode already happened, so the
+// first sight of the painting costs nothing) and let the upload close the
+// bitmap: r128 calls onUpdate right after each upload. Filters, anisotropy
+// and encoding are applied only at upload, so this comes after they are set.
+// The closed bitmap stays as tex.image (0×0 — three warns on undefined); the
+// context-restore handler reloads it from the file.
+function uploadAndCloseBitmap(tex) {
+  const img = tex.image;
+  if (!img || !img.close) return;
+  tex.onUpdate = (t) => {
+    const b = t.image;
+    if (b && b.close) {
+      t.userData = t.userData || {};
+      t.userData.w = b.width; t.userData.h = b.height;   // size, for anyone estimating GPU bytes
+      b.close();
+    }
+    t.onUpdate = null;
+  };
+  _armContextRestore();
+  if (renderer) renderer.initTexture(tex);
+}
+// A baked-text canvas (title 2048×512, labels 1024×256, plaques 880×400, the
+// 1024² crow emblem — 21 MB of backing stores on Safari) is only ever read by
+// its GPU upload: every redraw (font arrival, theme, neon toggle) makes a NEW
+// texture and the emblem textures are cached and swapped by identity, never
+// re-read. So empty the canvas once it is up.
+function releaseCanvasAfterUpload(tex) {
+  tex.onUpdate = (t) => {
+    const c = t.image;
+    if (c && c.getContext) {
+      t.userData = t.userData || {};
+      t.userData.w = c.width; t.userData.h = c.height;
+      c.width = 0; c.height = 0;
+    }
+    t.onUpdate = null;
+  };
+  _armContextRestore();
+  return tex;
+}
+// The bitmap path is used only after a runtime probe: a 1×2 PNG (red over
+// blue) decoded with the exact options above must draw with the rows swapped.
+// Older WebKit ignores imageOrientation, and an unflipped bitmap uploaded with
+// flipY = false would hang every painting upside down — so there, or if the
+// probe throws or never answers, THREE.TextureLoader does what it did.
+const _bmp = { ok: false, probing: true };
+(function probeBitmapDecode() {
+  const settle = (ok) => { if (!_bmp.probing) return; _bmp.probing = false; _bmp.ok = !!ok; pumpTextureQueue(); };
+  try {
+    if (typeof createImageBitmap !== 'function' || typeof fetch !== 'function' || typeof Blob === 'undefined') return settle(false);
+    const png = atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAIAAAAW4yFwAAAADUlEQVR42mP4zwAC/wEIAAH/Bs6pJQAAAABJRU5ErkJggg==');
+    const bytes = new Uint8Array(png.length);
+    for (let i = 0; i < png.length; i++) bytes[i] = png.charCodeAt(i);
+    createImageBitmap(new Blob([bytes], { type: 'image/png' }), BITMAP_OPTS).then(bm => {
+      let ok = false;
+      try {
+        const c = document.createElement('canvas');
+        c.width = 1; c.height = 2;
+        const g = c.getContext('2d');
+        g.drawImage(bm, 0, 0);
+        const d = g.getImageData(0, 0, 1, 2).data;
+        // Flipped: blue on the top row, red below
+        ok = bm.width === 1 && bm.height === 2 &&
+             d[0] < 40 && d[2] > 215 && d[3] === 255 &&
+             d[4] > 215 && d[6] < 40 && d[7] === 255;
+      } catch (e) { ok = false; }
+      if (bm.close) bm.close();
+      settle(ok);
+    }).catch(() => settle(false));
+    setTimeout(() => settle(false), 3000);   // a probe that never answers must not hold the paintings
+  } catch (e) { settle(false); }
+})();
+// After a GL context loss three re-uploads every texture from its .image —
+// which for us is a closed bitmap or an emptied canvas. Registered once the
+// renderer exists (so after three's own listener, which rebuilds the GL state
+// first) and run synchronously before any render: paintings get a small
+// placeholder and reload from the file INTO the same texture objects (the
+// materials and programs keep their references); the baked text is drawn
+// again; the crow emblem on show is redrawn in place and the cached others
+// dropped (restyleArsenal swaps them by identity, so it is re-made on demand).
+let _ctxRestoreArmed = false, _bmpPlaceholder = null;
+function _armContextRestore() {
+  if (_ctxRestoreArmed || !renderer) return;
+  _ctxRestoreArmed = true;
+  renderer.domElement.addEventListener('webglcontextrestored', onGLContextRestored, false);
+}
+function onGLContextRestored() {
+  for (const p of paintingMeshes) {
+    const tex = p.userData.wallTex, src = p.userData.texSrc;
+    if (!tex || !src || !tex.image || !tex.image.close || tex.image.width > 0) continue;
+    if (!_bmpPlaceholder) {
+      _bmpPlaceholder = document.createElement('canvas');
+      _bmpPlaceholder.width = _bmpPlaceholder.height = 2;
+      const g = _bmpPlaceholder.getContext('2d');
+      g.fillStyle = '#3a3632'; g.fillRect(0, 0, 2, 2);
+    }
+    tex.image = _bmpPlaceholder;
+    tex.needsUpdate = true;
+    queueTextureLoad(src.url, src.priority, uploadAndCloseBitmap, null, tex);
+  }
+  rebuildCanvasText();
+  for (const style of Object.keys(_crowTex)) {
+    const t = _crowTex[style];
+    if (arsenal.emblemMat && arsenal.emblemMat.map === t) {
+      const c = t.image;
+      c.width = c.height = 1024;
+      drawCrowEmblem(c.getContext('2d'), 1024, style);
+      t.needsUpdate = true;
+      releaseCanvasAfterUpload(t);
+    } else {
+      t.dispose();
+      delete _crowTex[style];
+    }
   }
 }
 // Runtime resolution governor: if the device still can't hold ~30fps, step the
@@ -4144,7 +4316,7 @@ function makeLobbyTitleTexture() {
     const tex = new THREE.CanvasTexture(c);
     tex.needsUpdate = true;
     tex.anisotropy = 4;
-    return tex;
+    return releaseCanvasAfterUpload(tex);
   }
   ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
   ctx.shadowBlur = 14;
@@ -4164,7 +4336,7 @@ function makeLobbyTitleTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* ─── Lobby plaques (Bio + Contact, clickable from inside the gallery) ─── */
@@ -4208,26 +4380,29 @@ function redrawCanvasTextWhenFontsReady() {
     document.fonts.load('300 130px "Cormorant Garamond"'),
     document.fonts.load('500 130px "Cormorant Garamond"'),
     document.fonts.load('italic 400 38px "Cormorant Garamond"'),
-  ]).then(() => {
-    for (const mesh of lobbyPlaques) {
-      const tex = makePlaqueTexture(mesh.userData.label, mesh.userData.sub);
-      if (mesh.material.map) mesh.material.map.dispose();
-      mesh.material.map = tex;
-      mesh.material.needsUpdate = true;
-    }
-    if (lobbyTitleMesh) {
-      const tex = makeLobbyTitleTexture();
-      if (lobbyTitleMesh.material.map) lobbyTitleMesh.material.map.dispose();
-      lobbyTitleMesh.material.map = tex;
-      lobbyTitleMesh.material.needsUpdate = true;
-    }
-    for (const lbl of seriesLabels) {
-      const tex = makeLabelTexture(lbl.name, lbl.subtitle);
-      if (lbl.mesh.material.map) lbl.mesh.material.map.dispose();
-      lbl.mesh.material.map = tex;
-      lbl.mesh.material.needsUpdate = true;
-    }
-  }).catch(() => {});
+  ]).then(rebuildCanvasText).catch(() => {});
+}
+// Bake the plaques, sign and room labels again, as new textures (font
+// arrival; a GL context restore, since the uploaded canvases are emptied).
+function rebuildCanvasText() {
+  for (const mesh of lobbyPlaques) {
+    const tex = makePlaqueTexture(mesh.userData.label, mesh.userData.sub);
+    if (mesh.material.map) mesh.material.map.dispose();
+    mesh.material.map = tex;
+    mesh.material.needsUpdate = true;
+  }
+  if (lobbyTitleMesh) {
+    const tex = makeLobbyTitleTexture();
+    if (lobbyTitleMesh.material.map) lobbyTitleMesh.material.map.dispose();
+    lobbyTitleMesh.material.map = tex;
+    lobbyTitleMesh.material.needsUpdate = true;
+  }
+  for (const lbl of seriesLabels) {
+    const tex = makeLabelTexture(lbl.name, lbl.subtitle);
+    if (lbl.mesh.material.map) lbl.mesh.material.map.dispose();
+    lbl.mesh.material.map = tex;
+    lbl.mesh.material.needsUpdate = true;
+  }
 }
 
 function makePlaqueTexture(label, sub) {
@@ -4276,7 +4451,7 @@ function makePlaqueTexture(label, sub) {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* ─── Decorative plants in the lobby ───
@@ -6078,7 +6253,7 @@ function makeLabelTexture(label, subtitle) {
     }
     const tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
-    return tex;
+    return releaseCanvasAfterUpload(tex);
   }
   ctx.fillText(label.toUpperCase(), c.width / 2, yMain);
   // Same-colour stroke so the serif keeps its body when mipmapped across
@@ -6100,7 +6275,7 @@ function makeLabelTexture(label, subtitle) {
   const tex = new THREE.CanvasTexture(c);
   tex.needsUpdate = true;
   tex.anisotropy = 4;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* ─── Track lighting bars (visual only, ceiling) ─── */
@@ -8579,13 +8754,17 @@ function placePainting(art, dir, localCoord, room) {
   };
 
   // Painting (texture loaded async, nearest to the entrance first)
+  const texSrc = { url: paintingSrc(art.file, 'wall'), priority: Math.hypot(px, pz - 4.5) };
   queueTextureLoad(
-    paintingSrc(art.file, 'wall'),
-    Math.hypot(px, pz - 4.5),
+    texSrc.url,
+    texSrc.priority,
     (tex) => {
       fitTextureToTier(tex);
       tex.encoding = THREE.sRGBEncoding;
       tex.anisotropy = Math.min(PERF.aniso, renderer.capabilities.getMaxAnisotropy());
+      // A bitmap-decoded painting goes to the GPU now, and the bitmap is
+      // closed by that upload (last, so the filters above are what it uploads with)
+      uploadAndCloseBitmap(tex);
       const pMat = new THREE.MeshStandardMaterial({
         map: tex,
         roughness: 0.62,
@@ -8618,6 +8797,9 @@ function placePainting(art, dir, localCoord, room) {
       p.userData.normalZ = normalZ;
       p.userData.yCenter = yCenter;
       p.userData.spotSpec = spotSpec;
+      // The wall texture and where it came from, for the GL context-restore reload
+      p.userData.wallTex = tex;
+      p.userData.texSrc = texSrc;
       spotSpec.mesh = p;
       scene.add(p);
       paintingMeshes.push(p);
@@ -12095,11 +12277,19 @@ function beginPaintingBurn(painting) {
   mat.onBeforeCompile = meltOnBeforeCompile;
   mat.dispose();   // renderer state only (textures untouched): forces onBeforeCompile to rebind uniforms
   mat.needsUpdate = true;
-  // Generate the charred texture once per painting (cached on the painting)
+  // Generate the charred texture once per painting (cached on the painting).
+  // A bitmap-decoded painting has nothing to read back (its bitmap was closed
+  // after the upload), so its char is built from the ≤1024 px file, async:
+  // it is only consumed at 95% burn, the better part of a minute from now.
   let charredMap = painting.userData.charredMap;
   if (!charredMap && mat.map) {
-    charredMap = makeCharredTexture(mat.map);
-    painting.userData.charredMap = charredMap;
+    const img = mat.map.image;
+    if (img && img.width > 0) {
+      charredMap = makeCharredTexture(mat.map);
+      painting.userData.charredMap = charredMap;
+    } else {
+      requestCharredTexture(painting, mat.map);
+    }
   }
   const st = {
     painting, mat, fires: [],
@@ -12351,6 +12541,14 @@ function makeFlameTexture() {
 function makeCharredTexture(sourceTex) {
   const img = sourceTex.image;
   if (!img || !img.width) return null;
+  const tex = _charredFromImage(img, sourceTex);
+  // The canvas holds the source's pixels as they are, so it uploads with the
+  // source's orientation (true for an <img>; a pre-flipped bitmap drawn to a
+  // canvas by fitTextureToTier would be false)
+  tex.flipY = sourceTex.flipY;
+  return tex;
+}
+function _charredFromImage(img, sourceTex) {
   // The char is nearly black: 1024 px on the long side is plenty, keeps the
   // canvas under the 2048 texture cap and the per-pixel pass quick on iPad
   // (full-size photos made the first flame on each painting stall).
@@ -12376,6 +12574,51 @@ function makeCharredTexture(sourceTex) {
   tex.wrapS = sourceTex.wrapS;
   tex.wrapT = sourceTex.wrapT;
   return tex;
+}
+// The charred map for a painting whose decoded image is gone (bitmap path):
+// the ≤1024 px file (paintings/lo — the same pixels, remapped to 8..36, that
+// the md image downscaled to 1024 gave) decoded off the main thread, drawn
+// to a canvas the way an <img> is (no flip: it uploads with the CanvasTexture
+// default flipY = true, exactly as makeCharredTexture's does) and remapped.
+// Lands in painting.userData.charredMap and in the burn that is live then —
+// updateLighterBurn swaps st.charredMap in. One request per painting at a
+// time, so an end + re-ignition can't build it twice. If the file won't
+// come, the decoded image is used if one is at hand, else a flat near-black
+// (the remap's mid value), so burnout always chars.
+function requestCharredTexture(painting, sourceTex) {
+  if (painting.userData.charredPending) return;
+  painting.userData.charredPending = true;
+  const settle = (tex) => {
+    painting.userData.charredPending = false;
+    if (!tex) return;
+    painting.userData.charredMap = tex;
+    const st = painting.userData.burn;
+    if (st && !st.charredMap) st.charredMap = tex;
+  };
+  const fallback = () => {
+    try {
+      const img = sourceTex.image;
+      if (img && img.width > 0) return settle(makeCharredTexture(sourceTex));
+      const c = document.createElement('canvas');
+      c.width = c.height = 4;
+      const g = c.getContext('2d');
+      g.fillStyle = 'rgb(128,128,128)';     // mid luminance → the remap's rgb(26,20,18)
+      g.fillRect(0, 0, 4, 4);
+      settle(_charredFromImage(c, sourceTex));
+    } catch (e) { settle(null); }
+  };
+  const art = ARTWORKS[painting.userData.artIndex];
+  if (!art || typeof createImageBitmap !== 'function' || typeof fetch !== 'function') return fallback();
+  fetch(paintingSrc(art.file, 'thumb'), { cache: 'force-cache', priority: 'low' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(blob => createImageBitmap(blob))
+    .then(bmp => {
+      let tex = null;
+      try { tex = _charredFromImage(bmp, sourceTex); }
+      finally { bmp.close(); }
+      settle(tex);
+    })
+    .catch(fallback);
 }
 
 function updateProjectiles(dt) {
@@ -12664,7 +12907,7 @@ function makeCrowEmblemTexture(style) {
   const tex = new THREE.CanvasTexture(c);
   tex.anisotropy = 4;
   _crowTex[style] = tex;
-  return tex;
+  return releaseCanvasAfterUpload(tex);
 }
 
 /* Shared canvas textures (generated once) */
@@ -14730,6 +14973,13 @@ function openModal(idx) {
 function closeModal() {
   document.getElementById('modal').classList.remove('show');
   updatePaintNavVis();
+  // Let go of the full-size image (the original: up to 45 MB decoded on a
+  // desktop) once the modal is away; openModal sets it again, and a re-open
+  // in the meantime keeps its own.
+  setTimeout(() => {
+    const m = document.getElementById('modal');
+    if (!m.classList.contains('show')) document.getElementById('modal-img').removeAttribute('src');
+  }, 400);
 }
 function modalNav(delta) {
   const m = document.getElementById('modal');
