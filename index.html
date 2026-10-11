@@ -15243,7 +15243,7 @@ function forwardInMirror(audio, muted) {
 }
 function dropReversedListeners(rev) {
   if (_rev.onMeta) { rev.removeEventListener('loadedmetadata', _rev.onMeta); _rev.onMeta = null; }
-  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); _rev.onPlaying = null; }
+  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); rev.removeEventListener('seeked', _rev.onPlaying); _rev.onPlaying = null; }
 }
 // Begin at the mirrored position of where the forward track paused. The
 // reversed file's duration is unknown until its metadata lands (the forward
@@ -15272,7 +15272,7 @@ function seekReversedMusic(rev, audio) {
 // (a seek into an un-buffered stretch of the file arrives later than play()),
 // taken from the 'playing' event or the play() promise, whichever is first.
 function armReversedFadeIn(rev) {
-  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); _rev.onPlaying = null; }
+  if (_rev.onPlaying) { rev.removeEventListener('playing', _rev.onPlaying); rev.removeEventListener('seeked', _rev.onPlaying); _rev.onPlaying = null; }
   const B = _musicBus;
   if (!B || !B.revG) return;
   const t = B.ctx.currentTime;
@@ -15280,6 +15280,10 @@ function armReversedFadeIn(rev) {
   B.revG.gain.setValueAtTime(0, t);
   _rev.onPlaying = () => fireReversedFadeIn();
   rev.addEventListener('playing', _rev.onPlaying);
+  // WebKit can dispatch 'playing' before a seek into already-buffered data
+  // lands and then nothing else — 'seeked' covers that case (the guard below
+  // still waits for 'playing' when the data is not there yet)
+  rev.addEventListener('seeked', _rev.onPlaying);
 }
 function fireReversedFadeIn() {
   if (!_rev.onPlaying) return;   // not armed, or already through
@@ -15289,6 +15293,7 @@ function fireReversedFadeIn() {
   // landed): no sound yet — the one after the data arrives fires the ramp
   if (_rev.started && (rev.seeking || rev.readyState < 3)) return;
   rev.removeEventListener('playing', _rev.onPlaying);
+  rev.removeEventListener('seeked', _rev.onPlaying);
   _rev.onPlaying = null;
   const B = _musicBus;
   if (!_rev.started || !B || !B.revG) return;
@@ -16374,7 +16379,7 @@ async function boot() {
         // enterGallery started the music a tick ago) and rearm on the first
         // gesture for strict autoplay policies (iOS). A started stream that
         // is merely paused resumes in place, never re-seeks.
-        primeReversedMusic(false);
+        if (localStorage.getItem('musicMuted') !== 'true') primeReversedMusic(false);
         const kickReverse = () => {
           if (!mirrorWorld || localStorage.getItem('musicMuted') === 'true') return;
           const rev = revEl();
