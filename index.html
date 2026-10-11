@@ -4030,6 +4030,351 @@ let MIRROR_W = 1.5, MIRROR_H = 2.3, MIRROR_Y = 1.75;
 // Duomo lancet head: two arcs of this radius (a drop arch — radius < span)
 // meeting at the top of the glass's bounding box.
 const MIRROR_LANCET_R = 1.0;
+
+/* ─── Portal occlusion culling ───
+   Every painting hangs in a series room that the lobby only sees through the
+   room's one 2.4 × 2.8 m archway, yet three.js only frustum-culls: from the
+   lobby it draws every canvas and frame part behind the walls (21 Victorian
+   frames × 62 k triangles), and the two Reflectors repeat the waste in their
+   nested passes. scene.onBeforeRender fires once per render pass, after the
+   matrices are current and before the render list is built, so for each pass
+   we hide the paintings and frame parts that no straight line from that
+   pass's eye can reach through the (inflated) openings — exact occlusion, so
+   the pixels are identical — and show them again when the outermost pass
+   ends, so raycasts, the launcher and rocketTargets() always see the whole
+   scene between frames. ?cull=0 (or _portal.enabled = false) switches it off. */
+const _portal = {
+  enabled: true,
+  installed: false,
+  depth: 0,              // render passes in flight (restore when it returns to 0)
+  pass: null,            // 'mirror' while the wall mirror re-renders the scene
+  mirrorStale: false,    // a mirror refresh was skipped: force the next one
+  passNo: 0,             // stamps the per-pass arch frustums
+  hidden: [],            // exactly the objects this code set invisible
+  rooms: null,           // series rooms with their archway (room-local coords)
+  lobby: null,           // ROOMS.lobby the room list was built from
+  glass: { open: true, n: new Float64Array(20) },   // mirror-pass glass frustum
+  skip: { open: true, n: new Float64Array(20) },    // glass-behind-wall test
+  warned: false,
+};
+// Scratch for the per-pass path (it allocates nothing).
+const _pv = {
+  eye: new THREE.Vector3(), leye: new THREE.Vector3(), mid: new THREE.Vector3(),
+  a: new THREE.Vector3(), b: new THREE.Vector3(), n: new THREE.Vector3(),
+  c: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()],
+};
+const _pBox = new THREE.Box3(), _pBox2 = new THREE.Box3();
+const _obj3dAfterRender = THREE.Object3D.prototype.onAfterRender;
+
+// Series rooms and their archway, in room-local (worldRoot) coordinates. The
+// layout never changes after buildGallery, so this is built once.
+function portalRooms() {
+  if (_portal.rooms && _portal.lobby === ROOMS.lobby) return _portal.rooms;
+  if (!ROOMS.lobby) return null;
+  const list = [];
+  for (const id of Object.keys(ROOMS)) {
+    if (id === 'lobby') continue;
+    const R = ROOMS[id];
+    const a = R.archways && R.archways[0];
+    if (!a) continue;
+    const ns = (a.dir === 'north' || a.dir === 'south');
+    list.push({
+      id, R,
+      axis: ns ? 'z' : 'x',                                   // wall plane axis
+      at: ns ? (a.dir === 'south' ? R.cz + R.d / 2 : R.cz - R.d / 2)
+             : (a.dir === 'east' ? R.cx + R.w / 2 : R.cx - R.w / 2),
+      center: ns ? (a.worldX !== undefined ? a.worldX : R.cx)
+                 : (a.worldZ !== undefined ? a.worldZ : R.cz),
+      P: { open: true, n: new Float64Array(20) },             // this pass's frustum
+      stamp: -1,
+    });
+  }
+  _portal.rooms = list;
+  _portal.lobby = ROOMS.lobby;
+  return list;
+}
+// Room containing a room-local (x, z), the lobby tested last; null outside all.
+function portalRoomAt(x, z) {
+  const rooms = portalRooms();
+  for (let i = 0; i < rooms.length; i++) {
+    const R = rooms[i].R;
+    if (x >= R.cx - R.w / 2 && x <= R.cx + R.w / 2 && z >= R.cz - R.d / 2 && z <= R.cz + R.d / 2) return rooms[i].id;
+  }
+  const L = ROOMS.lobby;
+  if (x >= L.cx - L.w / 2 && x <= L.cx + L.w / 2 && z >= L.cz - L.d / 2 && z <= L.cz + L.d / 2) return 'lobby';
+  return null;
+}
+// The room whose arch lane holds a room-local eye (within 0.3 m of the wall's
+// mid-plane and the opening's width + 0.3 m): both rooms count as the eye's.
+function portalArchRoomNear(x, z) {
+  const rooms = portalRooms();
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i];
+    const d = r.axis === 'z' ? z - r.at : x - r.at;
+    const s = r.axis === 'z' ? x - r.center : z - r.center;
+    if (Math.abs(d) < 0.3 && Math.abs(s) < ARCH_WIDTH / 2 + 0.3) return r.id;
+  }
+  return null;
+}
+// Frame group → room: its painting's roomId once the texture has arrived,
+// otherwise the wall point placePainting stamped on it (room-local, like
+// the group itself — never a world position, which the mirror world flips).
+function portalFrameRoom(fg) {
+  const u = fg.userData;
+  if (u.roomId) return u.roomId;
+  const x = u.wallX !== undefined ? u.wallX + (u.normalX || 0) * 0.1 : fg.position.x;
+  const z = u.wallZ !== undefined ? u.wallZ + (u.normalZ || 0) * 0.1 : fg.position.z;
+  const rid = portalRoomAt(x, z);
+  if (rid) u.roomId = rid;
+  return rid;
+}
+// Frustum through a rectangle (4 world corners in order) from the eye: four
+// planes through the eye and each edge, facing the rectangle's centre, plus
+// the rectangle's own plane facing away from the eye. Every plane is oriented
+// numerically (the mirror world's x-flip reverses the winding). Degenerate
+// cases — the eye in the rectangle's plane, a vanishing normal — leave the
+// portal fully open (nothing culled through it).
+function portalBuild(P, eye, c) {
+  const n = P.n, mid = _pv.mid, a = _pv.a, b = _pv.b, nv = _pv.n;
+  P.open = true;
+  mid.copy(c[0]).add(c[1]).add(c[2]).add(c[3]).multiplyScalar(0.25);
+  for (let i = 0; i < 4; i++) {
+    a.subVectors(c[i], eye);
+    b.subVectors(c[(i + 1) & 3], eye);
+    nv.crossVectors(a, b);
+    const len = nv.length();
+    if (len < 1e-6) return;
+    nv.divideScalar(len);
+    let d = -nv.dot(eye);
+    const s = nv.dot(mid) + d;
+    if (Math.abs(s) < 1e-9) return;
+    if (s < 0) { nv.negate(); d = -d; }
+    n[i * 4] = nv.x; n[i * 4 + 1] = nv.y; n[i * 4 + 2] = nv.z; n[i * 4 + 3] = d;
+  }
+  a.subVectors(c[1], c[0]);
+  b.subVectors(c[2], c[0]);
+  nv.crossVectors(a, b);
+  const len = nv.length();
+  if (len < 1e-6) return;
+  nv.divideScalar(len);
+  let d = -nv.dot(c[0]);
+  const s = nv.dot(eye) + d;
+  if (Math.abs(s) < 0.02) return;
+  if (s > 0) { nv.negate(); d = -d; }
+  n[16] = nv.x; n[17] = nv.y; n[18] = nv.z; n[19] = d;
+  P.open = false;
+}
+// A box passes when it is not wholly outside any plane (positive-vertex test).
+function portalBoxPasses(box, P) {
+  if (P.open) return true;
+  const n = P.n, mn = box.min, mx = box.max;
+  for (let i = 0; i < 20; i += 4) {
+    const nx = n[i], ny = n[i + 1], nz = n[i + 2];
+    if (nx * (nx >= 0 ? mx.x : mn.x) + ny * (ny >= 0 ? mx.y : mn.y) + nz * (nz >= 0 ? mx.z : mn.z) + n[i + 3] < 0) return false;
+  }
+  return true;
+}
+// The room's archway as a rectangle in its wall's mid-plane, spanning
+// y0..y1 and the opening's width + m each side (room-local → world through
+// worldRoot), then its frustum from the eye.
+function portalBuildArch(r, eye, y0, y1, m) {
+  const c = _pv.c, hw = ARCH_WIDTH / 2 + m;
+  if (r.axis === 'z') {
+    c[0].set(r.center - hw, y0, r.at); c[1].set(r.center + hw, y0, r.at);
+    c[2].set(r.center + hw, y1, r.at); c[3].set(r.center - hw, y1, r.at);
+  } else {
+    c[0].set(r.at, y0, r.center - hw); c[1].set(r.at, y0, r.center + hw);
+    c[2].set(r.at, y1, r.center + hw); c[3].set(r.at, y1, r.center - hw);
+  }
+  if (worldRoot) for (let i = 0; i < 4; i++) c[i].applyMatrix4(worldRoot.matrixWorld);
+  portalBuild(r.P, eye, c);
+}
+// World AABB of an object and everything under it (fires are children of
+// their painting, outline shells of their frame mesh). False when any part
+// has no bounding box — that object stays visible.
+let _sbFirst = true, _sbOk = true;
+function _portalSubtreeBox(o, box) {
+  const g = o.geometry;
+  if (g) {
+    if (g.boundingBox === null) g.computeBoundingBox();
+    if (!g.boundingBox || g.boundingBox.isEmpty()) { _sbOk = false; return; }
+    _pBox2.copy(g.boundingBox).applyMatrix4(o.matrixWorld);
+    if (_sbFirst) { box.copy(_pBox2); _sbFirst = false; } else box.union(_pBox2);
+  }
+  const ch = o.children;
+  for (let i = 0; i < ch.length && _sbOk; i++) _portalSubtreeBox(ch[i], box);
+}
+function portalSubtreeBox(o, box) {
+  _sbFirst = true; _sbOk = true;
+  _portalSubtreeBox(o, box);
+  return _sbOk && !_sbFirst;
+}
+// Marks an object once it has really been drawn (not the bloom depth
+// pre-pass): until then it is never culled, so geometry and texture uploads
+// still happen the first time it is in view, exactly as before.
+function _portalDrawnHook(renderer, scene) {
+  if (scene.overrideMaterial === null) this.userData._portalDrawn = true;
+}
+// Show everything this code hid (and nothing else).
+function portalRestore() {
+  const h = _portal.hidden;
+  for (let i = 0; i < h.length; i++) h[i].visible = true;
+  h.length = 0;
+}
+// Per-pass state shared by portalCullForCamera and portalConsider.
+const _pp = { kind: 'main', openLobby: true, openRoom: null, y0: 0, y1: 0, m: 0, glass: false, warnBox: false };
+function portalRoomFrustum(rid) {
+  const rooms = _portal.rooms;
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i];
+    if (r.id !== rid) continue;
+    if (r.stamp !== _portal.passNo) { portalBuildArch(r, _pv.eye, _pp.y0, _pp.y1, _pp.m); r.stamp = _portal.passNo; }
+    return r.P;
+  }
+  return null;
+}
+function portalConsider(o, rid) {
+  if (!o.visible || !rid) return;
+  if (o.onAfterRender !== _portalDrawnHook) {
+    if (o.onAfterRender !== _obj3dAfterRender) return;   // someone else's hook: leave it
+    o.onAfterRender = _portalDrawnHook;
+  }
+  if (!o.userData._portalDrawn) return;
+  const box = _pBox;
+  if (!portalSubtreeBox(o, box)) return;
+  if (box.max.x - box.min.x > 5 || box.max.y - box.min.y > 5 || box.max.z - box.min.z > 5) {
+    if (!_portal.warned) { _portal.warned = true; console.warn('portal culling: oversized bounding box, object left visible', o); }
+    return;
+  }
+  box.expandByScalar(0.05);
+  let pass = true;
+  if (_pp.glass) pass = portalBoxPasses(box, _portal.glass);
+  const own = rid === 'lobby' ? _pp.openLobby : rid === _pp.openRoom;
+  if (pass && !own) {
+    if (rid !== 'lobby') { const P = portalRoomFrustum(rid); pass = !P || portalBoxPasses(box, P); }
+    if (pass && !_pp.openLobby) { const P = portalRoomFrustum(_pp.openRoom); pass = !P || portalBoxPasses(box, P); }
+  }
+  if (!pass) { o.visible = false; _portal.hidden.push(o); }
+}
+// Cull for one render pass. The main pass uses the arch openings; the floor
+// reflection (fx.js, eye mirrored below the floor) each opening joined with
+// its mirror image below the floor, widened for the shader's blur; the wall
+// mirror additionally the glass outline from its virtual eye. Any other
+// camera culls nothing.
+function portalCullForCamera(cam) {
+  portalRestore();
+  if (!_portal.enabled || !camera || !portalRooms()) return;
+  const eye = _pv.eye.setFromMatrixPosition(cam.matrixWorld);
+  let kind;
+  if (cam === camera) kind = 'main';
+  else if (_portal.pass === 'mirror') kind = 'mirror';
+  else if (eye.y < 0) kind = 'floor';
+  else return;
+  const pe = cam.projectionMatrix.elements;
+  // the wider half-angle of the view: tan(hfov / 2) or tan(vfov / 2)
+  const tanH = Math.max(pe[0] ? 1 / Math.abs(pe[0]) : 1, pe[5] ? 1 / Math.abs(pe[5]) : 1);
+  _pp.kind = kind;
+  _pp.glass = false;
+  _portal.passNo++;
+  const leye = _pv.leye.copy(eye);
+  if (worldRoot) worldRoot.worldToLocal(leye);
+  if (kind === 'mirror') {
+    // Ripples warp the sampled reflection anywhere across the glass: cull nothing.
+    const U = mirrorMesh && mirrorMesh.material && mirrorMesh.material.uniforms;
+    if (!U || !U.uCount || U.uCount.value > 0) return;
+    const g = mirrorMesh.geometry;
+    if (g.boundingBox === null) g.computeBoundingBox();
+    if (!g.boundingBox || g.boundingBox.isEmpty()) return;
+    const gb = _pBox.copy(g.boundingBox).applyMatrix4(mirrorMesh.matrixWorld);
+    if (gb.max.x - gb.min.x > 0.05) return;                  // not a plane x = const
+    const gx = (gb.min.x + gb.max.x) / 2;
+    const mg = 0.05 + 0.01 * tanH * Math.abs(eye.x - gx);     // a few RT texels
+    const c = _pv.c;
+    c[0].set(gx, gb.min.y - mg, gb.min.z - mg); c[1].set(gx, gb.min.y - mg, gb.max.z + mg);
+    c[2].set(gx, gb.max.y + mg, gb.max.z + mg); c[3].set(gx, gb.max.y + mg, gb.min.z - mg);
+    portalBuild(_portal.glass, eye, c);
+    if (_portal.glass.open) return;
+    _pp.glass = true;
+    // The virtual eye stands behind the glass: everything it sees passes
+    // through the glass into the lobby, then through the arches.
+    _pp.openLobby = true; _pp.openRoom = null;
+  } else {
+    const rid = portalRoomAt(leye.x, leye.z) || 'lobby';
+    _pp.openLobby = rid === 'lobby';
+    _pp.openRoom = _pp.openLobby ? null : rid;
+    const near = portalArchRoomNear(leye.x, leye.z);
+    if (near) { _pp.openLobby = true; _pp.openRoom = near; }
+  }
+  if (kind === 'floor') {
+    // Doubled rectangle: a line from the sunken eye crosses a wall plane once,
+    // either above the floor (the real opening) or below it (the opening's
+    // reflection). Margin covers the 0.004-uv disk blur plus a texel.
+    let dist = 0;
+    const rooms = _portal.rooms;
+    for (let i = 0; i < rooms.length; i++) {
+      const r = rooms[i];
+      dist = Math.max(dist, Math.abs((r.axis === 'z' ? leye.z : leye.x) - r.at));
+    }
+    _pp.m = 0.1 + 0.02 * tanH * dist;
+    _pp.y0 = -(ARCH_HEIGHT + _pp.m); _pp.y1 = ARCH_HEIGHT + _pp.m;
+  } else {
+    _pp.m = 0.05; _pp.y0 = -0.05; _pp.y1 = ARCH_HEIGHT + 0.05;
+  }
+  for (let i = 0; i < paintingMeshes.length; i++) {
+    const p = paintingMeshes[i], rid = p.userData.roomId;
+    const fg = p.userData.frameGroup;
+    if (fg && rid && !fg.userData.roomId) fg.userData.roomId = rid;
+    portalConsider(p, rid);
+  }
+  for (let i = 0; i < paintingFrames.length; i++) {
+    const fg = paintingFrames[i], rid = portalFrameRoom(fg), ch = fg.children;
+    for (let j = 0; j < ch.length; j++) portalConsider(ch[j], rid);
+  }
+}
+// Is the wall mirror's glass hidden behind a series-room wall from this
+// camera? Then its reflection cannot be seen and the re-render is skipped.
+function portalMirrorHidden(cam) {
+  if (!_portal.enabled || !mirrorMesh || !portalRooms()) return false;
+  const eye = _pv.eye.setFromMatrixPosition(cam.matrixWorld);
+  const leye = _pv.leye.copy(eye);
+  if (worldRoot) worldRoot.worldToLocal(leye);
+  const rid = portalRoomAt(leye.x, leye.z);
+  if (!rid || rid === 'lobby' || portalArchRoomNear(leye.x, leye.z)) return false;
+  const rooms = _portal.rooms;
+  let r = null;
+  for (let i = 0; i < rooms.length; i++) if (rooms[i].id === rid) r = rooms[i];
+  if (!r) return false;
+  const g = mirrorMesh.geometry;
+  if (g.boundingBox === null) g.computeBoundingBox();
+  if (!g.boundingBox || g.boundingBox.isEmpty()) return false;
+  const saveP = r.P;
+  r.P = _portal.skip;
+  portalBuildArch(r, eye, -0.05, ARCH_HEIGHT + 0.05, 0.05);
+  r.P = saveP;
+  if (_portal.skip.open) return false;
+  _pBox.copy(g.boundingBox).applyMatrix4(mirrorMesh.matrixWorld).expandByScalar(0.05);
+  return !portalBoxPasses(_pBox, _portal.skip);
+}
+function installPortalCulling() {
+  if (_portal.installed || !scene) return;
+  _portal.installed = true;
+  try { if (new URLSearchParams(location.search).get('cull') === '0') _portal.enabled = false; } catch (e) {}
+  const before = scene.onBeforeRender, after = scene.onAfterRender;
+  scene.onBeforeRender = function (r, s, cam, rt) {
+    before.call(this, r, s, cam, rt);
+    // A main-camera render is always outermost: whatever an aborted pass left
+    // hidden comes back here.
+    if (cam === camera || _portal.depth === 0) { _portal.depth = 0; portalRestore(); }
+    _portal.depth++;
+    try { portalCullForCamera(cam); }
+    catch (e) { portalRestore(); _portal.enabled = false; console.warn('portal culling disabled:', e); }
+  };
+  scene.onAfterRender = function (r, s, cam) {
+    if (--_portal.depth <= 0) { _portal.depth = 0; portalRestore(); }
+    after.call(this, r, s, cam);
+  };
+}
+
 function buildMirror() {
   const lobby = ROOMS.lobby;
   const wallX = lobby.cx + lobby.w / 2 - WALL_THICKNESS / 2;  // inner face of east wall
@@ -4155,15 +4500,20 @@ function buildMirror() {
       color: 0x9aa0a0,
       shader: rippleShader,
     });
-    // The reflection is a second full render of the scene. On the lean tier it
-    // refreshes every other frame — the last one stays on the glass between.
-    if (PERF.low) {
-      const reflect = mirrorMesh.onBeforeRender;
-      mirrorMesh.onBeforeRender = function (...args) {
-        if (_frameNo & 1) return;
-        reflect.apply(this, args);
-      };
-    }
+    // The reflection is a second full render of the scene. It is skipped
+    // outright while the glass is hidden behind a series-room wall (nothing
+    // samples the stale image), and on the lean tier it refreshes every other
+    // frame — the last one stays on the glass between; a skip forces the next
+    // refresh so the glass never shows up with a view from another room.
+    // While it renders, portalCullForCamera culls through the glass too.
+    const reflect = mirrorMesh.onBeforeRender;
+    mirrorMesh.onBeforeRender = function (r, s, cam) {
+      if (cam === camera && portalMirrorHidden(cam)) { _portal.mirrorStale = true; return; }
+      if (PERF.low && (_frameNo & 1) && !_portal.mirrorStale) return;
+      _portal.mirrorStale = false;
+      _portal.pass = 'mirror';
+      try { reflect.call(this, r, s, cam); } finally { _portal.pass = null; }
+    };
   } else {
     mirrorMesh = new THREE.Mesh(
       makeMirrorGlassGeometry(glassKind),
@@ -4182,6 +4532,7 @@ function buildMirror() {
   scene.add(g);
   mirrorSurround.group = g;
   syncMirrorSurround();
+  installPortalCulling();
 }
 
 /* ─── Mirror surround ─── */
