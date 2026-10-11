@@ -5791,6 +5791,7 @@ function buildLobbyPlants() {
     group.position.set(pos.x, 0, pos.z);
     // Slight rotation for variety
     group.rotation.y = Math.random() * Math.PI * 2;
+    group.userData.deferCompile = 'plants';   // shader queue: last while a theme hides them
     scene.add(group);
     lobbyPlants.push(group);
   }
@@ -11713,8 +11714,177 @@ function warmShaderPrograms(delay) {
   _warmTimer = setTimeout(() => {
     if (!renderer || !scene || !camera) return;
     warmMeltProgram();
-    try { renderer.compile(scene, camera); } catch (e) {}
+    if ((delay || 0) < 500) {
+      // Gesture-driven (first mirror push, lighter armed): the programs are
+      // needed within a few frames, so build whatever is still missing now —
+      // normally nothing, the queue below has long since drained them.
+      try { renderer.compile(scene, camera); } catch (e) {}
+    } else {
+      // At rest after the intro: queue everything (hidden mirror-world pieces
+      // and FX pools included) and drain it one program per frame.
+      enqueueCompiles(scene, null, true);
+      if (_cq.items.length) _cq.urgent = true;
+    }
   }, delay || 0);
+}
+
+/* ─── Shader program queue ───
+   r128 can only compile synchronously, so the ~40 programs the gallery uses
+   are built one per frame behind the opaque entry screen instead of in one
+   burst (the first render used to compile 26 inside boot(), the post-intro
+   renderer.compile() another 14 while the visitor was already walking).
+   Each queued object is compiled through a one-object probe scene that
+   carries the live lights, fog and environment — the program cache key
+   depends on exactly those plus the object/material flags — so the real
+   render later finds its program ready and only re-binds light uniforms.
+   The Enter button enables once the set the first visible frame needs has
+   drained (hard cap below); anything still queued keeps draining at quiet
+   moments after entering. Behind the entry screen (and the opaque Index /
+   Slideshow views) the frame itself is skipped: only a slow heartbeat render
+   keeps texture uploads and FX.init flowing. */
+const ENTRY_READY_CAP_MS = 6000;    // a pathological device still gets the button
+const COVERED_RENDER_MS = 300;      // > the fx governor's 250 ms gap cut-off
+const _cq = {
+  items: [],                 // {o, m, d: deferred (hidden mirror/plant set), f: force}
+  seen: new WeakMap(),       // material → version it was queued at
+  probe: null, started: false, t0: 0, scanAt: 0, lastRender: 0, renders: 0,
+  bootDrained: false, ready: false, onReady: null, urgent: false,
+  // ?return=painting auto-enters at +250 ms: render from frame 1 exactly as before
+  showThrough: /[?&]return=painting/.test(location.search),
+};
+// Queue every material under `root` that has no program yet (visible objects
+// first, so the lobby is ready soonest). `filter(o)` picks the current set;
+// objects it rejects are NOT marked seen, so a later unfiltered call still
+// picks them up. A material whose version changed since it was queued is
+// queued again (a new variant may be needed).
+function enqueueCompiles(root, filter, deferred) {
+  if (!root || !renderer) return;
+  const visit = (o) => {
+    if (!(o.isMesh || o.isLine || o.isPoints || o.isSprite) || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      const v = _cq.seen.get(m);
+      if (v === m.version) continue;
+      if (filter && !filter(o)) continue;
+      _cq.seen.set(m, m.version);
+      if (v === undefined && renderer.properties.get(m).currentProgram) continue;
+      _cq.items.push({ o, m, d: !!deferred, f: v !== undefined });
+    }
+  };
+  root.traverseVisible(visit);
+  root.traverse(visit);
+}
+// Boot set: everything except subtrees tagged deferCompile that are hidden
+// right now (the mirror-world arsenal; the ficus plants under a theme that
+// hides them). Whatever is visible is never deferred, tag or not.
+function notDeferred(o) {
+  let tagged = false, hidden = false;
+  for (let p = o; p; p = p.parent) {
+    if (p.userData && p.userData.deferCompile) tagged = true;
+    if (p.visible === false) hidden = true;
+  }
+  return !(tagged && hidden);
+}
+// Compile one object through the probe. Assigning probe.children never
+// reparents (parents stay the real scene); the subtree of the object is
+// compiled with it (a plinth box brings its edge-line child along).
+function probeCompile(o) {
+  const probe = _cq.probe || (_cq.probe = new THREE.Scene());
+  probe.fog = scene.fog;                     // theme switches replace these
+  probe.environment = scene.environment;
+  const kids = [];
+  scene.traverseVisible(x => { if (x.isLight) kids.push(x); });
+  kids.push(o);
+  probe.children = kids;
+  try { renderer.compile(probe, camera); } catch (e) {}
+  finally { probe.children = []; }
+}
+// Build the next queued program. One NEW program per call: items that only
+// hit the program cache (the 30 paintings share one key) are folded in, up to
+// 8. Items whose object has left the scene, no longer holds the material, or
+// already has its program (compiled as part of a subtree, or drawn by a
+// heartbeat render) are dropped. Returns false once the queue is empty.
+function pumpCompiles() {
+  let n = 0;
+  while (_cq.items.length) {
+    const it = _cq.items.shift();
+    const o = it.o, m = it.m;
+    let attached = false;
+    for (let p = o; p; p = p.parent) if (p === scene) { attached = true; break; }
+    if (!attached) continue;
+    const cur = o.material;
+    if (!(cur === m || (Array.isArray(cur) && cur.includes(m)))) continue;
+    if (!it.f && renderer.properties.get(m).currentProgram) continue;
+    const before = renderer.info.programs.length;
+    probeCompile(o);
+    n++;
+    if (renderer.info.programs.length > before || n >= 8) break;
+  }
+  if (!_cq.items.length) _cq.urgent = false;
+  return n > 0;
+}
+// Entry-screen frame (overlay opaque). Queues on the first frame, rescans
+// every 30 frames for paintings and frames as they arrive, compiles within a
+// ~45 ms budget, and says whether this frame needs a heartbeat render: the
+// first once the boot set is built (so it carries no compile burst), then at
+// most every COVERED_RENDER_MS.
+function entryCompileFrame(now) {
+  if (!_cq.started) {
+    _cq.started = true;
+    _cq.t0 = now;
+    _cq.scanAt = _frameNo;
+    // Four synchronous GPU-process queries per program; diagnostics under ?debug
+    renderer.debug.checkShaderErrors = /[?&]debug/.test(location.search);
+    warmMeltProgram();
+    enqueueCompiles(scene, notDeferred, false);
+    enqueueCompiles(scene, null, true);     // hidden mirror / plant set last
+  } else if (_frameNo - _cq.scanAt >= 30) {
+    _cq.scanAt = _frameNo;
+    if (!_meltWarmMesh) warmMeltProgram();  // needs a painting with its map
+    enqueueCompiles(scene, notDeferred, false);
+    enqueueCompiles(scene, null, true);
+  }
+  const t = performance.now();
+  do { if (!pumpCompiles()) break; } while (performance.now() - t < 45);
+  if (!_cq.bootDrained && !_cq.items.some(it => !it.d)) _cq.bootDrained = true;
+  if (_cq.showThrough) return true;
+  if (!_cq.bootDrained && now - _cq.t0 <= ENTRY_READY_CAP_MS) return false;
+  return !_cq.renders || now - _cq.lastRender >= COVERED_RENDER_MS;
+}
+// Enter enables once the boot set is built (or the cap passed) AND one
+// heartbeat render has run, so FX.init and the first texture uploads are
+// behind us before the overlay lifts. Never re-disables.
+function entryReadyCheck(now) {
+  if (_cq.ready) return;
+  if (!_cq.renders) return;
+  if (_cq.bootDrained || entered || now - _cq.t0 > ENTRY_READY_CAP_MS) {
+    _cq.ready = true;
+    const f = _cq.onReady;
+    _cq.onReady = null;
+    if (f) f();
+  }
+}
+function onEntryReady(fn) {
+  if (_cq.ready) fn(); else _cq.onReady = fn;
+}
+function fxPoolsBusy() {
+  for (const k of ['fire', 'blaze', 'smoke', 'debris']) {
+    for (const e of _fxPools[k]) if (e.busy) return true;
+  }
+  return false;
+}
+// After entering: one program per quiet frame — never while a crossing, the
+// intro, a glide (tap-walk, wheel, snap) or a projectile / smoke / rocket /
+// flame is in motion. Urgent (the post-intro warm-up) skips only the idle
+// test, so a visitor who never stops looking around still gets the programs.
+function idleCompileFrame() {
+  if (!_cq.items.length) return;
+  if (mirrorCross || paintingCross || intro.active || snapTween || tapWalkTarget || wheelImpulse !== 0) return;
+  if (projectiles.length || activeSmoke.length || (destruction.active && activeFires.length)) return;
+  if (arsenal.rockets.length || fxPoolsBusy()) return;
+  if (!_cq.urgent && timeSinceInput <= 0.3) return;
+  pumpCompiles();
 }
 // Burn state for a painting, created (and its material patched) on first ignition.
 // Returns null when the painting isn't showing its standard material (portal ripple).
@@ -12606,6 +12776,7 @@ function buildMirrorArsenal() {
     em.translateX(ARCH_WIDTH / 2 + 0.2 + 0.4 + D / 2);   // casing edge + a clear margin
     em.translateZ(0.008);
     em.visible = false;
+    em.userData.deferCompile = 'mirror';   // shader queue: hidden until the mirror world
     scene.add(em);
     arsenal.emblem = em;
   }
@@ -12702,6 +12873,7 @@ function buildMirrorArsenal() {
   disp.add(pool);
   arsenal.spotPool = pool;
   disp.visible = false;
+  disp.userData.deferCompile = 'mirror';   // shader queue: hidden until the mirror world
   scene.add(disp);
   arsenal.display = disp;
   // The mirror shouldn't reflect the first-person launcher floating in the air
@@ -14381,12 +14553,24 @@ function modalNav(delta) {
 }
 
 let slideIdx = 0;
+// The Index and Slideshow views are opaque black over the whole canvas: while
+// one is up the animate loop skips the scene render (heartbeat only).
+let _viewCovered = false;
 function openSlideshow() {
   document.getElementById('slideshow').classList.add('show');
+  _viewCovered = true;
   showSlide(0);
 }
 function closeSlideshow() {
   document.getElementById('slideshow').classList.remove('show');
+  _viewCovered = false;
+  releaseSlideImage();
+}
+// The slide is display:none once hidden; drop the decoded full-size image
+// (showSlide sets a fresh src on every open).
+function releaseSlideImage() {
+  const img = document.getElementById('slide-img');
+  if (img && img.getAttribute('src')) img.removeAttribute('src');
 }
 function showSlide(i) {
   if (ARTWORKS.length === 0) return;
@@ -14409,6 +14593,7 @@ function setView(view) {
   const bio = document.getElementById('bio-view');
   const contact = document.getElementById('contact-view');
   const closeBtn = document.getElementById('overlay-close');
+  const leavingSlides = slide.classList.contains('show') && view !== 'slideshow';
   // Hide all overlays first, then show the active one.
   idx.classList.remove('show');
   slide.classList.remove('show');
@@ -14428,6 +14613,8 @@ function setView(view) {
     const next = document.getElementById('contact-next');
     if (next) next.value = location.origin + location.pathname + '#contact-sent';
   }
+  if (leavingSlides) releaseSlideImage();
+  _viewCovered = view === 'index' || view === 'slideshow';   // bio/contact/modal are translucent
   updatePaintNavVis();
 }
 
@@ -15906,8 +16093,23 @@ function animate() {
   // Music bus: reverb follows the space, layers, modal duck
   updateMusicAmbience();
 
-  // Optional visual layer (fx.js); plain render when it's absent
-  if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
+  // Behind an opaque overlay (entry screen, Index, Slideshow) the frame is
+  // invisible: spend it compiling shader programs instead and skip the render
+  // except for the heartbeat (see the shader program queue).
+  let draw = true;
+  if (!entered) draw = entryCompileFrame(now);
+  else { idleCompileFrame(); draw = !_viewCovered || now - _cq.lastRender >= COVERED_RENDER_MS; }
+  if (draw) {
+    // Optional visual layer (fx.js); plain render when it's absent
+    if (window.FX) FX.render(dt, now); else renderer.render(scene, camera);
+    _cq.lastRender = now;
+    _cq.renders++;
+  } else {
+    // What renderer.render would have refreshed (input code reads the camera matrices)
+    camera.updateMatrixWorld();
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+  }
+  if (!_cq.ready) entryReadyCheck(now);
   perfGovernor(now);
 }
 
@@ -16005,18 +16207,19 @@ async function boot() {
   yaw = k0.yaw; pitch = k0.pitch;
   lastTime = performance.now();
   animate();
-  // Mark loaded
-  const entry = document.getElementById('entry');
-  entry.classList.add('loaded');
-  const btn = document.getElementById('enter-btn');
-  btn.disabled = false;
-  btn.textContent = 'Enter the gallery';
-  // The music (preload none, so it stayed off the boot download path) buffers
-  // while the visitor reads the entry screen — unless they muted it last
-  // time, in which case it is never fetched. Only ever on an untouched
-  // element: load() would reset one that is already playing (the ?return
-  // path's enterGallery runs from a timer after this, so the order holds).
-  {
+  // Mark loaded — once the shader program queue has built what the first
+  // visible frame needs (entryReadyCheck; hard cap ENTRY_READY_CAP_MS)
+  onEntryReady(() => {
+    const entry = document.getElementById('entry');
+    entry.classList.add('loaded');
+    const btn = document.getElementById('enter-btn');
+    btn.disabled = false;
+    btn.textContent = 'Enter the gallery';
+    // The music (preload none, so it stayed off the boot download path) buffers
+    // while the visitor reads the entry screen — unless they muted it last
+    // time, in which case it is never fetched. Only ever on an untouched
+    // element: load() would reset one that is already playing (the ?return
+    // path's enterGallery runs from a timer after this, so the order holds).
     const a = document.getElementById('bg-music');
     let want = true;
     try { want = localStorage.getItem('musicMuted') !== 'true'; } catch (e) {}
@@ -16024,7 +16227,7 @@ async function boot() {
       a.preload = 'auto';
       a.load();
     }
-  }
+  });
 
   // If user is returning from a non-AJAX formsubmit redirect, show a thanks
   // message in the contact view automatically.

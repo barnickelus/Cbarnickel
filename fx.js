@@ -290,8 +290,10 @@ const FX = (() => {
     m.bumpMap = null;
     m.roughness = o.roughness;
     m.envMapIntensity = o.envMapIntensity;
-    m.onBeforeCompile = function () {};
-    m.customProgramCacheKey = function () { return ''; };
+    // Back to the prototype hook and key: the stock lit program every untouched
+    // painting already uses (an own '' key would be a third, identical program)
+    delete m.onBeforeCompile;
+    delete m.customProgramCacheKey;
     m.needsUpdate = true;
     p.userData.fxSurface = false;
   }
