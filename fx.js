@@ -130,7 +130,7 @@ const FX = (() => {
     _pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_pv);
     for (const o of list) {
-      if (!o.visible || !o.parent) continue;
+      if (!o.visible || !o.parent || !o.geometry) continue;   // plant groups carry sub-groups too
       if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
       _box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
       if (_frustum.intersectsBox(_box)) return true;
