@@ -14496,12 +14496,13 @@ function ensureBeachWorld() {
     },
     vertexShader: BEACH_WORLD_VERT, fragmentShader: BEACH_WORLD_FRAG,
     side: THREE.BackSide, depthWrite: true, fog: false,
+    extensions: { fragDepth: true },     // WebGL1; built in on WebGL2
   });
   const m = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 20), mat);
   m.scale.setScalar(BEACH_WORLD_R);
   m.raycast = () => {};
   m.frustumCulled = false;
-  m.renderOrder = 0.5;                 // after the walls: inside, depth rejects it before it is shaded
+  m.renderOrder = 0.5;                 // after the walls (it writes its own depth, so it is shaded, then tested)
   m.visible = false;
   m.userData.deferCompile = 'mirror';
   scene.add(m);
@@ -14732,7 +14733,7 @@ const BEACH_HOLE_FRAG = [
   '  return c;',
   '}',
   // A palm silhouette on a camera-facing vertical plane through its base
-  'void palm( vec3 ro, vec3 rd, vec3 B, float H, float lean, float tMax, inout vec3 col, vec3 sun, vec3 hor ) {',
+  'void palm( vec3 ro, vec3 rd, vec3 B, float H, float lean, inout float tMax, inout vec3 col, vec3 sun, vec3 hor ) {',
   '  vec3 n = ro - B; n.y = 0.0;',
   '  float nl = length( n ); if ( nl < 0.01 ) return; n /= nl;',
   '  float den = dot( rd, n ); if ( abs( den ) < 1e-4 ) return;',
@@ -14779,7 +14780,7 @@ const BEACH_HOLE_FRAG = [
   '      }',
   '    }',
   '  }',
-  '  if ( m > 0.5 ) col = mix( pc, hor, 1.0 - exp( -t * 0.012 ) );',
+  '  if ( m > 0.5 ) { col = mix( pc, hor, 1.0 - exp( -t * 0.012 ) ); tMax = t; }',
   '}',
   // Looking up through the vault: near the zenith skyCol is one flat blue, so
   // give it a gradient toward the sun, drifting cumulus and a streaky cirrus
@@ -14799,9 +14800,38 @@ const BEACH_HOLE_FRAG = [
   '  vec3 cc = mix( vec3( 0.62, 0.66, 0.73 ), vec3( 1.0, 0.99, 0.96 ), smoothstep( 0.6, 1.0, cl ) * ( 0.7 + 0.3 * sd ) );',
   '  return mix( c, cc, cov * 0.9 );',
   '}',
-  'vec3 beach( vec3 ro, vec3 rd ) {',
+  // A palm's shadow on the sand at g: the trunk as a straight segment from its
+  // base to the crown's shadow, the crown as a nine-lobed blob with leafy gaps,
+  // both projected along the sun; edges soften with height (penumbra).
+  'float palmShadow( vec2 g, vec3 B, float H, float lean, vec3 L, vec3 sun ) {',
+  '  vec2 sh = -sun.xz / max( sun.y, 0.2 );',
+  '  vec2 b = B.xz, crown = b + L.xz * lean * 0.22 * H;',
+  '  vec2 cs = crown + sh * ( H - 0.35 );',
+  '  vec2 q = g - cs;',
+  '  if ( dot( q, q ) > 12.0 && dot( g - b, g - b ) > ( H * 2.2 + 1.0 ) * ( H * 2.2 + 1.0 ) ) return 0.0;',
+  '  vec2 ba = cs - b, pa = g - b;',
+  '  float hh = clamp( dot( pa, ba ) / max( dot( ba, ba ), 1e-4 ), 0.0, 1.0 );',
+  '  float dT = length( pa - ba * hh );',
+  '  float wT = mix( 0.15, 0.08, hh );',
+  '  float trunk = ( 1.0 - smoothstep( wT * 0.6, wT + 0.05 + 0.05 * hh, dT ) ) * ( 1.0 - 0.25 * hh );',
+  // nine fronds radiating from the hub, each a tapering feathered leaf; the
+  // drooping fronds stretch the shadow a little along the sun's direction
+  '  vec2 sd = normalize( sh );',
+  '  vec2 qq = vec2( dot( q, sd ) / 1.3, dot( q, vec2( -sd.y, sd.x ) ) );',
+  '  float r = length( qq ), seg = 0.69813;',
+  '  float da = abs( fract( ( atan( qq.y, qq.x ) + B.x * 0.7 ) / seg + 0.5 ) - 0.5 ) * seg;',
+  '  float k = clamp( r / 2.45, 0.0, 1.0 );',
+  '  float w = 0.38 * pow( sin( 3.14159 * k ), 0.7 ) + 0.03;',
+  '  float lat = da * r;',
+  '  float leaf = ( 1.0 - smoothstep( w * 0.5, w + 0.07, lat ) ) * ( 1.0 - smoothstep( 2.2, 2.6, r ) );',
+  '  leaf *= 0.55 + 0.45 * ( 1.0 - smoothstep( 0.45, 0.75, fract( r * 7.0 - lat * 5.0 ) ) * step( 0.03, lat ) );',
+  '  float hub = 1.0 - smoothstep( 0.22, 0.42, r );',
+  '  return max( trunk, max( leaf, hub ) * 0.9 );',
+  '}',
+  'vec3 beach( vec3 ro, vec3 rd, out float tHit ) {',
   '  vec3 up = vec3( 0.0, 1.0, 0.0 );',
   '  vec3 O = -vN;',
+  '  tHit = 1e6;',
   '  if ( uKind > 0.5 ) return skyUp( rd );',
   '  vec3 L = normalize( cross( up, O ) );',
   '  vec3 sun = normalize( O * 0.35 + L * 0.8 + up * 0.5 );',
@@ -14809,6 +14839,13 @@ const BEACH_HOLE_FRAG = [
   '  vec3 hor = skyCol( normalize( vec3( rd.x, 0.015, rd.z ) ), sun );',
   '  float gY = uGround;',
   '  float tG = 1e6;',
+  '  float cl = dot( vC, L );',
+  '  float ln = floor( cl / 9.0 + 0.5 ) * 9.0, lc = floor( cl / 30.0 + 0.5 ) * 30.0;',
+  '  vec3 P0 = vC + O * 3.4 + L * ( ln + 1.9 - cl ); P0.y = gY;',
+  '  vec3 P1 = vC + O * 5.0 + L * ( lc - 3.5 - cl ); P1.y = gY;',
+  '  vec3 P2 = vC + O * 8.5 + L * ( lc + 4.5 - cl ); P2.y = gY;',
+  '  vec3 P3 = vC + O * 6.0 + L * ( lc + 12.0 - cl ); P3.y = gY;',
+  '  vec3 P4 = vC + O * 7.0 + L * ( lc - 13.0 - cl ); P4.y = gY;',
   '  if ( rd.y < -1e-4 ) {',
   '    tG = ( gY - ro.y ) / rd.y;',
   '    vec3 p = ro + rd * tG;',
@@ -14833,6 +14870,13 @@ const BEACH_HOLE_FRAG = [
   '      sand = mix( sand, vec3( 0.96, 0.97, 0.96 ), foam * 0.85 );',
   '      float grass = smoothstep( 0.58, 0.70, fbm( sp * 0.9 + 3.0 ) ) * ( 1.0 - smoothstep( 2.5, 6.5, s ) );',
   '      sand = mix( sand, vec3( 0.40, 0.44, 0.24 ) * ( 0.7 + 0.3 * fbm( sp * 9.0 ) ), grass );',
+  // the palms' shadows, cool and soft, fading with distance like the rest
+  '      float psh = palmShadow( p.xz, P0, 3.4, -1.3, L, sun );',
+  '      psh = max( psh, palmShadow( p.xz, P1, 4.7, 1.0, L, sun ) );',
+  '      psh = max( psh, palmShadow( p.xz, P2, 5.5, -0.8, L, sun ) );',
+  '      psh = max( psh, palmShadow( p.xz, P3, 4.3, 0.6, L, sun ) );',
+  '      psh = max( psh, palmShadow( p.xz, P4, 5.1, -0.5, L, sun ) );',
+  '      sand *= mix( vec3( 1.0 ), vec3( 0.5, 0.55, 0.68 ), psh * 0.85 );',
   '      col = sand;',
   '    } else {',
   '      float d = s - wl;',
@@ -14859,18 +14903,14 @@ const BEACH_HOLE_FRAG = [
   '    }',
   '    col = mix( col, hor, fogK );',
   '  }',
-  '  float ln = floor( dot( vC, L ) / 9.0 + 0.5 ) * 9.0;',
-  '  vec3 P = vC + O * 3.4 + L * ( ln + 1.9 - dot( vC, L ) ); P.y = gY;',
-  '  palm( ro, rd, P, 3.4, -1.3, tG, col, sun, hor );',
-  '  float lc = floor( dot( vC, L ) / 30.0 + 0.5 ) * 30.0;',
-  '  P = vC + O * 5.0 + L * ( lc - 3.5 - dot( vC, L ) ); P.y = gY;',
-  '  palm( ro, rd, P, 4.7, 1.0, tG, col, sun, hor );',
-  '  P = vC + O * 8.5 + L * ( lc + 4.5 - dot( vC, L ) ); P.y = gY;',
-  '  palm( ro, rd, P, 5.5, -0.8, tG, col, sun, hor );',
-  '  P = vC + O * 6.0 + L * ( lc + 12.0 - dot( vC, L ) ); P.y = gY;',
-  '  palm( ro, rd, P, 4.3, 0.6, tG, col, sun, hor );',
-  '  P = vC + O * 7.0 + L * ( lc - 13.0 - dot( vC, L ) ); P.y = gY;',
-  '  palm( ro, rd, P, 5.1, -0.5, tG, col, sun, hor );',
+  // nearest hit wins: each palm only paints in front of the ground and of the
+  // palms already drawn, and tHit ends as the distance of what is shown
+  '  tHit = tG;',
+  '  palm( ro, rd, P0, 3.4, -1.3, tHit, col, sun, hor );',
+  '  palm( ro, rd, P1, 4.7, 1.0, tHit, col, sun, hor );',
+  '  palm( ro, rd, P2, 5.5, -0.8, tHit, col, sun, hor );',
+  '  palm( ro, rd, P3, 4.3, 0.6, tHit, col, sun, hor );',
+  '  palm( ro, rd, P4, 5.1, -0.5, tHit, col, sun, hor );',
   '  return col;',
   '}',
   'void main() {',
@@ -14932,7 +14972,8 @@ const BEACH_HOLE_FRAG = [
   '        col = mix( col, vec3( 0.03 ), ( 1.0 - sT ) * 0.55 * ( 0.5 + 0.5 * tn ) );',
   '      }',
   '    } else {',
-  '      col = beach( ro, rd );',
+  '      float tHit;',
+  '      col = beach( ro, rd, tHit );',
   '      if ( uComic > 0.5 ) col = floor( col * 5.0 + 0.5 ) / 5.0;',
   '    }',
   '  }',
@@ -14946,13 +14987,23 @@ const BEACH_WORLD_VERT = 'uniform vec3 uOrigin;\n' + BEACH_HOLE_VERT
   .replace('  vC = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;', '  vC = uOrigin;')
   // centred on whichever camera is rendering (the mirror's virtual eye too)
   .replace('  vec4 w = modelMatrix * vec4( position, 1.0 );', '  vec4 w = vec4( cameraPosition + mat3( modelMatrix ) * position, 1.0 );');
-const BEACH_WORLD_FRAG = BEACH_HOLE_FRAG.slice(0, BEACH_HOLE_FRAG.indexOf('void main() {')) + [
+// It writes the true depth of what it paints (the sand point, the palm), so a
+// palm standing in front of the gallery draws in front of its walls and one
+// behind them is hidden — the sphere's own depth would put every palm 70 m away.
+const BEACH_WORLD_FRAG = 'uniform mat4 projectionMatrix;\n' + BEACH_HOLE_FRAG.slice(0, BEACH_HOLE_FRAG.indexOf('void main() {')) + [
   'void main() {',
   '  vec3 ro = cameraPosition;',
   '  vec3 rd = normalize( vWorld - cameraPosition );',
-  '  vec3 col = beach( ro, rd );',
+  '  float tHit;',
+  '  vec3 col = beach( ro, rd, tHit );',
   '  if ( uComic > 0.5 ) col = floor( col * 5.0 + 0.5 ) / 5.0;',
   '  gl_FragColor = vec4( col, 1.0 );',
+  '#if __VERSION__ >= 300 || defined( GL_EXT_frag_depth )',
+  // a hair behind the true point: inside, the beach's sand lies in the floor's
+  // plane, and the floor must win there
+  '  vec4 cp = projectionMatrix * viewMatrix * vec4( ro + rd * min( tHit * 1.003 + 0.004, 1e4 ), 1.0 );',
+  '  gl_FragDepthEXT = clamp( 0.5 + 0.5 * cp.z / cp.w, 0.0, 0.99999 );',
+  '#endif',
   '}',
 ].join('\n');
 
