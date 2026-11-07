@@ -4642,6 +4642,17 @@ function portalBuildArch(r, eye, y0, y1, m) {
   if (worldRoot) for (let i = 0; i < 4; i++) c[i].applyMatrix4(worldRoot.matrixWorld);
   portalBuild(r.P, eye, c);
 }
+// A breach's opening as a rectangle in its wall (room-local → world), then
+// its frustum from the eye, into _portal.skip.
+function portalBuildBreach(h, eye, m) {
+  const c = _pv.c, n = h.normal, R = h.radius, hw = R + m;
+  const lx = n.z, lz = -n.x;                      // along the wall
+  const y0 = Math.max(0, h.center.y - R) - m, y1 = h.center.y + R + m;
+  c[0].set(h.center.x - lx * hw, y0, h.center.z - lz * hw); c[1].set(h.center.x + lx * hw, y0, h.center.z + lz * hw);
+  c[2].set(h.center.x + lx * hw, y1, h.center.z + lz * hw); c[3].set(h.center.x - lx * hw, y1, h.center.z - lz * hw);
+  if (worldRoot) for (let i = 0; i < 4; i++) c[i].applyMatrix4(worldRoot.matrixWorld);
+  portalBuild(_portal.skip, eye, c);
+}
 // World AABB of an object and everything under it (fires are children of
 // their painting, outline shells of their frame mesh). False when any part
 // has no bounding box — that object stays visible.
@@ -4752,10 +4763,13 @@ function portalCullForCamera(cam) {
     // through the glass into the lobby, then through the arches.
     _pp.openLobby = true; _pp.openRoom = null;
   } else {
-    const rid = portalRoomAt(leye.x, leye.z) || 'lobby';
+    // On the beach, the room whose wall is breached is in plain view through
+    // the opening; every other room is still only seen through its arch.
+    const out = arsenal.outside;
+    const rid = (out && out.room) || portalRoomAt(leye.x, leye.z) || 'lobby';
     _pp.openLobby = rid === 'lobby';
     _pp.openRoom = _pp.openLobby ? null : rid;
-    const near = portalArchRoomNear(leye.x, leye.z);
+    const near = out ? null : portalArchRoomNear(leye.x, leye.z);
     if (near) { _pp.openLobby = true; _pp.openRoom = near; }
   }
   if (kind === 'floor') {
@@ -4791,15 +4805,27 @@ function portalMirrorHidden(cam) {
   const eye = _pv.eye.setFromMatrixPosition(cam.matrixWorld);
   const leye = _pv.leye.copy(eye);
   if (worldRoot) worldRoot.worldToLocal(leye);
-  const rid = portalRoomAt(leye.x, leye.z);
-  if (!rid || rid === 'lobby' || portalArchRoomNear(leye.x, leye.z)) return false;
+  const g = mirrorMesh.geometry;
+  if (g.boundingBox === null) g.computeBoundingBox();
+  if (!g.boundingBox || g.boundingBox.isEmpty()) return false;
+  const out = arsenal.outside;
+  let rid;
+  if (out) {
+    // from the beach the glass can only be seen through the breach…
+    portalBuildBreach(out, eye, 0.05);
+    if (_portal.skip.open) return false;
+    _pBox.copy(g.boundingBox).applyMatrix4(mirrorMesh.matrixWorld).expandByScalar(0.05);
+    if (!portalBoxPasses(_pBox, _portal.skip)) return true;
+    rid = out.room;                                   // …and then that room's arch
+  } else {
+    rid = portalRoomAt(leye.x, leye.z);
+    if (portalArchRoomNear(leye.x, leye.z)) return false;
+  }
+  if (!rid || rid === 'lobby') return false;
   const rooms = _portal.rooms;
   let r = null;
   for (let i = 0; i < rooms.length; i++) if (rooms[i].id === rid) r = rooms[i];
   if (!r) return false;
-  const g = mirrorMesh.geometry;
-  if (g.boundingBox === null) g.computeBoundingBox();
-  if (!g.boundingBox || g.boundingBox.isEmpty()) return false;
   const saveP = r.P;
   r.P = _portal.skip;
   portalBuildArch(r, eye, -0.05, ARCH_HEIGHT + 0.05, 0.05);
@@ -9944,7 +9970,14 @@ function _clampToRoomsRaw(x, z) {
       inRoom = r; break;
     }
   }
-  if (!inRoom) inRoom = ROOMS[currentRoomId] || ROOMS.lobby;
+  if (inRoom && arsenal.outside) comeBackInside(arsenal.outside);   // back through the breach
+  if (!inRoom) {
+    // Past every room: outside, if a breach let us out (or is about to)
+    if (arsenal.outside) return clampOutside(x, z);
+    const b = mirrorWorld ? breachAt(x, z) : null;
+    if (b) { wentOutside(b); return clampOutside(x, z); }
+    inRoom = ROOMS[currentRoomId] || ROOMS.lobby;
+  }
 
   // Build a "passable through arch" check for each wall
   const inArchOpening = (dir) => {
@@ -9961,12 +9994,12 @@ function _clampToRoomsRaw(x, z) {
   const zMin = inRoom.cz - inRoom.d/2 + buf;
   const zMax = inRoom.cz + inRoom.d/2 - buf;
 
-  // North/south clamping: allow through arch
-  if (z < zMin && !inArchOpening('north')) z = zMin;
-  if (z > zMax && !inArchOpening('south')) z = zMax;
+  // North/south clamping: allow through arch (or a breach blown in that wall)
+  if (z < zMin && !inArchOpening('north') && !inBreachOpening(inRoom, 'north', x, z)) z = zMin;
+  if (z > zMax && !inArchOpening('south') && !inBreachOpening(inRoom, 'south', x, z)) z = zMax;
   // East/west clamping (paintings rooms don't currently have E/W arches but support it)
-  if (x < xMin) x = xMin;
-  if (x > xMax) x = xMax;
+  if (x < xMin && !inBreachOpening(inRoom, 'west', x, z)) x = xMin;
+  if (x > xMax && !inBreachOpening(inRoom, 'east', x, z)) x = xMax;
 
   // Painting collision — keep at least 0.45m from any painting plane
   for (const p of paintingMeshes) {
@@ -12937,6 +12970,7 @@ const arsenal = {
   armed: false, viewmodel: null, vmParts: null, vmRaise: 0, vmKick: 0,
   lastFire: -1e9, reloadAt: 0,
   holes: [], scorches: [], rockets: [], targets: null,
+  outside: null, beachWorld: null, beachWarm: null, shaftsHidden: null,
   shakeT: 0, shakeAmp: 0, flash: 0, flashEl: null,
   surf: null, surfNext: 0, gullNext: 0,
 };
@@ -13674,6 +13708,7 @@ function styleBeachHole(h) {
     if (comic) { r.material = _rubbleMats().comic; _rubbleMats().comic.color.set(T().comic.wallLine); }
     else { r.material = _rubbleMats().real; _rubbleMats().real.color.fromArray(holeStoneColor()); }
   }
+  if (h.cut && Array.isArray(h.wall.material)) h.wall.material[6] = comic ? _rubbleMats().comic : _rubbleMats().real;
 }
 let _rubbleMatCache = null;
 function _rubbleMats() {
@@ -13692,7 +13727,12 @@ function syncMirrorArsenal(on) {
   if (arsenal.emblem) arsenal.emblem.visible = on;
   if (arsenal.display) arsenal.display.visible = on;
   for (const h of arsenal.holes) h.group.visible = on;
+  for (const h of arsenal.holes) {
+    if (h.breach && on && !h.cut && h.grow >= 1) cutWallBreach(h);
+    else if (h.cut && !on) uncutWallBreach(h);
+  }
   for (const s of arsenal.scorches) s.visible = on;
+  if (arsenal.beachWorld) { if (on) syncBeachWorld(); else arsenal.beachWorld.visible = false; }
   refreshBlownDecor();
   if (on) {
     if (arsenal.theme !== theme) restyleArsenal();
@@ -13781,6 +13821,7 @@ function pickUpLauncher() {
   if (!destruction.active) setDestructionActive(true);
   setWeapon('rocket');
   playLauncherPickup();
+  warmBeachPrograms();
   flashCustomHint('tap to fire — try a wall · up close, the glass still takes a push', 3600);
 }
 function ensureViewmodel() {
@@ -14208,6 +14249,400 @@ function updateArsenalFx(dt) {
   }
 }
 
+/* ── Breaches: walking out onto the beach ──
+   A low rocket strike on an OUTSIDE wall (nothing behind it) doesn't just open
+   a window on the beach — it brings the wall down to the floor. The disc still
+   paints the beach as before, but the wall mesh itself is cut (cutWallBreach:
+   its box becomes the two faces minus the ragged opening plus the broken edge
+   through the thickness), a sky dome around the breach paints the same analytic
+   beach for every view ray (beachWorld, so the picture doesn't change as you
+   step through the disc), and the walking clamp gains an outside mode
+   (clampOutside: the sand up to the water's edge, the building's footprint
+   solid, the breach the way back in). Nothing is built, compiled or loaded
+   until the launcher is picked up (warmBeachPrograms) or a breach opens. */
+const BEACH_GROUND_Y = -0.35;        // sand level seen through ordinary holes
+const BREACH_RADIUS = 1.15;          // a breach opens at least this wide…
+const BREACH_MIN_RADIUS = 1.0;       // …or not at all
+const BREACH_DIP = 0.12;             // the ragged bottom runs this far under the floor
+const BREACH_STRIKE_Y = 2.4;         // strikes below this on an outside wall breach it
+const BREACH_PASS_Y = 1.15;          // the opening's width is taken at this height
+const BEACH_WALK_S = 22;             // how far out the sand can be walked (the shore is ~26 m)
+const BEACH_WALK_L = 40;             // and how far along it
+const BEACH_WORLD_R = 70;            // sky-dome radius (inside the camera's far plane)
+// Can a breach fit here? Returns { R, y, u } (radius, centre height, position
+// along the wall) or null. Same clearances as an ordinary hole — framed
+// paintings, the cornice, the mirror — at the breach's own size and height.
+function fitBreach(obj, nL, lp, R0, lo, hi, y0, y1) {
+  if (lp.y > BREACH_STRIKE_Y || y0 > 0.05 || obj.userData.breach) return null;
+  const alongX = obj.userData.axis === 'z';
+  const bc = _arsV2.copy(lp).addScaledVector(nL, -WALL_THICKNESS);
+  if (holeRoomAt(bc, _arsV3.copy(nL).negate())) return null;      // a room behind: not an outside wall
+  const Rb = Math.min(Math.max(R0, BREACH_RADIUS), (hi - lo) / 2, (y1 - y0) / 2 - 0.35);
+  if (Rb < BREACH_MIN_RADIUS) return null;
+  let u = alongX ? lp.x : lp.z, R = Rb;
+  const yb = () => y0 + R - BREACH_DIP;
+  if (yb() + R * 1.2 > holeTopLimit(lp, nL)) return null;
+  const rects = wallPaintingRects(nL, lp);
+  if (rects.length) {
+    const fit = fitHoleBesidePaintings(rects, u, yb(), R, lo, hi);
+    if (!fit || fit.R < BREACH_MIN_RADIUS) return null;
+    u = fit.u; R = fit.R;
+  }
+  if (!alongX && Math.abs(lp.x - MIRROR_PX) < 0.4) {
+    const qz = Math.max(Math.abs(u - MIRROR_Z) - MIRROR_W / 2 - 0.35, 0);
+    const qy = Math.max(Math.abs(yb() - MIRROR_Y) - MIRROR_H / 2 - 0.35, 0);
+    if (Math.hypot(qz, qy) < R) return null;
+  }
+  return { R, y: yb(), u };
+}
+function makeBreach(hole) {
+  hole.breach = true;
+  hole.wall.userData.breach = hole;
+  const r = holeRoomAt(hole.center, hole.normal);
+  hole.room = r ? r.id : null;
+  hole.mesh.material.uniforms.uGround.value = 0;   // the sand meets the floor
+  ensureBeachWorld();
+  syncBeachWorld();
+  if (!arsenal.breachHinted) {
+    arsenal.breachHinted = true;
+    flashCustomHint('the wall is down — walk out onto the beach', 4200);
+  }
+}
+function closeBreach(hole) {
+  if (arsenal.outside === hole) comeBackInside(hole);
+  if (hole.cut) uncutWallBreach(hole);
+  hole.breach = false;
+  if (hole.wall.userData.breach === hole) hole.wall.userData.breach = null;
+  syncBeachWorld();
+}
+// Same ragged edge as the shader's edgeR(), in JS
+function holeEdge(seed, a) {
+  return 1.0 + 0.10 * Math.sin(3.0 * a + seed) + 0.07 * Math.sin(5.0 * a + seed * 1.7) + 0.05 * Math.sin(8.0 * a + seed * 2.3)
+       + 0.035 * Math.sin(13.0 * a + seed * 3.1) + 0.06 * (Math.abs(Math.sin(7.0 * a + seed * 0.7)) - 0.5) + 0.022 * Math.sin(23.0 * a + seed * 5.0);
+}
+// Cut the real opening into the wall mesh once the disc has punched out to
+// full size. The box becomes: the two big faces as rings between the ragged
+// edge (the disc's own, so they line up) and the rectangle; the broken edge
+// through the thickness; the four thin faces as before. Material groups keep
+// BoxGeometry's order (+x −x +y −y +z −z) so the face materials still apply;
+// the broken edge gets the rubble stone.
+function cutWallBreach(hole) {
+  const wall = hole.wall;
+  if (!wall.userData.breachOrig) wall.userData.breachOrig = { geometry: wall.geometry, materials: wall.material };
+  const P = wall.userData.breachOrig.geometry.parameters;
+  const alongX = wall.userData.axis === 'z';
+  const W = alongX ? P.width : P.depth, H = P.height, D = WALL_THICKNESS;
+  const o = wall.position, c = hole.center;
+  const cu = (alongX ? c.x - o.x : c.z - o.z), cv = c.y - o.y;
+  const nw = alongX ? hole.normal.z : hole.normal.x;          // struck face is at w = nw·D/2
+  const vT = _arsV1.set(1, 0, 0).applyQuaternion(hole.mesh.quaternion);
+  const vB = _arsV2.set(0, 1, 0).applyQuaternion(hole.mesh.quaternion);
+  const tu = alongX ? vT.x : vT.z, tv = vT.y, bu = alongX ? vB.x : vB.z, bv = vB.y;
+  const seed = hole.mesh.material.uniforms.uSeed.value, R = hole.radius;
+  const N = 48;
+  // (u, v, w) → local (x, y, z)
+  const X = (u, v, w) => alongX ? [u, v, w] : [w, v, u];
+  const pos = [], uv = [], groups = [];
+  let idx = [];
+  const tri = (a, b, c2, nx, ny, nz) => {
+    // wind so the face normal points along (nx, ny, nz)
+    const ax = pos[3 * a], ay = pos[3 * a + 1], az = pos[3 * a + 2];
+    const e1x = pos[3 * b] - ax, e1y = pos[3 * b + 1] - ay, e1z = pos[3 * b + 2] - az;
+    const e2x = pos[3 * c2] - ax, e2y = pos[3 * c2 + 1] - ay, e2z = pos[3 * c2 + 2] - az;
+    const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x;
+    if (cx * nx + cy * ny + cz * nz >= 0) idx.push(a, b, c2); else idx.push(a, c2, b);
+  };
+  const vert = (u, v, w) => { const [x, y, z] = X(u, v, w); pos.push(x, y, z); uv.push((u + W / 2) / W, (v + H / 2) / H); return pos.length / 3 - 1; };
+  const group = (mi) => { const start = idx.length; groups.push({ start, mi }); };
+  // the two rings, indexed by the disc's angle so both faces and the edge line up
+  const ring = (w, scale, off) => {
+    const inner = [], outer = [];
+    for (let i = 0; i < N; i++) {
+      const th = i / N * Math.PI * 2;
+      const du = tu * Math.cos(th) + bu * Math.sin(th), dv = tv * Math.cos(th) + bv * Math.sin(th);
+      let t = Infinity;
+      if (du > 1e-6) t = Math.min(t, (W / 2 - cu) / du); else if (du < -1e-6) t = Math.min(t, (-W / 2 - cu) / du);
+      if (dv > 1e-6) t = Math.min(t, (H / 2 - cv) / dv); else if (dv < -1e-6) t = Math.min(t, (-H / 2 - cv) / dv);
+      const r = Math.min(R * scale * holeEdge(seed, th + off), t - 0.002);
+      inner.push(vert(cu + du * r, cv + dv * r, w));
+      outer.push(vert(cu + du * t, cv + dv * t, w));
+    }
+    return { inner, outer };
+  };
+  const faceNormalW = (w) => (alongX ? [0, 0, w] : [w, 0, 0]);
+  const faceGroup = (w, scale, off) => {
+    const [nx, ny, nz] = faceNormalW(Math.sign(w));
+    const rg = ring(w, scale, off);
+    for (let i = 0; i < N; i++) {
+      const j = (i + 1) % N;
+      tri(rg.inner[i], rg.inner[j], rg.outer[j], nx, ny, nz);
+      tri(rg.inner[i], rg.outer[j], rg.outer[i], nx, ny, nz);
+    }
+    return rg;
+  };
+  // thin faces: full quads (BoxGeometry order: +x, −x, +y, −y, +z, −z)
+  const quad = (p0, p1, p2, p3, n) => { const a = vert(...p0), b = vert(...p1), c2 = vert(...p2), d = vert(...p3); tri(a, b, c2, ...n); tri(a, c2, d, ...n); };
+  const hw = W / 2, hh = H / 2, hd = D / 2;
+  // In (u, v, w): ends at u = ±hw, top/bottom at v = ±hh, big faces at w = ±hd.
+  const ends = [[hw, 1], [-hw, -1]], tops = [[hh, 1], [-hh, -1]];
+  const endN = (sgn) => alongX ? [sgn, 0, 0] : [0, 0, sgn];
+  const bigN = (sgn) => alongX ? [0, 0, sgn] : [sgn, 0, 0];
+  const order = alongX
+    ? [() => quad([hw, -hh, -hd], [hw, hh, -hd], [hw, hh, hd], [hw, -hh, hd], endN(1)),        // +x
+       () => quad([-hw, -hh, -hd], [-hw, hh, -hd], [-hw, hh, hd], [-hw, -hh, hd], endN(-1)),   // −x
+       () => quad([-hw, hh, -hd], [hw, hh, -hd], [hw, hh, hd], [-hw, hh, hd], [0, 1, 0]),       // +y
+       () => quad([-hw, -hh, -hd], [hw, -hh, -hd], [hw, -hh, hd], [-hw, -hh, hd], [0, -1, 0]),  // −y
+       () => 'big+', () => 'big-']
+    : [() => 'big+', () => 'big-',
+       () => quad([-hw, hh, -hd], [hw, hh, -hd], [hw, hh, hd], [-hw, hh, hd], [0, 1, 0]),
+       () => quad([-hw, -hh, -hd], [hw, -hh, -hd], [hw, -hh, hd], [-hw, -hh, hd], [0, -1, 0]),
+       () => quad([hw, -hh, -hd], [hw, hh, -hd], [hw, hh, hd], [hw, -hh, hd], endN(1)),
+       () => quad([-hw, -hh, -hd], [-hw, hh, -hd], [-hw, hh, hd], [-hw, -hh, hd], endN(-1))];
+  let rStruck = null, rBack = null;
+  for (let mi = 0; mi < 6; mi++) {
+    group(mi);
+    const r = order[mi]();
+    if (r === 'big+' || r === 'big-') {
+      const w = r === 'big+' ? hd : -hd;
+      // the disc's edge on the struck face; the back face a little smaller and
+      // turned, as the disc's fake tube already paints it
+      const struck = Math.sign(w) === Math.sign(nw);
+      const rg = faceGroup(w, struck ? 1 : 0.9, struck ? 0 : 0.15);
+      if (struck) rStruck = rg; else rBack = rg;
+    }
+  }
+  // the broken edge through the thickness (rubble stone, material 6)
+  group(6);
+  const [ex, ey, ez] = [0, 0, 0];
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N;
+    const a = rStruck.inner[i], b = rStruck.inner[j], c2 = rBack.inner[j], d = rBack.inner[i];
+    // normal: from the hole's axis outward toward the centre... the edge faces INTO the opening
+    const mx = (pos[3 * a] + pos[3 * c2]) / 2, my = (pos[3 * a + 1] + pos[3 * c2 + 1]) / 2, mz = (pos[3 * a + 2] + pos[3 * c2 + 2]) / 2;
+    const [cx, cy, cz] = X(cu, cv, 0);
+    tri(a, b, c2, cx - mx, cy - my, cz - mz);
+    tri(a, c2, d, cx - mx, cy - my, cz - mz);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  for (let k = 0; k < groups.length; k++) {
+    const next = k + 1 < groups.length ? groups[k + 1].start : idx.length;
+    g.addGroup(groups[k].start, next - groups[k].start, groups[k].mi);
+  }
+  g.computeVertexNormals();
+  g.computeBoundingBox(); g.computeBoundingSphere();
+  const mats = wall.userData.breachOrig.materials.slice();
+  mats[6] = _rubbleMats().real;
+  wall.geometry = g;
+  wall.material = mats;
+  hole.cut = true;
+  _syncSurfaceUVs();                 // world-space stone UVs for the new vertices
+}
+function uncutWallBreach(hole) {
+  const wall = hole.wall, orig = wall.userData.breachOrig;
+  if (!orig) return;
+  if (wall.geometry !== orig.geometry) wall.geometry.dispose();
+  wall.geometry = orig.geometry;
+  wall.material = orig.materials;
+  wall.userData.breachOrig = null;
+  hole.cut = false;
+  _syncSurfaceUVs();
+}
+// The sky dome: one sphere riding on the camera (so it always sits inside the
+// far plane), back faces, painted with the hole shader's beach for the view
+// ray in the active breach's frame. Opaque and far, so inside the building the
+// walls' depth rejects every one of its pixels for free.
+function ensureBeachWorld() {
+  if (arsenal.beachWorld) return arsenal.beachWorld;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: _beachTime, uRadius: { value: 1 }, uSeed: { value: 0 }, uBirth: { value: 0 },
+      uDepth: { value: 0 }, uKind: { value: 0 }, uComic: { value: 0 },
+      uStone: { value: new THREE.Vector3() }, uInk: { value: new THREE.Color() }, uGround: { value: 0 },
+      uOrigin: { value: new THREE.Vector3() },
+    },
+    vertexShader: BEACH_WORLD_VERT, fragmentShader: BEACH_WORLD_FRAG,
+    side: THREE.BackSide, depthWrite: true, fog: false,
+  });
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 20), mat);
+  m.scale.setScalar(BEACH_WORLD_R);
+  m.raycast = () => {};
+  m.frustumCulled = false;
+  m.renderOrder = 0.5;                 // after the walls: inside, depth rejects it before it is shaded
+  m.visible = false;
+  m.userData.deferCompile = 'mirror';
+  scene.add(m);
+  arsenal.beachWorld = m;
+  return m;
+}
+// Which breach the outside world belongs to: the one you walked out through,
+// else the nearest. The dome takes its frame (centre, facing) and colouring.
+function activeBreach() {
+  if (arsenal.outside) return arsenal.outside;
+  let best = null, bd = Infinity;
+  if (!worldRoot) return null;
+  const c = worldRoot.worldToLocal(_arsV1.copy(camera.position));
+  for (const h of arsenal.holes) {
+    if (!h.breach) continue;
+    const d = Math.hypot(h.center.x - c.x, h.center.z - c.z);
+    if (d < bd) { bd = d; best = h; }
+  }
+  return best;
+}
+function syncBeachWorld() {
+  const dome = arsenal.beachWorld;
+  if (!dome) return;
+  const h = activeBreach();
+  // Inside, the disc paints the beach; the dome is only needed on the beach
+  // and in the breach itself, where the near plane clips the disc.
+  let near = false;
+  if (h && !arsenal.outside && worldRoot) {
+    const c = worldRoot.worldToLocal(_arsV1.copy(camera.position));
+    near = Math.hypot(h.center.x - c.x, h.center.z - c.z) < 2.6;
+  }
+  dome.visible = !!(h && mirrorWorld && (arsenal.outside || near));
+  if (!h) return;
+  const U = dome.material.uniforms, S = h.mesh.material.uniforms;
+  if (dome.userData.hole !== h) {
+    dome.userData.hole = h;
+    dome.quaternion.copy(h.mesh.quaternion);
+    if (worldRoot) { worldRoot.updateMatrixWorld(); worldRoot.localToWorld(U.uOrigin.value.copy(h.center)); }
+  }
+  if (worldRoot) worldRoot.worldToLocal(dome.position.copy(camera.position));
+  U.uSeed.value = S.uSeed.value; U.uComic.value = S.uComic.value;
+  U.uStone.value.copy(S.uStone.value); U.uInk.value.copy(S.uInk.value);
+}
+// Compile the hole and dome programs while the launcher is being picked up,
+// so the first blast and the first step outside don't stall on the shaders.
+function warmBeachPrograms() {
+  if (arsenal.beachWarm) return;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: _beachTime, uRadius: { value: 0.3 }, uSeed: { value: 1 }, uBirth: { value: 0 },
+      uDepth: { value: WALL_THICKNESS }, uKind: { value: 0 }, uComic: { value: 0 },
+      uStone: { value: new THREE.Vector3() }, uInk: { value: new THREE.Color() }, uGround: { value: BEACH_GROUND_Y },
+    },
+    vertexShader: BEACH_HOLE_VERT, fragmentShader: BEACH_HOLE_FRAG,
+    transparent: true, depthWrite: false,
+  });
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), mat);
+  m.visible = false; m.raycast = () => {};
+  scene.add(m);
+  arsenal.beachWarm = m;
+  ensureBeachWorld();
+  // …and the blast's own materials: one sprite of each kind in the pools (they
+  // stay there for the first explosion to use), the sun shaft, the rubble stone
+  for (const kind of ['fire', 'blaze', 'smoke', 'debris']) _fxEntry(kind);
+  const shaft = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), makeLightVolumeMaterial(0xffe2b0, 0.24, true));
+  shaft.visible = false; shaft.raycast = () => {};
+  m.add(shaft);
+  const stone = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), _rubbleMats().real);
+  stone.visible = false; stone.raycast = () => {};
+  m.add(stone);
+  warmShaderPrograms(40);
+}
+// Half the width of the opening at walking height, less a shoulder's margin
+function breachHalfWidth(h) {
+  const dy = BREACH_PASS_Y - h.center.y;
+  return Math.max(0, Math.sqrt(Math.max(0, h.radius * h.radius - dy * dy)) * 0.88 - 0.22);
+}
+// (s, l): distance out through the breach and along the wall, from its centre
+function breachSL(h, x, z) {
+  const ox = -h.normal.x, oz = -h.normal.z;
+  const dx = x - h.center.x, dz = z - h.center.z;
+  return { s: dx * ox + dz * oz, l: dx * oz - dz * ox };
+}
+// Is (x, z) in a room's passage through a breach on its wall facing `dir`?
+function inBreachOpening(room, dir, x, z) {
+  for (const h of arsenal.holes) {
+    if (!h.breach || h.room !== room.id) continue;
+    const n = h.normal;
+    const ok = dir === 'west' ? n.x > 0.5 : dir === 'east' ? n.x < -0.5 : dir === 'north' ? n.z > 0.5 : n.z < -0.5;
+    if (!ok) continue;
+    if (Math.abs(breachSL(h, x, z).l) <= breachHalfWidth(h)) return true;
+  }
+  return false;
+}
+// A point past the rooms: is it just outside a breach's opening?
+function breachAt(x, z) {
+  for (const h of arsenal.holes) {
+    if (!h.breach || !h.cut) continue;
+    const q = breachSL(h, x, z);
+    if (q.s > 0.2 && q.s < 1.5 && Math.abs(q.l) <= breachHalfWidth(h) + 0.3) return h;
+  }
+  return null;
+}
+function wentOutside(h) {
+  arsenal.outside = h;
+  if (h.room) currentRoomId = h.room;
+  syncBeachWorld();
+  if (!arsenal.outsideHinted) {
+    arsenal.outsideHinted = true;
+    flashCustomHint('the beach — the breach is the way back in', 3600);
+  }
+}
+function comeBackInside(h) {
+  if (arsenal.outside !== h) return;
+  arsenal.outside = null;
+  if (h.room) currentRoomId = h.room;
+  // if the opening is closing under us, step back into the room
+  if (!arsenal.holes.includes(h) || !h.breach) {
+    const p = _arsV1.copy(h.center).addScaledVector(h.normal, PLAYER_BUFFER + 0.3);
+    if (worldRoot) worldRoot.localToWorld(p);
+    camera.position.x = p.x; camera.position.z = p.z;
+    tapWalkTarget = null;
+  }
+  syncBeachWorld();
+}
+// Outside: the sand from the breach to the water's edge, the building solid,
+// the breach the way back. Local (unflipped) coordinates, like the rooms.
+function clampOutside(x, z) {
+  const h = arsenal.outside;
+  let q = breachSL(h, x, z);
+  const half = breachHalfWidth(h);
+  if (q.s < 0.12 && Math.abs(q.l) <= half) {
+    comeBackInside(h);
+    return _clampToRoomsRaw(x, z);
+  }
+  // the sand
+  const s = Math.min(BEACH_WALK_S, Math.max(0.12, q.s)), l = Math.max(-BEACH_WALK_L, Math.min(BEACH_WALK_L, q.l));
+  const ox = -h.normal.x, oz = -h.normal.z;
+  x = h.center.x + ox * s + oz * l;
+  z = h.center.z + oz * s - ox * l;
+  // the building's footprint (walls plus a shoulder), except in the breach mouth
+  const m = WALL_THICKNESS / 2 + PLAYER_BUFFER;
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    const px = r.cx + r.w / 2 + m - x, nx = x - (r.cx - r.w / 2 - m);
+    const pz = r.cz + r.d / 2 + m - z, nz = z - (r.cz - r.d / 2 - m);
+    if (px <= 0 || nx <= 0 || pz <= 0 || nz <= 0) continue;       // not inside this room's footprint
+    q = breachSL(h, x, z);
+    if (id === h.room && Math.abs(q.l) <= half) continue;            // in the mouth of the breach
+    const least = Math.min(px, nx, pz, nz);
+    if (least === px) x += px; else if (least === nx) x -= nx; else if (least === pz) z += pz; else z -= nz;
+  }
+  // the palm trunks nearest the breach (same spots the shader plants them)
+  for (const t of breachPalms(h)) {
+    const dx = x - t.x, dz = z - t.z, d = Math.hypot(dx, dz);
+    if (d < 0.6 && d > 1e-4) { x = t.x + dx / d * 0.6; z = t.z + dz / d * 0.6; }
+  }
+  return { x, z, roomId: h.room || currentRoomId };
+}
+// Where the shader's five palms stand, in local coordinates (its own placement
+// formula: rows at fixed distances out, spaced along the wall).
+function breachPalms(h) {
+  if (h._palms) return h._palms;
+  const ox = -h.normal.x, oz = -h.normal.z;
+  const lx = oz, lz = -ox;                                 // L = up × O
+  const cl = h.center.x * lx + h.center.z * lz;            // dot(vC, L)
+  const ln = Math.floor(cl / 9 + 0.5) * 9, lc = Math.floor(cl / 30 + 0.5) * 30;
+  const spots = [[3.4, ln + 1.9 - cl], [5.0, lc - 3.5 - cl], [8.5, lc + 4.5 - cl], [6.0, lc + 12.0 - cl], [7.0, lc - 13.0 - cl]];
+  h._palms = spots.map(([s, l]) => ({ x: h.center.x + ox * s + lx * l, z: h.center.z + oz * s + lz * l }));
+  return h._palms;
+}
+
 /* ── Beach holes ── */
 const BEACH_HOLE_VERT = [
   'varying vec3 vWorld; varying vec3 vC; varying vec3 vN; varying vec3 vT; varying vec3 vB;',
@@ -14225,7 +14660,7 @@ const BEACH_HOLE_VERT = [
 // parallax is right from any angle — including the Reflector's virtual camera.
 const BEACH_HOLE_FRAG = [
   'uniform float uTime; uniform float uRadius; uniform float uSeed; uniform float uBirth;',
-  'uniform float uDepth; uniform float uKind; uniform float uComic;',
+  'uniform float uDepth; uniform float uKind; uniform float uComic; uniform float uGround;',
   'uniform vec3 uStone; uniform vec3 uInk;',
   'varying vec3 vWorld; varying vec3 vC; varying vec3 vN; varying vec3 vT; varying vec3 vB;',
   'float hash( vec2 p ) { vec3 p3 = fract( vec3( p.xyx ) * 0.1031 ); p3 += dot( p3, p3.yzx + 33.33 ); return fract( ( p3.x + p3.y ) * p3.z ); }',
@@ -14335,7 +14770,7 @@ const BEACH_HOLE_FRAG = [
   '  vec3 sun = normalize( O * 0.35 + L * 0.8 + up * 0.5 );',
   '  vec3 col = skyCol( rd, sun );',
   '  vec3 hor = skyCol( normalize( vec3( rd.x, 0.015, rd.z ) ), sun );',
-  '  const float gY = -0.35;',
+  '  float gY = uGround;',
   '  float tG = 1e6;',
   '  if ( rd.y < -1e-4 ) {',
   '    tG = ( gY - ro.y ) / rd.y;',
@@ -14465,6 +14900,20 @@ const BEACH_HOLE_FRAG = [
   '    }',
   '  }',
   '  gl_FragColor = vec4( col, alpha );',
+  '}',
+].join('\n');
+// The same beach, seen from outside: the sky dome (beachWorld) is a sphere
+// around the breach that paints the view ray — ground, sea, palms, sky — so
+// what you walk out into is exactly what the hole showed.
+const BEACH_WORLD_VERT = 'uniform vec3 uOrigin;\n' + BEACH_HOLE_VERT.replace(
+  '  vC = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;', '  vC = uOrigin;');
+const BEACH_WORLD_FRAG = BEACH_HOLE_FRAG.slice(0, BEACH_HOLE_FRAG.indexOf('void main() {')) + [
+  'void main() {',
+  '  vec3 ro = cameraPosition;',
+  '  vec3 rd = normalize( vWorld - cameraPosition );',
+  '  vec3 col = beach( ro, rd );',
+  '  if ( uComic > 0.5 ) col = floor( col * 5.0 + 0.5 ) / 5.0;',
+  '  gl_FragColor = vec4( col, 1.0 );',
   '}',
 ].join('\n');
 
@@ -14608,7 +15057,7 @@ function blowBeachHole(h, kind) {
   if (!worldRoot) return false;
   const obj = h.object;
   const lp = worldRoot.worldToLocal(h.point.clone());
-  let nL, R = 0.62 + Math.random() * 0.22;
+  let nL, R = 0.62 + Math.random() * 0.22, breach = false;
   if (kind === 'wall') {
     nL = h.face.normal.clone();                    // walls are unrotated boxes in the local frame
     const P = obj.geometry.parameters, o = obj.position;
@@ -14641,6 +15090,10 @@ function blowBeachHole(h, kind) {
       const qy = Math.max(Math.abs(lp.y - MIRROR_Y) - MIRROR_H / 2 - 0.35, 0);
       if (Math.hypot(qz, qy) < R) return false;
     }
+    // A low strike on an outside wall brings it down to the floor: a breach
+    // you can walk out through (see fitBreach)
+    const b = fitBreach(obj, nL, lp, R, lo, hi, y0, y1);
+    if (b) { breach = true; R = b.R; lp.y = b.y; if (alongX) lp.x = b.u; else lp.z = b.u; }
   } else if (obj.userData.isVault) {
     // Curved vault webbing: the disc is planar, so open the sky only where the
     // web is fairly flat and keep the opening small enough not to clip into it.
@@ -14661,6 +15114,28 @@ function blowBeachHole(h, kind) {
   for (const hole of arsenal.holes) {
     if (hole.kind !== kind || hole.wall !== obj || hole.normal.dot(nL) < 0.9) continue;
     if (hole.center.distanceTo(lp) < hole.radius + 0.45) {
+      if (hole.breach) {                     // already down to the floor: just the blast
+        hole.mesh.material.uniforms.uBirth.value = _beachTime.value;
+        return true;
+      }
+      if (kind === 'wall' && !hole.back) {
+        // a low strike on an outside-wall hole brings the rest of it down
+        const P = obj.geometry.parameters, o = obj.position;
+        const alongX = obj.userData.axis === 'z';
+        const half = (alongX ? P.width : P.depth) / 2;
+        const b = fitBreach(obj, nL, lp, hole.radius, (alongX ? o.x : o.z) - half + 0.3, (alongX ? o.x : o.z) + half - 0.3,
+          o.y - P.height / 2, o.y + P.height / 2);
+        if (b) {
+          hole.radius = b.R; hole.maxRadius = Math.max(hole.maxRadius, b.R);
+          hole.center.y = b.y; if (alongX) hole.center.x = b.u; else hole.center.z = b.u;
+          layoutBeachHole(hole);
+          hole.mesh.material.uniforms.uBirth.value = _beachTime.value;
+          hole.grow = 0;
+          makeBreach(hole);
+          refreshBlownDecor();
+          return true;
+        }
+      }
       let cap = hole.maxRadius;
       if (kind === 'wall') {
         const rects = wallPaintingRects(nL, hole.center);
@@ -14703,6 +15178,7 @@ function blowBeachHole(h, kind) {
       uBirth: { value: _beachTime.value }, uDepth: { value: kind === 'wall' ? WALL_THICKNESS + 0.02 : 0.5 },
       uKind: { value: kind === 'wall' ? 0 : 1 }, uComic: { value: 0 },
       uStone: { value: new THREE.Vector3() }, uInk: { value: new THREE.Color() },
+      uGround: { value: breach ? 0 : BEACH_GROUND_Y },
     },
     vertexShader: BEACH_HOLE_VERT, fragmentShader: BEACH_HOLE_FRAG,
     transparent: true, depthWrite: false,
@@ -14724,13 +15200,14 @@ function blowBeachHole(h, kind) {
   }
   const hole = { kind, wall: obj, center: lp.clone(), normal: nL.clone(), radius: R, maxRadius: Math.max(R, maxRFit),
     group, mesh, back, shaft: null, patch: null, rubble: [], grow: 0, roll: Math.random() * Math.PI * 2,
-    index: arsenal.holes.length };
+    index: arsenal.holes.length, breach: false, cut: false, room: null };
   scene.add(group);
   group.visible = mirrorWorld;
   arsenal.holes.push(hole);
   layoutBeachHole(hole);
   if (kind === 'wall') addHoleRubble(hole);
   styleBeachHole(hole);
+  if (breach) makeBreach(hole);
   startBeachAmbience();
   refreshBlownDecor();
   return true;
@@ -14868,6 +15345,7 @@ function addHoleRubble(hole) {
 function removeBeachHole(hole) {
   const i = arsenal.holes.indexOf(hole);
   if (i >= 0) arsenal.holes.splice(i, 1);
+  if (hole.breach) closeBreach(hole);
   scene.remove(hole.group);
   hole.mesh.geometry.dispose(); hole.mesh.material.dispose();
   if (hole.shaft) hole.shaft.geometry.dispose();
@@ -15063,6 +15541,7 @@ function updateBeachAmbience(nowS) {
     lvl = Math.max(lvl, Math.min(1, (h.radius * 2.2) / Math.max(1.2, d)));
   }
   lvl = Math.min(1, lvl * (1 + 0.08 * (arsenal.holes.length - 1)));
+  if (arsenal.outside) lvl = 1;
   s.level = lvl;
   s.master.gain.setTargetAtTime(0.02 + 0.2 * lvl, _audioCtx.currentTime, 0.5);
   if (nowS > arsenal.gullNext) {
@@ -15126,12 +15605,22 @@ function updateArsenal(now, dt) {
       }
     }
   }
-  // Holes open with a quick punch outward
+  // Holes open with a quick punch outward; a breach is cut through once open
   for (const h of arsenal.holes) {
     if (h.grow < 1) {
       h.grow = Math.min(1, h.grow + dt / 0.14);
       const e = 1 - Math.pow(1 - h.grow, 3);
       h.mesh.material.uniforms.uRadius.value = h.radius * (0.35 + 0.65 * e);
+      if (h.breach && h.grow >= 1 && !h.cut) cutWallBreach(h);
+    }
+  }
+  if (arsenal.beachWorld) syncBeachWorld();
+  if (arsenal.outside !== arsenal.shaftsHidden) {
+    arsenal.shaftsHidden = arsenal.outside;
+    const comic = arsenalStyle() !== 'stone';
+    for (const h of arsenal.holes) {
+      if (h.shaft) h.shaft.visible = !comic && !arsenal.outside;
+      if (h.patch) h.patch.visible = !comic && !arsenal.outside;
     }
   }
   updateRockets(dt);
