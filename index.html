@@ -1313,6 +1313,7 @@ body { overscroll-behavior: none; }
       <button class="nav-btn" data-frame-color="red">Red</button>
       <button class="nav-btn" data-frame-color="blue">Blue</button>
       <button class="nav-btn" data-frame-color="yellow">Yellow</button>
+      <button class="nav-btn" data-frame-color="cobalt">Cobalt Glow</button>
     </div>
     <p class="frame-hint">Sets the default for every painting. To frame a single
       piece, open it and use the picker below its details.</p>
@@ -1698,6 +1699,7 @@ const VIC_MIN_WARP = 0.55;  // …and at most ~0.55× narrower
 const FRAME_FLOAT = 0.127;        // metres every frame hovers off the wall (~5 in)
 const VIC_FLOAT = FRAME_FLOAT;    // Victorian mesh self-applies the same float
 const VIC_PANEL_Z = 0.012;        // extra metres the panel sits behind the painting
+const VIC_GLINT_Y = 6.32;         // model Y of the crest's oculus (Cobalt Glow glint)
 const VIC_PANEL_COLOR = 0xd9d4ca; // warm off-white, a touch darker than the frame
 const VIC_PANEL_PROFILE = [
   [VIC_OPEN_YB - 0.05, 0.968],    // opening floor (tucked behind the sill)
@@ -7353,6 +7355,9 @@ const FRAME_COLOR_PRESETS = {
   red:          { body: 0xb23a2e, trim: 0xd9685a, accent: 0x7a241b, finish: 'matte' },
   blue:         { body: 0x2f5aa6, trim: 0x6f93c9, accent: 0x1c3768, finish: 'matte' },
   yellow:       { body: 0xe3b743, trim: 0xf4d77e, accent: 0xa9821f, finish: 'matte' },
+  // Glossy lacquered cobalt that glows: lit edges, a blue halo on the wall and
+  // (Victorian) a glint in the crest — see makeCobaltFrameMaterial / addCobaltGlow.
+  cobalt:       { body: 0x1b3cff, trim: 0x3d63ff, accent: 0x0d24b0, finish: 'cobalt' },
 };
 
 // Returns the preset to use, accounting for "auto" theme-aware defaults.
@@ -7458,8 +7463,176 @@ function lineworkSpec() {
   return null;
 }
 
+// ── Cobalt Glow frames ──
+// A deep, lacquer-glossy cobalt: metallic enough that the spotlights and the
+// environment streak along the carving, a little emissive so it never sinks to
+// black in a dark room, and a view-angle rim term that lights the edges of the
+// carving like a glowing blue line. No lights are added: the halo the frame
+// casts on the wall is one soft quad, and the crest glint is a tiny sprite.
+// One shared uniform drives every cobalt frame's rim (one program for all).
+const COBALT_RIM = { value: new THREE.Color(0.18, 0.42, 1.25) };
+const COBALT_GLOW_COLOR = 0x2a52ff;
+function _cobaltOnBeforeCompile(shader) {
+  shader.uniforms.uCobaltRim = COBALT_RIM;
+  shader.fragmentShader = 'uniform vec3 uCobaltRim;\n' + shader.fragmentShader.replace(
+    '#include <emissivemap_fragment>',
+    `#include <emissivemap_fragment>
+    {
+      float cbF = 1.0 - saturate( dot( normal, normalize( vViewPosition ) ) );
+      totalEmissiveRadiance += uCobaltRim * ( cbF * cbF * ( 0.35 + 0.65 * cbF ) );
+    }`);
+}
+// Material.clone() does not carry onBeforeCompile; re-arm it on every copy.
+function applyCobaltShader(mat) {
+  mat.onBeforeCompile = _cobaltOnBeforeCompile;
+  mat.customProgramCacheKey = () => 'frame-cobalt';
+  mat.userData.cobalt = true;
+  return mat;
+}
+function makeCobaltFrameMaterial(hex) {
+  return applyCobaltShader(new THREE.MeshStandardMaterial({
+    color: hex, roughness: 0.22, metalness: 0.45,
+    emissive: 0x0f2ce0, emissiveIntensity: 0.55,
+    envMapIntensity: 1.6,
+  }));
+}
+
+// Halo: one quad per frame on the wall behind it. Its shader fades a rounded
+// rectangle the size of the frame out over a fixed distance (Gaussian core +
+// a long soft tail), so the glow hugs the frame's outline at any painting size
+// with no banding. Each quad carries its rectangle's half-size and falloff in a
+// vertex attribute, so every cobalt frame shares one material and one program.
+// Additive on dark walls; on the white gallery's light walls a normal blend
+// tints instead (additive would vanish there).
+const COBALT_HALO_SHADER = {
+  vertexShader: `
+    attribute vec3 aRect;      // inner half-width, half-height, falloff (m)
+    varying vec2 vP;
+    varying vec3 vRect;
+    void main() {
+      vP = position.xy; vRect = aRect;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    varying vec2 vP;
+    varying vec3 vRect;
+    void main() {
+      vec2 q = max(abs(vP) - vRect.xy, 0.0);
+      float d = length(q) / vRect.z;                 // 0 at the frame's edge, 1 at the falloff
+      float a = 0.62 * exp(-d * d * 7.0) + 0.38 * exp(-d * 3.2);
+      a *= 1.0 - smoothstep(0.82, 1.0, d);           // reaches exactly 0 at the quad's border
+      gl_FragColor = vec4(uColor, a * uOpacity);
+    }`,
+};
+const _cobaltGlowMats = {};
+function cobaltGlowMaterial() {
+  const additive = theme !== 'white';
+  const k = additive ? 'add' : 'tint';
+  if (!_cobaltGlowMats[k]) {
+    _cobaltGlowMats[k] = new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: new THREE.Color(COBALT_GLOW_COLOR) }, uOpacity: { value: additive ? 0.68 : 0.4 } },
+      vertexShader: COBALT_HALO_SHADER.vertexShader, fragmentShader: COBALT_HALO_SHADER.fragmentShader,
+      transparent: true, depthWrite: false,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    });
+  }
+  return _cobaltGlowMats[k];
+}
+function cobaltHaloGeometry(hw, hh, fall) {
+  const g = new THREE.PlaneGeometry(2 * (hw + fall), 2 * (hh + fall));
+  const r = new Float32Array(12);
+  for (let i = 0; i < 4; i++) { r[i * 3] = hw; r[i * 3 + 1] = hh; r[i * 3 + 2] = fall; }
+  g.setAttribute('aRect', new THREE.BufferAttribute(r, 3));
+  g.deleteAttribute('normal');
+  g.deleteAttribute('uv');
+  return g;
+}
+// Frame bounds in group space, from the frame meshes only (not the shadow,
+// placeholder or a previous halo).
+const _cbBox = new THREE.Box3(), _cbBox2 = new THREE.Box3();
+function cobaltFrameBounds(group) {
+  let any = false;
+  for (const ch of group.children) {
+    if (!ch.isMesh || ch.userData.cobaltFx || ch.userData.isVictorianPlaceholder) continue;
+    if (ch.material && ch.material.map === _frameShadowTex) continue;
+    const g = ch.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    ch.updateMatrix();
+    _cbBox2.copy(g.boundingBox).applyMatrix4(ch.matrix);
+    if (any) _cbBox.union(_cbBox2); else { _cbBox.copy(_cbBox2); any = true; }
+  }
+  return any ? _cbBox : null;
+}
+function addCobaltGlow(group) {
+  const bb = cobaltFrameBounds(group);
+  if (!bb) return;
+  const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
+  // the bright core starts a little inside the frame's outline
+  const halo = new THREE.Mesh(cobaltHaloGeometry(w * 0.4, h * 0.44, 0.34 + 0.1 * Math.min(w, h)), cobaltGlowMaterial());
+  halo.position.set((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, -0.006);
+  halo.renderOrder = 1;                 // over the frame's soft shadow
+  halo.raycast = () => {};
+  halo.userData.cobaltFx = true;
+  group.add(halo);
+}
+// Crest glint (Victorian): a soft four-point star in the oculus, twinkling.
+let _cobaltGlintMat = null;
+const _cobaltGlints = [];
+function cobaltGlintMaterial() {
+  if (_cobaltGlintMat) return _cobaltGlintMat;
+  const S = 128, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const x = c.getContext('2d');
+  const core = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  core.addColorStop(0, 'rgba(255,255,255,1)');
+  core.addColorStop(0.08, 'rgba(220,232,255,0.9)');
+  core.addColorStop(0.25, 'rgba(120,160,255,0.35)');
+  core.addColorStop(1, 'rgba(60,100,255,0)');
+  x.fillStyle = core; x.fillRect(0, 0, S, S);
+  x.globalCompositeOperation = 'lighter';
+  for (const [len, wid, rot] of [[0.5, 0.035, 0], [0.5, 0.035, Math.PI / 2], [0.3, 0.02, Math.PI / 4], [0.3, 0.02, -Math.PI / 4]]) {
+    x.save(); x.translate(S / 2, S / 2); x.rotate(rot);
+    const g = x.createLinearGradient(-S * len, 0, S * len, 0);
+    g.addColorStop(0, 'rgba(140,175,255,0)'); g.addColorStop(0.5, 'rgba(235,242,255,0.95)'); g.addColorStop(1, 'rgba(140,175,255,0)');
+    x.fillStyle = g;
+    x.beginPath(); x.ellipse(0, 0, S * len, S * wid, 0, 0, Math.PI * 2); x.fill();
+    x.restore();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  _cobaltGlintMat = new THREE.MeshBasicMaterial({ map: tex, color: 0xd8e3ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+  return _cobaltGlintMat;
+}
+function addCobaltGlint(group, x, y, z, size) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), cobaltGlintMaterial());
+  m.position.set(x, y, z);
+  m.scale.set(size, size, 1);
+  m.renderOrder = 3;
+  m.raycast = () => {};
+  m.userData.cobaltFx = true;
+  m.userData.baseScale = size;
+  m.userData.phase = Math.random() * Math.PI * 2;
+  group.add(m);
+  _cobaltGlints.push(m);
+}
+// Per frame: a slow twinkle (scale + a slight turn) — a few multiplies per glint.
+function updateCobaltGlints(now) {
+  if (!_cobaltGlints.length) return;
+  const t = now * 0.001;
+  for (let i = _cobaltGlints.length - 1; i >= 0; i--) {
+    const g = _cobaltGlints[i];
+    if (!g.parent) { _cobaltGlints.splice(i, 1); continue; }
+    const p = g.userData.phase;
+    const s = g.userData.baseScale * (1 + 0.16 * Math.sin(t * 1.3 + p) + 0.07 * Math.sin(t * 3.7 + p * 2.3));
+    g.scale.set(s, s, 1);
+    g.rotation.z = 0.12 * Math.sin(t * 0.45 + p);
+  }
+}
+
 // Build a single material from a hex + finish, used by single-color styles.
 function makeFrameMaterialFromHex(hex, finish) {
+  if (finish === 'cobalt') return makeCobaltFrameMaterial(hex);
   let roughness, metalness;
   switch (finish) {
     case 'metal': roughness = 0.40; metalness = 0.55; break;
@@ -7594,6 +7767,8 @@ function buildFrame(pW, pH, isSeriesRoom, resolved) {
       addEdgeLines(ch, lwGroup.line);     // crisp creases (front/side edges)
     }
   }
+  // Cobalt Glow: halo on the wall (Victorian adds its own once the mesh loads).
+  if (activeFrame.color === 'cobalt' && activeFrame.style !== 'victorian') addCobaltGlow(group);
   return group;
 }
 
@@ -7903,6 +8078,11 @@ function addVictorianMesh(group, pW, pH) {
       ? srcMat.clone()
       : new THREE.MeshStandardMaterial({ color: 0x141210, roughness: 0.65, metalness: 0.1 });
     mat.vertexColors = false;
+    if (srcMat && srcMat.userData.cobalt) {
+      applyCobaltShader(mat);
+      // the carving's own normal map gives the gloss its fine sparkle
+      if (_victorianTexMat && _victorianTexMat.normalMap) mat.normalMap = _victorianTexMat.normalMap;
+    }
   }
 
   // Back-panel color: behind the openwork. With the textured frame, sample a
@@ -8049,6 +8229,18 @@ function addVictorianMesh(group, pW, pH) {
   group.userData.victorianMeshMat = mat;
   group.userData.victorianGeo = geo;
   group.userData.victorianPanel = panel;
+
+  if (fc === 'cobalt') {
+    // the arch behind the crest's openwork glows like the rest of the frame
+    const pm = panel.material;
+    pm.emissive.setHex(0x0f2ce0); pm.emissiveIntensity = 0.42;
+    pm.roughness = 0.3; pm.metalness = 0.3;
+    addCobaltGlow(group);
+    // glint in the crest's oculus (model y VIC_GLINT_Y, shifted with the crest)
+    const bb = geo.boundingBox;
+    addCobaltGlint(group, 0, (VIC_GLINT_Y + yShift - bandCenter) * FIXED_SCALE,
+      VIC_FLOAT + bb.max.z * FIXED_SCALE + 0.012, 0.2);
+  }
 }
 
 // Build the frame-colored back panel as the aperture silhouette (opening
@@ -9077,6 +9269,7 @@ const FRAME_COLOR_OPTIONS = [
   ['oak', 'Oak'], ['pastel-blue', 'Pastel Blue'], ['ebony', 'Ebony'],
   ['sage', 'Sage'], ['ivory', 'Ivory'],
   ['red', 'Red'], ['blue', 'Blue'], ['yellow', 'Yellow'],
+  ['cobalt', 'Cobalt Glow'],
 ];
 
 // Build the modal picker buttons once.
@@ -14325,8 +14518,9 @@ function wallPaintingRects(nL, c) {
     if (Math.abs((f.position.x - c.x) * nL.x + (f.position.z - c.z) * nL.z) > 0.6) continue;
     if (Math.abs(alongX ? f.position.x - c.x : f.position.z - c.z) > 7) continue;
     _frameBox.makeEmpty();
-    for (const c of f.children) {           // not the soft drop-shadow card
+    for (const c of f.children) {           // not the soft drop-shadow card, nor a Cobalt Glow halo/glint
       if (c.material && c.material === ud.shadowMat) continue;
+      if (c.userData && c.userData.cobaltFx) continue;
       _frameBox.union(_frameBoxC.setFromObject(c));
     }
     if (_frameBox.isEmpty()) continue;
@@ -16610,6 +16804,7 @@ function animate() {
 
   // Neon sign flicker (no-op unless the toggle is on)
   updateNeonFlicker(now);
+  updateCobaltGlints(now);
   // Duomo dust motes drifting in the spot beams
   updateDuomoAtmosphere(now);
   updateSpotPool(now, dt);
