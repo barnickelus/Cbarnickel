@@ -1313,7 +1313,7 @@ body { overscroll-behavior: none; }
       <button class="nav-btn" data-frame-color="red">Red</button>
       <button class="nav-btn" data-frame-color="blue">Blue</button>
       <button class="nav-btn" data-frame-color="yellow">Yellow</button>
-      <button class="nav-btn" data-frame-color="cobalt">Cobalt Glow</button>
+      <button class="nav-btn" data-frame-color="cobalt">Blue Glass</button>
     </div>
     <p class="frame-hint">Sets the default for every painting. To frame a single
       piece, open it and use the picker below its details.</p>
@@ -1699,7 +1699,7 @@ const VIC_MIN_WARP = 0.55;  // …and at most ~0.55× narrower
 const FRAME_FLOAT = 0.127;        // metres every frame hovers off the wall (~5 in)
 const VIC_FLOAT = FRAME_FLOAT;    // Victorian mesh self-applies the same float
 const VIC_PANEL_Z = 0.012;        // extra metres the panel sits behind the painting
-const VIC_GLINT_Y = 6.32;         // model Y of the crest's oculus (Cobalt Glow glint)
+const VIC_GLINT_Y = 6.32;         // model Y of the crest's oculus (Blue Glass glint)
 const VIC_PANEL_COLOR = 0xd9d4ca; // warm off-white, a touch darker than the frame
 const VIC_PANEL_PROFILE = [
   [VIC_OPEN_YB - 0.05, 0.968],    // opening floor (tucked behind the sill)
@@ -7355,9 +7355,9 @@ const FRAME_COLOR_PRESETS = {
   red:          { body: 0xb23a2e, trim: 0xd9685a, accent: 0x7a241b, finish: 'matte' },
   blue:         { body: 0x2f5aa6, trim: 0x6f93c9, accent: 0x1c3768, finish: 'matte' },
   yellow:       { body: 0xe3b743, trim: 0xf4d77e, accent: 0xa9821f, finish: 'matte' },
-  // Glossy lacquered cobalt that glows: lit edges, a blue halo on the wall and
-  // (Victorian) a glint in the crest — see makeCobaltFrameMaterial / addCobaltGlow.
-  cobalt:       { body: 0x1b3cff, trim: 0x3d63ff, accent: 0x0d24b0, finish: 'cobalt' },
+  // Blue glass: see-through cobalt glass with white reflections, a blue halo on
+  // the wall and (Victorian) a glint in the crest — see makeCobaltFrameMaterial.
+  cobalt:       { body: 0x1f4bff, trim: 0x3d63ff, accent: 0x0d24b0, finish: 'cobalt' },
 };
 
 // Returns the preset to use, accounting for "auto" theme-aware defaults.
@@ -7463,38 +7463,94 @@ function lineworkSpec() {
   return null;
 }
 
-// ── Cobalt Glow frames ──
-// A deep, lacquer-glossy cobalt: metallic enough that the spotlights and the
-// environment streak along the carving, a little emissive so it never sinks to
-// black in a dark room, and a view-angle rim term that lights the edges of the
-// carving like a glowing blue line. No lights are added: the halo the frame
-// casts on the wall is one soft quad, and the crest glint is a tiny sprite.
-// One shared uniform drives every cobalt frame's rim (one program for all).
-const COBALT_RIM = { value: new THREE.Color(0.18, 0.42, 1.25) };
+// ── Blue Glass frames (colour key 'cobalt') ──
+// Cobalt glass: the body is translucent — the wall, and the frame's own blue
+// halo behind it, show through tinted blue — while reflections, the spotlights'
+// highlights and the glancing edges stay opaque and white, as on real glass.
+// Reflections are taken colourless (the gallery's warm environment would
+// otherwise read as amber in the glass), and a view-angle rim term lights the
+// carving's edges the way light runs along the edges of a glass casting.
+// Transparency is front-to-back correct: a depth-only copy of each frame mesh
+// draws first (addGlassDepthPrepass), so only the nearest glass surface is
+// blended — no flicker between the overlapping layers of the carving. No lights
+// are added; one shared uniform and one program serve every glass frame.
+const COBALT_RIM = { value: new THREE.Color(0.22, 0.45, 1.25) };
 const COBALT_GLOW_COLOR = 0x2a52ff;
 function _cobaltOnBeforeCompile(shader) {
   shader.uniforms.uCobaltRim = COBALT_RIM;
-  shader.fragmentShader = 'uniform vec3 uCobaltRim;\n' + shader.fragmentShader.replace(
-    '#include <emissivemap_fragment>',
-    `#include <emissivemap_fragment>
-    {
-      float cbF = 1.0 - saturate( dot( normal, normalize( vViewPosition ) ) );
-      totalEmissiveRadiance += uCobaltRim * ( cbF * cbF * ( 0.35 + 0.65 * cbF ) );
-    }`);
+  shader.fragmentShader = 'uniform vec3 uCobaltRim;\n' + shader.fragmentShader
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+    float cbF = 1.0 - saturate( dot( normal, normalize( vViewPosition ) ) );
+    float cbF2 = cbF * cbF;
+    totalEmissiveRadiance += uCobaltRim * ( cbF2 * ( 0.35 + 0.65 * cbF ) );
+    totalEmissiveRadiance += vec3( 0.7, 0.82, 1.0 ) * ( cbF2 * cbF2 * cbF * 1.1 );   // white glancing edge`)
+    .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+    reflectedLight.indirectSpecular = vec3( dot( reflectedLight.indirectSpecular, vec3( 0.299, 0.587, 0.114 ) ) );`)
+    .replace('gl_FragColor = vec4( outgoingLight, diffuseColor.a );', `
+    float cbS = dot( reflectedLight.directSpecular + reflectedLight.indirectSpecular, vec3( 0.299, 0.587, 0.114 ) );
+    gl_FragColor = vec4( outgoingLight, saturate( diffuseColor.a + cbS * 1.6 + cbF * cbF * 0.45 ) );`);
 }
 // Material.clone() does not carry onBeforeCompile; re-arm it on every copy.
 function applyCobaltShader(mat) {
   mat.onBeforeCompile = _cobaltOnBeforeCompile;
-  mat.customProgramCacheKey = () => 'frame-cobalt';
+  mat.customProgramCacheKey = () => 'frame-blue-glass';
   mat.userData.cobalt = true;
   return mat;
 }
 function makeCobaltFrameMaterial(hex) {
   return applyCobaltShader(new THREE.MeshStandardMaterial({
-    color: hex, roughness: 0.22, metalness: 0.45,
-    emissive: 0x0f2ce0, emissiveIntensity: 0.55,
-    envMapIntensity: 1.6,
+    color: hex, roughness: 0.06, metalness: 0.0,
+    emissive: 0x0a26c8, emissiveIntensity: 0.2,
+    envMapIntensity: 3.0,
+    transparent: true, opacity: 0.55, depthWrite: false,
   }));
+}
+// Depth-only twin of a glass mesh (same geometry, inherits its transform): it
+// draws just before the glass, after the wall halo, so the glass then blends
+// only its front-most surface over whatever is behind the frame. Used for the
+// light procedural frames; the 62k-triangle Victorian mesh instead draws its
+// triangles front to back (sortVictorianIndexFrontToBack), which gives the same
+// result with no second pass.
+let _glassDepthMat = null;
+// A frame is only ever seen from in front of its wall, so drawing the carving's
+// triangles front (+z) to back with depth writes on lets each nearer surface
+// hide the ones behind it — only the front-most glass blends over the wall.
+// Coarse depth slabs (a stable counting sort) keep the mesh's vertex-cache
+// friendly order inside each slab. Done once, on the shared index buffer, the
+// first time a glass frame is built (opaque frames are unaffected by order).
+let _vicIndexSorted = false;
+function sortVictorianIndexFrontToBack() {
+  if (_vicIndexSorted || !_victorianGeo || !_victorianGeo.index) return;
+  _vicIndexSorted = true;
+  const idx = _victorianGeo.index, a = idx.array, pos = _victorianBasePositions;
+  const nT = a.length / 3, SLABS = 24;
+  let zMin = Infinity, zMax = -Infinity;
+  for (let i = 2; i < pos.length; i += 3) { const z = pos[i]; if (z < zMin) zMin = z; if (z > zMax) zMax = z; }
+  const span = (zMax - zMin) || 1;
+  const slab = new Uint8Array(nT), count = new Uint32Array(SLABS);
+  for (let t = 0; t < nT; t++) {
+    const zc = (pos[a[3 * t] * 3 + 2] + pos[a[3 * t + 1] * 3 + 2] + pos[a[3 * t + 2] * 3 + 2]) / 3;
+    const k = Math.min(SLABS - 1, Math.max(0, Math.floor((zMax - zc) / span * SLABS)));   // 0 = front
+    slab[t] = k; count[k]++;
+  }
+  const start = new Uint32Array(SLABS);
+  for (let k = 1; k < SLABS; k++) start[k] = start[k - 1] + count[k - 1];
+  const out = new a.constructor(a.length);
+  for (let t = 0; t < nT; t++) {
+    const o = 3 * start[slab[t]]++;
+    out[o] = a[3 * t]; out[o + 1] = a[3 * t + 1]; out[o + 2] = a[3 * t + 2];
+  }
+  a.set(out);
+  idx.needsUpdate = true;
+}
+function addGlassDepthPrepass(mesh) {
+  if (!_glassDepthMat) _glassDepthMat = new THREE.MeshBasicMaterial({ colorWrite: false, transparent: true, depthWrite: true });
+  const d = new THREE.Mesh(mesh.geometry, _glassDepthMat);
+  d.renderOrder = 1.5;          // after the halo (1), before the glass (1.6)
+  d.raycast = () => {};
+  d.userData.cobaltFx = true;
+  mesh.add(d);
+  mesh.renderOrder = 1.6;
 }
 
 // Halo: one quad per frame on the wall behind it. Its shader fades a rounded
@@ -7519,10 +7575,13 @@ const COBALT_HALO_SHADER = {
     varying vec2 vP;
     varying vec3 vRect;
     void main() {
-      vec2 q = max(abs(vP) - vRect.xy, 0.0);
-      float d = length(q) / vRect.z;                 // 0 at the frame's edge, 1 at the falloff
+      vec2 e = abs(vP) - vRect.xy;
+      float d = length(max(e, 0.0)) / vRect.z;       // 0 at the frame's edge, 1 at the falloff
       float a = 0.62 * exp(-d * d * 7.0) + 0.38 * exp(-d * 3.2);
       a *= 1.0 - smoothstep(0.82, 1.0, d);           // reaches exactly 0 at the quad's border
+      // behind the middle of the frame the wall stays dimmer, so the glass keeps
+      // its depth; the light gathers toward the outline and spills outward
+      a *= mix(0.4, 1.0, smoothstep(0.3, 1.05, length(vP / vRect.xy)));
       gl_FragColor = vec4(uColor, a * uOpacity);
     }`,
 };
@@ -7532,7 +7591,7 @@ function cobaltGlowMaterial() {
   const k = additive ? 'add' : 'tint';
   if (!_cobaltGlowMats[k]) {
     _cobaltGlowMats[k] = new THREE.ShaderMaterial({
-      uniforms: { uColor: { value: new THREE.Color(COBALT_GLOW_COLOR) }, uOpacity: { value: additive ? 0.68 : 0.4 } },
+      uniforms: { uColor: { value: new THREE.Color(COBALT_GLOW_COLOR) }, uOpacity: { value: additive ? 0.8 : 0.45 } },
       vertexShader: COBALT_HALO_SHADER.vertexShader, fragmentShader: COBALT_HALO_SHADER.fragmentShader,
       transparent: true, depthWrite: false,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -7570,7 +7629,7 @@ function addCobaltGlow(group) {
   if (!bb) return;
   const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
   // the bright core starts a little inside the frame's outline
-  const halo = new THREE.Mesh(cobaltHaloGeometry(w * 0.4, h * 0.44, 0.34 + 0.1 * Math.min(w, h)), cobaltGlowMaterial());
+  const halo = new THREE.Mesh(cobaltHaloGeometry(w * 0.47, h * 0.48, 0.34 + 0.1 * Math.min(w, h)), cobaltGlowMaterial());
   halo.position.set((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, -0.006);
   halo.renderOrder = 1;                 // over the frame's soft shadow
   halo.raycast = () => {};
@@ -7767,8 +7826,13 @@ function buildFrame(pW, pH, isSeriesRoom, resolved) {
       addEdgeLines(ch, lwGroup.line);     // crisp creases (front/side edges)
     }
   }
-  // Cobalt Glow: halo on the wall (Victorian adds its own once the mesh loads).
-  if (activeFrame.color === 'cobalt' && activeFrame.style !== 'victorian') addCobaltGlow(group);
+  // Blue Glass: depth twins + halo on the wall (Victorian adds its own once the mesh loads).
+  if (activeFrame.color === 'cobalt' && activeFrame.style !== 'victorian') {
+    for (let i = frameChildStart; i < group.children.length; i++) {
+      if (group.children[i].isMesh) addGlassDepthPrepass(group.children[i]);
+    }
+    addCobaltGlow(group);
+  }
   return group;
 }
 
@@ -8080,7 +8144,7 @@ function addVictorianMesh(group, pW, pH) {
     mat.vertexColors = false;
     if (srcMat && srcMat.userData.cobalt) {
       applyCobaltShader(mat);
-      // the carving's own normal map gives the gloss its fine sparkle
+      // the carving's own normal map gives the glass its fine sparkle
       if (_victorianTexMat && _victorianTexMat.normalMap) mat.normalMap = _victorianTexMat.normalMap;
     }
   }
@@ -8235,6 +8299,9 @@ function addVictorianMesh(group, pW, pH) {
     const pm = panel.material;
     pm.emissive.setHex(0x0f2ce0); pm.emissiveIntensity = 0.42;
     pm.roughness = 0.3; pm.metalness = 0.3;
+    sortVictorianIndexFrontToBack();
+    mat.depthWrite = true;              // nearer carving hides what is behind it
+    mesh.renderOrder = 1.6;             // after the wall halo
     addCobaltGlow(group);
     // glint in the crest's oculus (model y VIC_GLINT_Y, shifted with the crest)
     const bb = geo.boundingBox;
@@ -9269,7 +9336,7 @@ const FRAME_COLOR_OPTIONS = [
   ['oak', 'Oak'], ['pastel-blue', 'Pastel Blue'], ['ebony', 'Ebony'],
   ['sage', 'Sage'], ['ivory', 'Ivory'],
   ['red', 'Red'], ['blue', 'Blue'], ['yellow', 'Yellow'],
-  ['cobalt', 'Cobalt Glow'],
+  ['cobalt', 'Blue Glass'],
 ];
 
 // Build the modal picker buttons once.
@@ -14518,7 +14585,7 @@ function wallPaintingRects(nL, c) {
     if (Math.abs((f.position.x - c.x) * nL.x + (f.position.z - c.z) * nL.z) > 0.6) continue;
     if (Math.abs(alongX ? f.position.x - c.x : f.position.z - c.z) > 7) continue;
     _frameBox.makeEmpty();
-    for (const c of f.children) {           // not the soft drop-shadow card, nor a Cobalt Glow halo/glint
+    for (const c of f.children) {           // not the soft drop-shadow card, nor a Blue Glass halo/glint
       if (c.material && c.material === ud.shadowMat) continue;
       if (c.userData && c.userData.cobaltFx) continue;
       _frameBox.union(_frameBoxC.setFromObject(c));
