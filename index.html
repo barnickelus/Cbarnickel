@@ -9754,9 +9754,10 @@ function handleTap(clientX, clientY) {
       const df = Math.hypot(dxf, dzf);
       if (df > 0.001) {
         let tx = pt.x, tz = pt.z;
-        if (df > TAP_STEP_DISTANCE) {
-          tx = camera.position.x + (dxf / df) * TAP_STEP_DISTANCE;
-          tz = camera.position.z + (dzf / df) * TAP_STEP_DISTANCE;
+        const tsd = TAP_STEP_DISTANCE * moveSpeedScale();
+        if (df > tsd) {
+          tx = camera.position.x + (dxf / df) * tsd;
+          tz = camera.position.z + (dzf / df) * tsd;
         }
         const c = clampToRooms(tx, tz);
         tapWalkTarget = { x: c.x, z: c.z };
@@ -10123,7 +10124,7 @@ function updateTapWalk(dt) {
   const dz = tgt.z - camera.position.z;
   const dist = Math.hypot(dx, dz);
   if (dist >= 0.05) {
-    const step = Math.min(dist, TAP_WALK_SPEED * dt);
+    const step = Math.min(dist, TAP_WALK_SPEED * moveSpeedScale() * dt);
     const c = clampToRooms(
       camera.position.x + (dx / dist) * step,
       camera.position.z + (dz / dist) * step,
@@ -12995,6 +12996,9 @@ const _beachTime = { value: 0 };
 // The building's footprint in world space (min x, min z, max x, max z) for the
 // beach shader: dune grass grows along its walls, whichever side you are on
 const _beachBld = { value: new THREE.Vector4(-11, -20, 11, 15) };
+// The catamaran for the beach shader: world x, z and heading; its speed (the wake)
+const _beachBoat = { value: new THREE.Vector4(1e5, 1e5, 1, 0) };
+const _beachBoatV = { value: 0 };
 function syncBeachBuilding() {
   if (!worldRoot || typeof buildingBox !== 'function') return;
   const B = buildingBox();
@@ -14523,7 +14527,7 @@ function ensureBeachWorld() {
   if (arsenal.beachWorld) return arsenal.beachWorld;
   const mat = new THREE.ShaderMaterial({
     uniforms: {
-      uTime: _beachTime, uBld: _beachBld, uRadius: { value: 1 }, uSeed: { value: 0 }, uBirth: { value: 0 },
+      uTime: _beachTime, uBld: _beachBld, uBoat: _beachBoat, uBoatV: _beachBoatV, uRadius: { value: 1 }, uSeed: { value: 0 }, uBirth: { value: 0 },
       uDepth: { value: 0 }, uKind: { value: 0 }, uComic: { value: 0 },
       uStone: { value: new THREE.Vector3() }, uInk: { value: new THREE.Color() }, uGround: { value: 0 },
       uOrigin: { value: new THREE.Vector3() },
@@ -14569,6 +14573,10 @@ function syncBeachWorld() {
     near = Math.hypot(h.center.x - c.x, h.center.z - c.z) < 2.6;
   }
   dome.visible = !!(h && mirrorWorld && (arsenal.outside || near));
+  // outside (and at sea) the view reaches farther than any room needs
+  if (camera.userData.far0 === undefined) camera.userData.far0 = camera.far;
+  const far = arsenal.outside ? SAIL_FAR : camera.userData.far0;
+  if (camera.far !== far) { camera.far = far; camera.updateProjectionMatrix(); }
   if (arsenal.cathedral) arsenal.cathedral.visible = dome.visible;
   if (arsenal.birds) arsenal.birds.group.visible = dome.visible && !!arsenal.cathedral;
   if (!h) return;
@@ -14593,7 +14601,7 @@ function warmBeachPrograms() {
   if (arsenal.beachWarm) return;
   const mat = new THREE.ShaderMaterial({
     uniforms: {
-      uTime: _beachTime, uBld: _beachBld, uRadius: { value: 0.3 }, uSeed: { value: 1 }, uBirth: { value: 0 },
+      uTime: _beachTime, uBld: _beachBld, uBoat: _beachBoat, uBoatV: _beachBoatV, uRadius: { value: 0.3 }, uSeed: { value: 1 }, uBirth: { value: 0 },
       uDepth: { value: WALL_THICKNESS }, uKind: { value: 0 }, uComic: { value: 0 },
       uStone: { value: new THREE.Vector3() }, uInk: { value: new THREE.Color() }, uGround: { value: BEACH_GROUND_Y },
     },
@@ -14688,6 +14696,9 @@ function inBreachMouth(b, x, z) {
   return q.s > -0.6 && q.s < 0.12 + WALL_THICKNESS / 2 + PLAYER_BUFFER && Math.abs(q.l) <= breachHalfWidth(b);
 }
 function clampOutside(h, x, z, move) {
+  const BT = arsenal.boat;
+  if (BT && BT.tween && move) { const c = camLocal(); return { x: c.x, z: c.z, roomId: h.room || currentRoomId }; }   // mid-hop
+  if (BT && BT.aboard) return clampSail(h, x, z, move);
   // back in through the breach — or through any other one, walking round to it
   for (const b of arsenal.holes) {
     if (!b.breach || !b.cut) continue;
@@ -14738,6 +14749,18 @@ function clampOutside(h, x, z, move) {
   for (const t of breachPalms(h)) {
     const dx = x - t.x, dz = z - t.z, d = Math.hypot(dx, dz);
     if (d < 0.6 && d > 1e-4) { x = t.x + dx / d * 0.6; z = t.z + dz / d * 0.6; }
+  }
+  // the catamaran: walk into her to climb aboard (once you've stepped away
+  // after landing); otherwise she's solid
+  if (BT && BT.placed && BT.hole === h && arsenal.birds && arsenal.birds.group.visible) {
+    const q = boatUV(BT, x, z), eu = BOAT_HL + 0.3 - Math.abs(q.u), ev = BOAT_HW + 0.3 - Math.abs(q.v);
+    if (eu > 0 && ev > 0) {
+      if (move && BT.armed) { boardBoat(); const c = camLocal(); return { x: c.x, z: c.z, roomId: h.room || currentRoomId }; }
+      if (move) {
+        if (eu < ev) { const k = Math.sign(q.u) || 1; x += BT.hx * k * eu; z += BT.hz * k * eu; }
+        else { const k = Math.sign(q.v) || 1; x -= BT.hz * k * ev; z += BT.hx * k * ev; }
+      }
+    } else if (move && !BT.armed && (Math.abs(q.u) > BOAT_HL + 1.2 || Math.abs(q.v) > BOAT_HW + 1.2)) BT.armed = true;
   }
   return { x, z, roomId: h.room || currentRoomId };
 }
@@ -15080,6 +15103,10 @@ function buildCathedral() {
   mats.roof.uniforms.map.value = comic ? extWhiteTex() : slateTexture();
   mats.roof.uniforms.diffuse.value.set(comic ? fill : 0xe6e8ee);
   if (!mats.glass) mats.glass = extMaterial(glassTexture(), 0xffffff, { alphaTest: 0.5 });
+  // the skin lies a few millimetres off the walls' own faces: from far out at
+  // sea that is within the depth buffer's step, so pull it (and its glass) forward
+  mats.stone.polygonOffset = true; mats.stone.polygonOffsetFactor = -1; mats.stone.polygonOffsetUnits = -2;
+  mats.glass.polygonOffset = true; mats.glass.polygonOffsetFactor = -2; mats.glass.polygonOffsetUnits = -4;
   EXT_COMIC.value = comic ? 1 : 0;
   const S = geoAcc(), R = geoAcc(), W = geoAcc();
   const obstacles = [];
@@ -15229,7 +15256,69 @@ function birdGeometry(kind) {
   };
   const M = (x, y, z, sx, sy, sz, rz) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, rz || 0)), new THREE.Vector3(sx, sy, sz));
-  if (kind === 'piper') {
+  // a rod from a to b
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const rod = (a, b, r0, r1, col) => {
+    const d = b.clone().sub(a), len = d.length();
+    const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.multiplyScalar(1 / len));
+    part(new THREE.CylinderGeometry(r1, r0, len, 5), new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), q, V(1, 1, 1)), col);
+  };
+  // a flat triangle seen from both sides (sails)
+  const tri = (a, b, c, col) => {
+    const n = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+    for (const [P, sg] of [[[a, b, c], 1], [[a, c, b], -1]]) {
+      for (const v of P) { A.p.push(v.x, v.y, v.z); A.n.push(n.x * sg, n.y * sg, n.z * sg); A.u.push(0.5, 0.5); A.c.push(col[0], col[1], col[2]); }
+    }
+  };
+  // a sail: luff (tack to head) and leech (clew to head), bellied to leeward
+  const sail = (tack, head, clew, belly, rows, cols) => {
+    const at = (k, j) => {
+      const a = k / rows, l = tack.clone().lerp(head, a), e = clew.clone().lerp(head, a);
+      const m = l.clone().lerp(e, j / 2);
+      return j === 1 ? m.addScaledVector(belly, 1 - a) : m;
+    };
+    for (let k = 0; k < rows; k++) {
+      const col = cols(k);
+      for (let j = 0; j < 2; j++) {
+        tri(at(k, j), at(k, j + 1), at(k + 1, j + 1), col);
+        if (k + 1 < rows) tri(at(k, j), at(k + 1, j + 1), at(k + 1, j), col);
+      }
+    }
+  };
+  if (kind === 'crab') {
+    // ~0.2 m across; faces +x, walks sideways (along z)
+    const shell = [0.86, 0.33, 0.13], belly = [0.96, 0.84, 0.66], dark = [0.06, 0.05, 0.05], leg = [0.8, 0.32, 0.13];
+    part(new THREE.SphereGeometry(1, 10, 6), M(0, 0.05, 0, 0.062, 0.03, 0.092), shell, belly);
+    for (const sz of [-1, 1]) {
+      rod(V(0.04, 0.045, sz * 0.05), V(0.085, 0.05, sz * 0.075), 0.009, 0.007, shell);
+      part(new THREE.SphereGeometry(1, 6, 4), M(0.105, 0.05, sz * 0.07, 0.038, 0.02, 0.024), shell);
+      rod(V(0.045, 0.07, sz * 0.022), V(0.05, 0.1, sz * 0.026), 0.004, 0.004, shell);
+      part(new THREE.SphereGeometry(1, 5, 4), M(0.05, 0.105, sz * 0.026, 0.011, 0.011, 0.011), dark);
+      for (const x of [-0.045, -0.012, 0.022]) {
+        rod(V(x, 0.045, sz * 0.08), V(x - 0.01, 0.06, sz * 0.13), 0.006, 0.005, leg);
+        rod(V(x - 0.01, 0.06, sz * 0.13), V(x - 0.02, 0.0, sz * 0.165), 0.005, 0.003, leg);
+      }
+    }
+  } else if (kind === 'cat') {
+    // a beach catamaran, 4.6 m: bow +x, waterline y = 0, the boom out to -z
+    const white = [0.95, 0.95, 0.93], stripe = [0.12, 0.32, 0.62], net = [0.1, 0.13, 0.2], metal = [0.72, 0.74, 0.77];
+    const cloth = [0.97, 0.96, 0.91], band = [0.92, 0.36, 0.16];
+    for (const sz of [-0.95, 0.95]) {
+      part(new THREE.SphereGeometry(1, 18, 8), M(0, 0.13, sz, 2.3, 0.32, 0.19), white);
+      part(new THREE.BoxGeometry(3.7, 0.07, 0.02), M(-0.1, 0.27, sz * 1.19, 1, 1, 1), stripe);
+      part(new THREE.BoxGeometry(0.3, 0.55, 0.03), M(-2.25, 0.0, sz, 1, 1, 1), white);       // rudders
+    }
+    part(new THREE.BoxGeometry(0.12, 0.1, 2.15), M(1.05, 0.47, 0, 1, 1, 1), metal);
+    part(new THREE.BoxGeometry(0.12, 0.1, 2.15), M(-1.55, 0.47, 0, 1, 1, 1), metal);
+    part(new THREE.BoxGeometry(2.5, 0.025, 1.72), M(-0.25, 0.46, 0, 1, 1, 1), net);
+    rod(V(0.62, 0.5, 0), V(0.62, 7.4, 0), 0.055, 0.035, metal);                                    // mast
+    const bc = Math.cos(0.42), bs = Math.sin(0.42);
+    const tack = V(0.62, 1.4, 0), clew = V(0.62 - 2.6 * bc, 1.4, -2.6 * bs), head = V(0.62, 7.3, 0);
+    rod(tack, clew, 0.035, 0.03, metal);                                                            // boom
+    rod(V(2.3, 0.45, 0), V(0.62, 5.6, 0), 0.008, 0.008, metal);                                     // forestay
+    sail(tack, head, clew, V(bs, 0, -bc).multiplyScalar(0.32), 5, k => k === 0 ? band : cloth);
+    sail(V(2.2, 0.62, 0), V(0.66, 5.5, 0), V(1.05, 1.15, -0.75), V(0.4, 0, -0.9).multiplyScalar(0.14), 3, () => cloth);
+  } else if (kind === 'piper') {
     const back = [0.55, 0.49, 0.41], white = [0.93, 0.92, 0.89], dark = [0.1, 0.09, 0.08];
     part(new THREE.SphereGeometry(1, 8, 6), M(0, 0.1, 0, 0.1, 0.05, 0.055, -0.12), back, white);
     part(new THREE.SphereGeometry(1, 6, 5), M(0.085, 0.135, 0, 0.032, 0.03, 0.03), back, white);
@@ -15252,15 +15341,18 @@ function birdGeometry(kind) {
   g.computeBoundingSphere();
   return g;
 }
-const N_PIPERS = 7, N_GULLS = 3;
+const N_PIPERS = 7, N_GULLS = 3, N_CRABS = 7;
 function ensureShorebirds() {
   if (arsenal.birds) return arsenal.birds;
   const mat = extMaterial(null, 0xffffff, { vertexColors: true });
   const pipers = new THREE.InstancedMesh(birdGeometry('piper'), mat, N_PIPERS);
   const gulls = new THREE.InstancedMesh(birdGeometry('gull'), mat, N_GULLS);
-  for (const m of [pipers, gulls]) { m.frustumCulled = false; m.raycast = () => {}; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); }
+  // the crabs and the catamaran share the birds' material and program
+  const crabs = new THREE.InstancedMesh(birdGeometry('crab'), mat, N_CRABS);
+  const boatMesh = new THREE.InstancedMesh(birdGeometry('cat'), mat, 1);
+  for (const m of [pipers, gulls, crabs, boatMesh]) { m.frustumCulled = false; m.raycast = () => {}; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); }
   const group = new THREE.Group();
-  group.add(pipers); group.add(gulls);
+  group.add(pipers); group.add(gulls); group.add(crabs); group.add(boatMesh);
   group.visible = false;
   addToRawScene(group);
   const birds = [];
@@ -15270,7 +15362,14 @@ function ensureShorebirds() {
     birds.push({ gull, s: 0, l: 0, home: k * (gull ? 6 : 1.6) + (Math.random() - 0.5), off: 0.5 + Math.random() * 0.9,
       yaw: Math.random() * 6.28, peck: 0, phase: Math.random() * 6.28, tx: 0, tl: 0, wait: Math.random() * 3, placed: false });
   }
-  arsenal.birds = { group, pipers, gulls, birds, mat, frameHole: null, F: null };
+  const crabStates = [];
+  for (let i = 0; i < N_CRABS; i++) {
+    crabStates.push({ s: 0, l: 0, home: (i - (N_CRABS - 1) / 2) * 2.4 + (Math.random() - 0.5), yaw: Math.random() * 6.28,
+      tx: 0, tl: 0, wait: Math.random() * 2, sink: 0, hidden: 0, phase: Math.random() * 6.28, placed: false });
+  }
+  arsenal.birds = { group, pipers, gulls, crabs, boatMesh, birds, crabStates, mat, frameHole: null, F: null };
+  if (!arsenal.boat) arsenal.boat = { placed: false, hole: null, lx: 0, lz: 0, hx: 1, hz: 0, aboard: false, armed: true,
+    vx: 0, vz: 0, speed: 0, tween: null, baseY: 1.65 };
   return arsenal.birds;
 }
 const _bQ = new THREE.Quaternion(), _bE = new THREE.Euler(0, 0, 0, 'YXZ'), _bP = new THREE.Vector3(), _bS = new THREE.Vector3(1, 1, 1), _bM = new THREE.Matrix4();
@@ -15279,7 +15378,7 @@ function updateShorebirds(dt, t) {
   if (!B || !B.group.visible) return;
   const h = activeBreach();
   if (!h) return;
-  if (B.frameHole !== h) { B.frameHole = h; B.F = beachFrame(h); for (const b of B.birds) b.placed = false; }
+  if (B.frameHole !== h) { B.frameHole = h; B.F = beachFrame(h); for (const b of B.birds) b.placed = false; for (const c of B.crabStates) c.placed = false; }
   const { C, O, L } = B.F;
   const cl = C.dot(L);
   // the visitor in the beach frame
@@ -15347,8 +15446,218 @@ function updateShorebirds(dt, t) {
   }
   B.pipers.instanceMatrix.needsUpdate = true;
   B.gulls.instanceMatrix.needsUpdate = true;
+  updateCrabs(B, h, dt, t, ps, pl);
+}
+// Crabs on the damp sand: they scuttle sideways in short dashes, run up the
+// beach ahead of each wave, dart away from the visitor — and dig in when
+// stepped on, to come up again somewhere else a few seconds later.
+function updateCrabs(B, h, dt, t, ps, pl) {
+  const { C, O, L } = B.F;
+  const cl = C.dot(L), gy = C.y - h.center.y;
+  for (let i = 0; i < B.crabStates.length; i++) {
+    const c = B.crabStates[i];
+    if (!c.placed) {
+      c.placed = true; c.l = cl + c.home; c.s = beachShore(c.l) - 2.2 - Math.random() * 3.5;
+      c.tx = c.s; c.tl = c.l; c.sink = 0; c.hidden = 0;
+    }
+    const edge = waveEdge(c.l, t).edge, shore = beachShore(c.l);
+    const dps = c.s - ps, dpl = c.l - pl, dp = Math.hypot(dps, dpl);
+    let speed = 0;
+    if (c.hidden > 0) {
+      c.hidden -= dt; c.sink = Math.min(1, c.sink + dt * 5);
+      if (c.hidden <= 0) {
+        c.l = cl + c.home + (Math.random() - 0.5) * 6; c.s = beachShore(c.l) - 2 - Math.random() * 4;
+        c.tx = c.s; c.tl = c.l; c.wait = 1 + Math.random() * 2;
+        if (Math.hypot(c.s - ps, c.l - pl) < 4) c.hidden = 1;   // not right under the visitor
+      }
+    } else {
+      c.sink = Math.max(0, c.sink - dt * 2.5);
+      if (dp < 0.8 && c.sink === 0) c.hidden = 3 + Math.random() * 4;       // dig in
+      else if (dp < 2.3) {                                                  // dart away
+        c.tx = c.s + dps / Math.max(dp, 0.01) * 2; c.tl = c.l + dpl / Math.max(dp, 0.01) * 2; c.wait = 0.4; speed = 2.4;
+      } else if (c.s > edge - 0.45) {                                       // out of the wash
+        c.tx = edge - 1.3; c.tl = c.l; speed = 2.1;
+      } else {
+        speed = 1.3;
+        if (Math.hypot(c.tx - c.s, c.tl - c.l) < 0.04 && (c.wait -= dt) <= 0) {
+          c.wait = 0.6 + Math.random() * 2.8;
+          c.tl = c.l + (Math.random() - 0.5) * 3;
+          if (Math.abs(c.l - cl - c.home) > 5) c.tl = c.l + Math.sign(cl + c.home - c.l) * 1.5;
+          c.tx = Math.min(edge - 0.8, Math.max(shore - 7, c.s + (Math.random() - 0.5) * 1.2));
+        }
+      }
+    }
+    const ds = c.tx - c.s, dl = c.tl - c.l, d = Math.hypot(ds, dl);
+    let moving = false;
+    if (speed > 0 && d > 0.02 && c.hidden <= 0) {
+      const st = Math.min(d, speed * dt);
+      c.s += ds / d * st; c.l += dl / d * st; moving = true;
+      // sideways: the body turns across its path, whichever way round is nearer
+      const mv = Math.atan2(dl, ds);
+      let dy = mv + Math.PI / 2 - c.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      if (Math.abs(dy) > Math.PI / 2) dy -= Math.sign(dy) * Math.PI;
+      c.yaw += dy * Math.min(1, dt * 6);
+      c.phase += dt * 38;
+    }
+    const wx = C.x + O.x * c.s + L.x * (c.l - cl), wz = C.z + O.z * c.s + L.z * (c.l - cl);
+    _bP.set(wx, gy - c.sink * 0.1 + (moving ? Math.abs(Math.sin(c.phase)) * 0.006 : 0), wz);
+    const fx = O.x * Math.cos(c.yaw) + L.x * Math.sin(c.yaw), fz = O.z * Math.cos(c.yaw) + L.z * Math.sin(c.yaw);
+    _bE.set(moving ? Math.sin(c.phase) * 0.09 : 0, Math.atan2(-fz, fx), 0);
+    _bQ.setFromEuler(_bE);
+    _bS.set(1, 1, 1);
+    _bM.compose(_bP, _bQ, _bS);
+    B.crabs.setMatrixAt(i, _bM);
+  }
+  B.crabs.instanceMatrix.needsUpdate = true;
 }
 
+/* ── The catamaran ──
+   Beached at the water's edge beside the breach. Walk into it to climb
+   aboard (you stand aft of the mast on the windward hull); then the usual
+   controls sail it — a little faster than walking, gliding on when you let
+   go, the bows turning to follow the way it moves. Steer back onto the
+   sand to run it ashore and hop off. Kept in local (unflipped) coordinates
+   like the rooms; drawn in world space with the birds. */
+const SAIL_REACH = 82;                 // no farther than this from the building's middle…
+const SAIL_FAR = 110;                  // …so with this far plane outside, the cathedral stays in view
+const SAIL_SPEED = 1.8;                // × walking pace
+const BOAT_HL = 2.35, BOAT_HW = 1.2;   // half length, half beam
+const HELM_U = -1.0, HELM_V = 0.9;     // where you stand: aft of the mast, on the windward hull
+const _sailV = new THREE.Vector3(), _sailW = new THREE.Vector3();
+function moveSpeedScale() { return arsenal.boat && arsenal.boat.aboard ? SAIL_SPEED : 1; }
+function camLocal() { return worldRoot.worldToLocal(_sailV.copy(camera.position)); }
+function boatUV(B, x, z) {
+  const rx = x - B.lx, rz = z - B.lz;
+  return { u: rx * B.hx + rz * B.hz, v: -rx * B.hz + rz * B.hx };
+}
+// From the boat's centre to the helm, in local coordinates. The windward
+// hull is the model's +z side in world space, so work it out there (the
+// mirror flips x) and bring it back.
+function helmOffset(B) {
+  const sx = worldRoot.scale.x < 0 ? -1 : 1;
+  const dx = B.hx * sx, dz = B.hz;
+  const ox = dx * HELM_U - dz * HELM_V, oz = dz * HELM_U + dx * HELM_V;
+  return { x: ox * sx, z: oz };
+}
+function placeBoat(h) {
+  const B = arsenal.boat;
+  const ox = -h.normal.x, oz = -h.normal.z, ax = oz, az = -ox;   // out to sea; along the wall
+  const F = h._frame || (h._frame = beachFrame(h));
+  const l = 8.5;
+  const lw = worldRoot.localToWorld(_sailW.set(h.center.x + ax * l, 0, h.center.z + az * l)).dot(F.L);
+  const s = beachShore(lw) - 1.1;
+  B.lx = h.center.x + ox * s + ax * l; B.lz = h.center.z + oz * s + az * l;
+  B.hx = -ox; B.hz = -oz;                                          // bows up the beach
+  B.hole = h; B.placed = true; B.vx = B.vz = B.speed = 0; B.armed = true;
+}
+function startBoatHop(B, tx, tz, dur) {
+  const c = camLocal();
+  B.tween = { fx: c.x, fz: c.z, tx, tz, t: 0, dur, fy: camera.position.y };
+}
+function boardBoat() {
+  const B = arsenal.boat;
+  B.aboard = true; B.armed = false; B.vx = B.vz = B.speed = 0;
+  tapWalkTarget = null;
+  B.baseY = camera.position.y;
+  const o = helmOffset(B);
+  startBoatHop(B, B.lx + o.x, B.lz + o.z, 0.55);
+  if (!arsenal.sailHinted) {
+    arsenal.sailHinted = true;
+    flashCustomHint('aboard — sail anywhere; steer back onto the sand to land', 4200);
+  }
+}
+function landBoat(h) {
+  const B = arsenal.boat;
+  B.aboard = false; B.armed = false; B.vx = B.vz = B.speed = 0;
+  // the hulls run up on the sand where they are; hop off the windward side, up the beach
+  const c = camLocal(), o = helmOffset(B);
+  const px = -B.hz, pz = B.hx, side = Math.sign(o.x * px + o.z * pz) || 1;
+  startBoatHop(B, c.x + px * side * 1.1 + h.normal.x * 0.9, c.z + pz * side * 1.1 + h.normal.z * 0.9, 0.5);
+  return { x: c.x, z: c.z, roomId: h.room || currentRoomId };
+}
+// Aboard: anywhere on the water within reach; a step onto the sand lands her
+function clampSail(h, x, z, move) {
+  const B = arsenal.boat;
+  const F = h._frame || (h._frame = beachFrame(h));
+  const lw = worldRoot.localToWorld(_sailW.set(x, 0, z)).dot(F.L);
+  if (breachSL(h, x, z).s < beachShore(lw) - 0.3) {
+    if (move) return landBoat(h);
+    // a tap on the sand: sail in and walk on to it
+    B.aboard = false; const r = clampOutside(h, x, z, false); B.aboard = true;
+    return r;
+  }
+  const BB = buildingBox(), mx = (BB.x0 + BB.x1) / 2, mz = (BB.z0 + BB.z1) / 2;
+  const dx = x - mx, dz = z - mz, d = Math.hypot(dx, dz);
+  if (d > SAIL_REACH) { x = mx + dx / d * SAIL_REACH; z = mz + dz / d * SAIL_REACH; }
+  return { x, z, roomId: h.room || currentRoomId };
+}
+const _boatE = new THREE.Euler(0, 0, 0, 'YZX');
+function updateSail(dt, t) {
+  const B = arsenal.boat, BR = arsenal.birds;
+  if (!B || !BR || !worldRoot) return;
+  if ((B.aboard || B.tween) && !arsenal.outside) {
+    // the beach closed under us (the damage was cleared): back to the start
+    B.aboard = false; B.tween = null; B.placed = false; camera.position.y = B.baseY;
+  }
+  const h = activeBreach();
+  if (!B.aboard && !B.tween && (!B.placed || B.hole !== h)) {
+    B.placed = false;
+    if (h && h.cut) placeBoat(h);
+  }
+  if (B.tween) {
+    const T = B.tween;
+    T.t = Math.min(1, T.t + dt / T.dur);
+    const e = T.t * T.t * (3 - 2 * T.t);
+    const w = worldRoot.localToWorld(_sailW.set(T.fx + (T.tx - T.fx) * e, 0, T.fz + (T.tz - T.fz) * e));
+    camera.position.x = w.x; camera.position.z = w.z;
+    camera.position.y = T.fy + (B.baseY - T.fy) * e + Math.sin(T.t * Math.PI) * 0.22;   // a little hop
+    if (T.t >= 1) { B.tween = null; camera.position.y = B.baseY; }
+  } else if (B.aboard) {
+    const c = camLocal(), o = helmOffset(B);
+    const mx = c.x - (B.lx + o.x), mz = c.z - (B.lz + o.z);
+    if (Math.hypot(mx, mz) > 1e-4 && dt > 0) {
+      // driven: the boat takes up the pace
+      const k = Math.min(1, dt * 5);
+      B.vx += (mx / dt - B.vx) * k; B.vz += (mz / dt - B.vz) * k;
+    } else if (Math.hypot(B.vx, B.vz) > 0.05) {
+      // let go: she glides on and slows
+      const w = worldRoot.localToWorld(_sailW.set(c.x + B.vx * dt, 0, c.z + B.vz * dt));
+      const q = clampToRooms(w.x, w.z, true);
+      camera.position.x = q.x; camera.position.z = q.z; currentRoomId = q.roomId;
+      const f = Math.exp(-dt * 0.55); B.vx *= f; B.vz *= f;
+    } else { B.vx = B.vz = 0; }
+    if (B.aboard) {
+      B.speed = Math.hypot(B.vx, B.vz);
+      // the bows swing round to the way she's moving
+      if (B.speed > 0.25) {
+        const a0 = Math.atan2(B.hz, B.hx), a1 = Math.atan2(B.vz, B.vx);
+        const da = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
+        const a = a0 + Math.max(-dt * 1.6, Math.min(dt * 1.6, da));
+        B.hx = Math.cos(a); B.hz = Math.sin(a);
+      }
+      const c2 = camLocal(), o2 = helmOffset(B);
+      B.lx = c2.x - o2.x; B.lz = c2.z - o2.z;
+      camera.position.y = B.baseY + 0.03 * Math.sin(t * 1.5) + 0.015 * Math.sin(t * 2.6 + 1);
+    }
+  }
+  // draw her, and tell the sea where her wake goes
+  if (!B.placed || !BR.group.visible) { _beachBoat.value.set(1e5, 1e5, 1, 0); _beachBoatV.value = 0; return; }
+  const sx = worldRoot.scale.x < 0 ? -1 : 1;
+  const cw = worldRoot.localToWorld(_sailW.set(B.lx, 0, B.lz));
+  const dwx = B.hx * sx, dwz = B.hz;
+  const F = B.hole._frame || (B.hole._frame = beachFrame(B.hole));
+  const afloat = B.aboard || breachSL(B.hole, B.lx, B.lz).s > beachShore(cw.dot(F.L)) + 0.6;
+  _bP.set(cw.x, afloat ? 0.03 * Math.sin(t * 1.5) : -0.06, cw.z);
+  _boatE.set(afloat ? 0.03 * Math.sin(t * 1.3 + 1) - 0.07 * Math.min(1, B.speed / 6) : 0.02,
+    Math.atan2(-dwz, dwx), afloat ? 0.025 * Math.sin(t * 1.1) : 0.035);
+  _bQ.setFromEuler(_boatE);
+  _bS.set(1, 1, 1);
+  _bM.compose(_bP, _bQ, _bS);
+  BR.boatMesh.setMatrixAt(0, _bM);
+  BR.boatMesh.instanceMatrix.needsUpdate = true;
+  _beachBoat.value.set(cw.x, cw.z, dwx, dwz);
+  _beachBoatV.value = B.aboard ? B.speed : 0;
+}
 /* ── Beach holes ── */
 const BEACH_HOLE_VERT = [
   'varying vec3 vWorld; varying vec3 vC; varying vec3 vN; varying vec3 vT; varying vec3 vB;',
@@ -15367,6 +15676,7 @@ const BEACH_HOLE_VERT = [
 const BEACH_HOLE_FRAG = [
   'uniform float uTime; uniform float uRadius; uniform float uSeed; uniform float uBirth;',
   'uniform float uDepth; uniform float uKind; uniform float uComic; uniform float uGround; uniform vec4 uBld;',
+  'uniform vec4 uBoat; uniform float uBoatV;',
   'uniform vec3 uStone; uniform vec3 uInk;',
   'varying vec3 vWorld; varying vec3 vC; varying vec3 vN; varying vec3 vT; varying vec3 vB;',
   'float hash( vec2 p ) { vec3 p3 = fract( vec3( p.xyx ) * 0.1031 ); p3 += dot( p3, p3.yzx + 33.33 ); return fract( ( p3.x + p3.y ) * p3.z ); }',
@@ -15578,6 +15888,12 @@ const BEACH_HOLE_FRAG = [
   '        float lit = 0.6 + 0.4 * u * sign( dot( sun.xz, side2 ) );',
   '        sand = vec3( 0.36, 0.28, 0.19 ) * 0.75 * lit * ( 0.82 + 0.18 * smoothstep( 0.235, 0.17, fd ) );',
   '      }',
+  // the catamaran's shadow: two hulls and the trampoline, cast with the sun
+  '      { vec2 bh = uBoat.zw, br = p.xz - uBoat.xy + sun.xz / max( sun.y, 0.2 ) * 0.4;',
+  '        float bu = dot( br, bh ), bv = abs( br.x * bh.y - br.y * bh.x );',
+  '        float hs = ( 1.0 - smoothstep( 0.12, 0.32, abs( bv - 0.95 ) ) ) * ( 1.0 - smoothstep( 1.9, 2.35, abs( bu ) ) );',
+  '        float ts = ( 1.0 - smoothstep( 0.7, 0.9, bv ) ) * ( 1.0 - smoothstep( 1.2, 1.45, abs( bu + 0.25 ) ) ) * 0.45;',
+  '        sand *= 1.0 - 0.42 * max( hs, ts ); }',
   '      col = sand;',
   '    } else {',
   '      float d = s - wl;',
@@ -15608,6 +15924,22 @@ const BEACH_HOLE_FRAG = [
   '      c = mix( c, vec3( 0.93, 0.95, 0.95 ), brk );',
   '      float edgeFoam = ( 1.0 - smoothstep( 0.0, ph < 0.3 ? 0.9 : 1.3, d ) ) * ( 0.6 + 0.4 * fbm( sp * 3.0 - uTime * 0.4 ) );',
   '      c = mix( c, vec3( 0.96 ), edgeFoam * 0.8 );',
+  // the catamaran's wake: foam off her two hulls, and a widening V behind
+  '      if ( uBoatV > 0.2 ) {',
+  '        vec2 bh = uBoat.zw, br = p.xz - uBoat.xy;',
+  '        float bu = -dot( br, bh ) - 1.6, bv = abs( br.x * bh.y - br.y * bh.x );',
+  '        if ( bu > -1.2 && bu < 24.0 ) {',
+  '          float ba = max( bu, 0.0 );',
+  '          float bk = smoothstep( 0.2, 3.0, uBoatV ) * smoothstep( -1.2, 0.2, bu );',
+  // churned white water off each hull, spreading and breaking up as it falls behind
+  '          float hull = ( 1.0 - smoothstep( 0.05, 0.3 + 0.09 * ba, abs( bv - 0.95 - 0.06 * ba ) ) ) * exp( -ba * 0.22 );',
+  // the V: thin broken lines of foam, fainter, a little farther
+  '          float vee = ( 1.0 - smoothstep( 0.0, 0.16 + 0.025 * ba, abs( bv - 1.3 - 0.34 * ba ) ) ) * exp( -ba * 0.16 ) * 0.55;',
+  '          float n = fbm( sp * 4.0 + uTime * 0.7 );',
+  '          float wk = ( hull * smoothstep( 0.25 + 0.025 * ba, 0.65, n ) + vee * smoothstep( 0.4, 0.7, fbm( sp * 6.0 - uTime * 0.4 ) ) ) * bk;',
+  '          c = mix( c, vec3( 0.95, 0.97, 0.97 ), wk );',
+  '        }',
+  '      }',
   '      col = c;',
   '    }',
   '    col = mix( col, hor, fogK );',
@@ -15974,7 +16306,7 @@ function blowBeachHole(h, kind) {
   if (hasBack) maxRFit = Math.min(maxRFit, backCap);
   const mat = new THREE.ShaderMaterial({
     uniforms: {
-      uTime: _beachTime, uBld: _beachBld, uRadius: { value: R * 0.3 }, uSeed: { value: Math.random() * 6.28 },
+      uTime: _beachTime, uBld: _beachBld, uBoat: _beachBoat, uBoatV: _beachBoatV, uRadius: { value: R * 0.3 }, uSeed: { value: Math.random() * 6.28 },
       uBirth: { value: _beachTime.value }, uDepth: { value: kind === 'wall' ? WALL_THICKNESS + 0.02 : 0.5 },
       uKind: { value: kind === 'wall' ? 0 : 1 }, uComic: { value: 0 },
       uStone: { value: new THREE.Vector3() }, uInk: { value: new THREE.Color() },
@@ -16417,6 +16749,7 @@ function updateArsenal(now, dt) {
   if (arsenal.beachWorld) syncBeachWorld();
   if (arsenal.holes.length) syncBeachBuilding();
   updateShorebirds(dt, _beachTime.value);
+  updateSail(dt, _beachTime.value);
   if (arsenal.outside !== arsenal.shaftsHidden) {
     arsenal.shaftsHidden = arsenal.outside;
     const comic = arsenalStyle() !== 'stone';
@@ -18019,8 +18352,9 @@ function animate() {
     if (mx !== 0 || mz !== 0) {
       tapWalkTarget = null;
       const sin = Math.sin(yaw), cos = Math.cos(yaw);
-      const dx = (mx * cos + mz * sin) * WALK_SPEED * dt;
-      const dz = (-mx * sin + mz * cos) * WALK_SPEED * dt;
+      const sp = WALK_SPEED * moveSpeedScale() * dt;
+      const dx = (mx * cos + mz * sin) * sp;
+      const dz = (-mx * sin + mz * cos) * sp;
       const c = clampToRooms(camera.position.x + dx, camera.position.z + dz, true);
       camera.position.x = c.x;
       camera.position.z = c.z;
