@@ -12982,6 +12982,7 @@ const arsenal = {
   lastFire: -1e9, reloadAt: 0,
   holes: [], scorches: [], rockets: [], targets: null,
   outside: null, beachWorld: null, beachWarm: null, shaftsHidden: null,
+  cathedral: null, extObstacles: [], extMats: null, birds: null, cathedralTimer: 0,
   shakeT: 0, shakeAmp: 0, flash: 0, flashEl: null,
   surf: null, surfNext: 0, gullNext: 0,
 };
@@ -13626,6 +13627,7 @@ function buildMirrorArsenal() {
 // must stay flat: no matcap shading, no light volumes, ink outlines instead).
 function restyleArsenal(withEmblem = true) {
   arsenal.theme = theme;
+  if (arsenal.cathedral) scheduleCathedral();
   const style = arsenalStyle();
   const comic = style !== 'stone';
   const t = T();
@@ -14470,6 +14472,7 @@ function cutWallBreach(hole) {
   wall.material = mats;
   hole.cut = true;
   _syncSurfaceUVs();                 // world-space stone UVs for the new vertices
+  scheduleCathedral();
 }
 function uncutWallBreach(hole) {
   const wall = hole.wall, orig = wall.userData.breachOrig;
@@ -14480,6 +14483,7 @@ function uncutWallBreach(hole) {
   wall.userData.breachOrig = null;
   hole.cut = false;
   _syncSurfaceUVs();
+  scheduleCathedral();
 }
 // The sky dome: one sphere, centred by its vertex shader on whichever camera
 // is rendering (so it always sits inside the far plane), back faces, painted
@@ -14535,7 +14539,14 @@ function syncBeachWorld() {
     near = Math.hypot(h.center.x - c.x, h.center.z - c.z) < 2.6;
   }
   dome.visible = !!(h && mirrorWorld && (arsenal.outside || near));
+  if (arsenal.cathedral) arsenal.cathedral.visible = dome.visible;
+  if (arsenal.birds) arsenal.birds.group.visible = dome.visible && !!arsenal.cathedral;
   if (!h) return;
+  if (dome.visible && arsenal.sunHole !== h) {
+    arsenal.sunHole = h;
+    const F = beachFrame(h);
+    EXT_SUN.value.copy(F.O).multiplyScalar(0.35).addScaledVector(F.L, 0.8).add(_arsV3.set(0, 0.5, 0)).normalize();
+  }
   const U = dome.material.uniforms, S = h.mesh.material.uniforms;
   if (dome.userData.hole !== h) {
     dome.userData.hole = h;
@@ -14573,6 +14584,17 @@ function warmBeachPrograms() {
   const stone = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), _rubbleMats().real);
   stone.visible = false; stone.raycast = () => {};
   m.add(stone);
+  // the cathedral's outside (stone, glass; the roof is double-sided) and the shorebirds
+  for (const side of [THREE.FrontSide, THREE.DoubleSide]) {
+    const ext = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), extMaterial(null, 0xffffff, { side }));
+    ext.visible = false; ext.raycast = () => {};
+    m.add(ext);
+  }
+  const bg = new THREE.PlaneGeometry(0.01, 0.01);
+  bg.setAttribute('color', new THREE.Float32BufferAttribute(new Array(12).fill(1), 3));
+  const birdWarm = new THREE.InstancedMesh(bg, extMaterial(null, 0xffffff, { vertexColors: true }), 1);
+  birdWarm.visible = false; birdWarm.raycast = () => {};
+  m.add(birdWarm);
   warmShaderPrograms(600);              // the queue: one program per frame, done long before the first shot lands
 }
 // Half the width of the opening at walking height, less a shoulder's margin
@@ -14637,8 +14659,10 @@ function clampOutside(h, x, z, move) {
     if (move) comeBackInside(h);
     return _clampToRoomsRaw(x, z, move, null);
   }
-  // the sand
-  const s = Math.min(BEACH_WALK_S, Math.max(0.12, q.s)), l = Math.max(-BEACH_WALK_L, Math.min(BEACH_WALK_L, q.l));
+  // the sand, down to the water's edge (the shoreline in the beach's world frame)
+  if (!h._frame) h._frame = beachFrame(h);
+  const lw = worldRoot ? worldRoot.localToWorld(_arsV3.set(x, 0, z)).dot(h._frame.L) : 0;
+  const s = Math.min(Math.max(BEACH_WALK_S, beachShore(lw) - 0.2), Math.max(0.12, q.s)), l = Math.max(-BEACH_WALK_L, Math.min(BEACH_WALK_L, q.l));
   const ox = -h.normal.x, oz = -h.normal.z;
   x = h.center.x + ox * s + oz * l;
   z = h.center.z + oz * s - ox * l;
@@ -14651,6 +14675,13 @@ function clampOutside(h, x, z, move) {
     if (px <= 0 || nx <= 0 || pz <= 0 || nz <= 0) continue;       // not inside this room's footprint
     q = breachSL(h, x, z);
     if (id === h.room && Math.abs(q.l) <= half) continue;            // in the mouth of the breach
+    const least = Math.min(px, nx, pz, nz);
+    if (least === px) x += px; else if (least === nx) x -= nx; else if (least === pz) z += pz; else z -= nz;
+  }
+  // the buttresses
+  for (const o of arsenal.extObstacles) {
+    const px = o.x1 + 0.32 - x, nx = x - (o.x0 - 0.32), pz = o.z1 + 0.32 - z, nz = z - (o.z0 - 0.32);
+    if (px <= 0 || nx <= 0 || pz <= 0 || nz <= 0) continue;
     const least = Math.min(px, nx, pz, nz);
     if (least === px) x += px; else if (least === nx) x -= nx; else if (least === pz) z += pz; else z -= nz;
   }
@@ -14679,6 +14710,594 @@ function breachPalms(h) {
     return { x: p.x, z: p.z };
   });
   return h._palms;
+}
+
+
+/* ── Outside: the cathedral, the swash, the shorebirds ──
+   Built only once a breach is open (rebuilt when breaches or the theme
+   change), shown only on the beach and in the breach, disposed when the
+   breaches close. Everything is lit by one small shader with the beach's own
+   sun (EXT_SUN, the same direction the hole shader uses), so no light is
+   added and the gallery's programs are untouched: the outer faces of the
+   walls get sunlit stone "skins" (with the breach cut through, matching the
+   wall's own cut), plus buttresses with pinnacles, a parapet with merlons,
+   lancet windows, steep slate roofs, rose windows in the crossing's gables
+   and a crossing tower with a spire. All of it merges into four meshes. */
+const WAVE_T = 7.5;
+const EXT_SUN = { value: new THREE.Vector3(0.3, 0.5, -0.8) };
+const EXT_COMIC = { value: 0 };
+const EXT_VERT = `
+  varying vec3 vN; varying vec2 vUv; varying vec3 vCol;
+  void main() {
+    vec3 p = position, n = normal;
+    #ifdef USE_INSTANCING
+      p = ( instanceMatrix * vec4( p, 1.0 ) ).xyz; n = mat3( instanceMatrix ) * n;
+    #endif
+    vN = normalize( mat3( modelMatrix ) * n );
+    vUv = uv;
+    #ifdef USE_COLOR
+      vCol = color;
+    #else
+      vCol = vec3( 1.0 );
+    #endif
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4( p, 1.0 );
+  }`;
+const EXT_FRAG = `
+  uniform sampler2D map; uniform vec3 diffuse; uniform vec3 uSun; uniform float uComic; uniform float uAlphaTest;
+  varying vec3 vN; varying vec2 vUv; varying vec3 vCol;
+  void main() {
+    vec4 tx = texture2D( map, vUv );
+    if ( tx.a < uAlphaTest ) discard;
+    vec3 n = normalize( vN );
+    if ( !gl_FrontFacing ) n = -n;
+    float ndl = max( dot( n, uSun ), 0.0 );
+    vec3 amb = mix( vec3( 0.46, 0.41, 0.34 ), vec3( 0.52, 0.6, 0.72 ), 0.5 + 0.5 * n.y ) * 0.66;
+    vec3 lit = amb + vec3( 1.0, 0.93, 0.8 ) * ndl * 1.0;
+    if ( uComic > 0.5 ) lit = vec3( ndl > 0.3 ? 1.0 : 0.82 );
+    gl_FragColor = vec4( diffuse * tx.rgb * vCol * lit, 1.0 );
+  }`;
+let _extWhite = null;
+function extWhiteTex() {
+  if (!_extWhite) { _extWhite = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat); _extWhite.needsUpdate = true; }
+  return _extWhite;
+}
+function extMaterial(map, color, opts = {}) {
+  return new THREE.ShaderMaterial({
+    uniforms: { map: { value: map || extWhiteTex() }, diffuse: { value: new THREE.Color(color) }, uSun: EXT_SUN,
+      uComic: EXT_COMIC, uAlphaTest: { value: opts.alphaTest || 0 } },
+    vertexShader: EXT_VERT, fragmentShader: EXT_FRAG,
+    vertexColors: !!opts.vertexColors, side: opts.side || THREE.FrontSide, fog: false,
+  });
+}
+// Canvas textures, made once: slate courses, and an atlas with a lancet
+// (left) and a rose window (right) in leaded coloured glass.
+let _slateTex = null, _glassTex = null;
+function slateTexture() {
+  if (_slateTex) return _slateTex;
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const x = c.getContext('2d');
+  x.fillStyle = '#2c2f35'; x.fillRect(0, 0, 256, 256);
+  for (let r = 0; r < 8; r++) {
+    for (let k = -1; k < 9; k++) {
+      const w = 32, sx = k * w + (r % 2) * 16, v = 46 + Math.floor(Math.random() * 26);
+      x.fillStyle = `rgb(${v},${v + 4},${v + 12})`;
+      x.fillRect(sx + 1, r * 32 + 1, w - 2, 30);
+      x.fillStyle = 'rgba(255,255,255,0.05)'; x.fillRect(sx + 1, r * 32 + 1, w - 2, 3);
+    }
+  }
+  _slateTex = new THREE.CanvasTexture(c);
+  _slateTex.wrapS = _slateTex.wrapT = THREE.RepeatWrapping;
+  _slateTex.anisotropy = 4;
+  return _slateTex;
+}
+function glassTexture() {
+  if (_glassTex) return _glassTex;
+  const c = document.createElement('canvas'); c.width = 512; c.height = 256;
+  const x = c.getContext('2d');
+  x.clearRect(0, 0, 512, 256);
+  const glass = ['#1d3a8a', '#7a1424', '#1f5e4a', '#8a6a18', '#24306e', '#5a1f6a'];
+  const lancet = (cx, w, top, bottom) => {
+    x.beginPath();
+    x.moveTo(cx - w / 2, bottom); x.lineTo(cx - w / 2, top + w * 0.86);
+    x.arc(cx + w / 2, top + w * 0.86, w, Math.PI, Math.PI + 1.05, false);
+    x.arc(cx - w / 2, top + w * 0.86, w, -1.05, 0, false);
+    x.lineTo(cx + w / 2, bottom); x.closePath();
+  };
+  // lancet: stone surround, then glass in small panes, lead lines, a mullion
+  lancet(64, 120, 4, 254); x.fillStyle = '#8f877a'; x.fill();
+  lancet(64, 92, 20, 240); x.save(); x.clip();
+  for (let py = 0; py < 256; py += 14) for (let px = 0; px < 128; px += 14) {
+    x.fillStyle = glass[(px * 7 + py * 3 + ((px + py) % 5)) % glass.length]; x.fillRect(px, py, 14, 14);
+  }
+  x.strokeStyle = '#141414'; x.lineWidth = 2;
+  for (let py = 0; py < 256; py += 14) { x.beginPath(); x.moveTo(0, py); x.lineTo(128, py + 6); x.stroke(); }
+  x.restore();
+  x.fillStyle = '#8f877a'; x.fillRect(60, 40, 8, 200);
+  lancet(64, 92, 20, 240); x.lineWidth = 4; x.strokeStyle = '#6d665a'; x.stroke();
+  // rose: concentric tracery, twelve petals
+  const rx = 384, ry = 128;
+  x.beginPath(); x.arc(rx, ry, 124, 0, Math.PI * 2); x.fillStyle = '#8f877a'; x.fill();
+  x.beginPath(); x.arc(rx, ry, 110, 0, Math.PI * 2); x.fillStyle = '#20307a'; x.fill();
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * Math.PI * 2;
+    x.beginPath(); x.ellipse(rx + Math.cos(a) * 64, ry + Math.sin(a) * 64, 36, 15, a, 0, Math.PI * 2);
+    x.fillStyle = glass[i % glass.length]; x.fill();
+    x.lineWidth = 5; x.strokeStyle = '#8f877a'; x.stroke();
+  }
+  x.beginPath(); x.arc(rx, ry, 26, 0, Math.PI * 2); x.fillStyle = '#9a2030'; x.fill(); x.lineWidth = 6; x.strokeStyle = '#8f877a'; x.stroke();
+  x.beginPath(); x.arc(rx, ry, 110, 0, Math.PI * 2); x.lineWidth = 6; x.stroke();
+  _glassTex = new THREE.CanvasTexture(c);
+  _glassTex.anisotropy = 4;
+  return _glassTex;
+}
+// Geometry accumulator: positions, normals, uvs (non-indexed), in worldRoot-local space
+function geoAcc() { return { p: [], n: [], u: [] }; }
+function accTri(A, a, b, c, uva, uvb, uvc) {
+  const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  let nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+  const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+  A.p.push(...a, ...b, ...c); A.n.push(nx, ny, nz, nx, ny, nz, nx, ny, nz); A.u.push(...uva, ...uvb, ...uvc);
+}
+// world-space stone UVs, like the walls' own (_uvSetsFor)
+function stoneUV(v, n) {
+  if (Math.abs(n.y) > 0.5) return [v.x / STONE_TILE_W, v.z / STONE_TILE_W];
+  if (Math.abs(n.x) > 0.5) return [v.z / STONE_TILE_W, v.y / LOBBY_H];
+  return [v.x / STONE_TILE_W, v.y / LOBBY_H];
+}
+// Append a three.js geometry (Box, Cone…) transformed by m, with uvFn(pos, normal) → [u, v]
+const _gaV = new THREE.Vector3(), _gaN = new THREE.Vector3(), _gaM3 = new THREE.Matrix3();
+function accGeometry(A, geo, m, uvFn) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const P = g.attributes.position, N = g.attributes.normal;
+  _gaM3.getNormalMatrix(m);
+  for (let i = 0; i < P.count; i++) {
+    _gaV.fromBufferAttribute(P, i).applyMatrix4(m);
+    _gaN.fromBufferAttribute(N, i).applyMatrix3(_gaM3).normalize();
+    A.p.push(_gaV.x, _gaV.y, _gaV.z); A.n.push(_gaN.x, _gaN.y, _gaN.z);
+    A.u.push(...uvFn(_gaV, _gaN));
+  }
+  if (g !== geo) g.dispose();
+  geo.dispose();
+}
+function accToGeometry(A) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(A.p, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(A.n, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(A.u, 2));
+  g.computeBoundingSphere();
+  return g;
+}
+const _m4 = new THREE.Matrix4();
+function accBox(A, cx, cy, cz, sx, sy, sz, uvFn) {
+  accGeometry(A, new THREE.BoxGeometry(sx, sy, sz), _m4.makeTranslation(cx, cy, cz), uvFn || stoneUV);
+}
+function inAnyRoom(x, z) {
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    if (Math.abs(x - r.cx) < r.w / 2 && Math.abs(z - r.cz) < r.d / 2) return true;
+  }
+  return false;
+}
+// The outer faces of the building: runs of full-height wall faces with no room
+// on their outer side. { mesh, alongX, at (wall plane), sgn (outward), u0, u1 }
+function exteriorFaces() {
+  const out = [];
+  for (const m of wallMeshes) {
+    if (!m.userData || !m.userData.isWall) continue;
+    const P = (m.userData.breachOrig ? m.userData.breachOrig.geometry : m.geometry).parameters;
+    if (!P) continue;
+    const o = m.position, alongX = m.userData.axis === 'z';
+    if (Math.abs(o.y - P.height / 2) > 0.05 || P.height < LOBBY_H - 0.05) continue;
+    const half = (alongX ? P.width : P.depth) / 2, c = alongX ? o.x : o.z, at = alongX ? o.z : o.x;
+    for (const sgn of [1, -1]) {
+      const off = WALL_THICKNESS / 2 + 0.3;
+      let run = null;
+      for (let u = c - half + 0.1; u <= c + half - 0.1 + 1e-6; u += 0.2) {
+        const px = alongX ? u : at + sgn * off, pz = alongX ? at + sgn * off : u;
+        const qx = alongX ? u : at - sgn * off, qz = alongX ? at - sgn * off : u;
+        const ext = !inAnyRoom(px, pz) && inAnyRoom(qx, qz);
+        if (ext) { if (!run) run = { u0: u, u1: u }; else run.u1 = u; }
+        if ((!ext || u + 0.2 > c + half - 0.1 + 1e-6) && run) {
+          out.push({ mesh: m, alongX, at, sgn, u0: Math.max(c - half, run.u0 - 0.1), u1: Math.min(c + half, run.u1 + 0.1),
+            wallU0: c - half, wallU1: c + half });
+          run = null;
+        }
+      }
+    }
+  }
+  return out;
+}
+// The breaches cut through a face (their outer opening), as { u, R, hole }
+function faceBreaches(f) {
+  const res = [];
+  for (const h of arsenal.holes) {
+    if (!h.breach || !h.cut || h.wall !== f.mesh) continue;
+    if ((f.alongX ? h.normal.z : h.normal.x) * f.sgn > -0.5) continue;   // the struck face faces the room
+    res.push({ u: f.alongX ? h.center.x : h.center.z, R: h.radius, hole: h });
+  }
+  return res;
+}
+// A sunlit skin over one outer face run, just proud of the wall, with the
+// breach's outer opening cut out exactly as the wall's own cut (back ring,
+// scale 0.9, turned 0.15 — see cutWallBreach), so the two line up.
+function accSkin(A, f) {
+  const lift = WALL_THICKNESS / 2 + 0.004;
+  const P3 = (u, v) => f.alongX ? [u, v, f.at + f.sgn * lift] : [f.at + f.sgn * lift, v, u];
+  const out = [f.alongX ? 0 : f.sgn, 0, f.alongX ? f.sgn : 0];
+  const tri = (a, b, c) => {
+    const pa = P3(a[0], a[1]), pb = P3(b[0], b[1]), pc = P3(c[0], c[1]);
+    // wind toward the outside
+    const e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]], e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+    const cx = e1[1] * e2[2] - e1[2] * e2[1], cz = e1[0] * e2[1] - e1[1] * e2[0];
+    const ok = (f.alongX ? cz * f.sgn : cx * f.sgn) >= 0;
+    const uvs = [a, b, c].map(q => stoneUV(f.alongX ? { x: q[0], y: q[1], z: 0 } : { x: 0, y: q[1], z: q[0] }, { x: out[0], y: 0, z: out[2] }));
+    if (ok) accTri(A, pa, pb, pc, uvs[0], uvs[1], uvs[2]); else accTri(A, pa, pc, pb, uvs[0], uvs[2], uvs[1]);
+  };
+  const H = LOBBY_H;
+  // split the run between breaches so each piece holds at most one
+  const bs = faceBreaches(f).filter(b => b.u > f.u0 - b.R && b.u < f.u1 + b.R).sort((a, b) => a.u - b.u);
+  const cuts = [f.u0];
+  for (let i = 0; i + 1 < bs.length; i++) cuts.push((bs[i].u + bs[i + 1].u) / 2);
+  cuts.push(f.u1);
+  for (let k = 0; k + 1 < cuts.length; k++) {
+    const ua = cuts[k], ub = cuts[k + 1], b = bs[k];
+    if (!b) { tri([ua, 0], [ub, 0], [ub, H]); tri([ua, 0], [ub, H], [ua, H]); continue; }
+    const h = b.hole, R = h.radius, seed = h.mesh.material.uniforms.uSeed.value;
+    const vT = _arsV1.set(1, 0, 0).applyQuaternion(h.mesh.quaternion), vB = _arsV2.set(0, 1, 0).applyQuaternion(h.mesh.quaternion);
+    const tu = f.alongX ? vT.x : vT.z, tv = vT.y, bu = f.alongX ? vB.x : vB.z, bv = vB.y;
+    const cu = b.u, cv = h.center.y;
+    const ang = [];
+    for (let i = 0; i < 48; i++) ang.push(i / 48 * Math.PI * 2);
+    for (const [U, V] of [[ub - cu, H - cv], [ua - cu, H - cv], [ua - cu, -cv], [ub - cu, -cv]]) {
+      ang.push(((Math.atan2(U * bu + V * bv, U * tu + V * tv) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI));
+    }
+    ang.sort((a, c) => a - c);
+    const inner = [], outer = [];
+    for (const th of ang) {
+      const du = tu * Math.cos(th) + bu * Math.sin(th), dv = tv * Math.cos(th) + bv * Math.sin(th);
+      let t = Infinity;
+      if (du > 1e-6) t = Math.min(t, (ub - cu) / du); else if (du < -1e-6) t = Math.min(t, (ua - cu) / du);
+      if (dv > 1e-6) t = Math.min(t, (H - cv) / dv); else if (dv < -1e-6) t = Math.min(t, (0 - cv) / dv);
+      const r = Math.min(R * 0.9 * holeEdge(seed, th + 0.15), t - 0.002);
+      inner.push([cu + du * r, cv + dv * r]); outer.push([cu + du * t, cv + dv * t]);
+    }
+    for (let i = 0; i < ang.length; i++) {
+      const j = (i + 1) % ang.length;
+      tri(inner[i], inner[j], outer[j]); tri(inner[i], outer[j], outer[i]);
+    }
+  }
+}
+function nearBreach(f, u, pad) {
+  for (const b of faceBreaches(f)) if (Math.abs(u - b.u) < b.R * 1.35 + pad) return true;
+  return false;
+}
+// A pitched slate roof over a room: ridge along x (lobby) or z, gables of stone
+function accRoof(R, S, W, room, ridgeAlongX, pitchDeg, gableWins) {
+  const t = WALL_THICKNESS / 2, H = LOBBY_H;
+  const x0 = room.cx - room.w / 2 - t, x1 = room.cx + room.w / 2 + t;
+  const z0 = room.cz - room.d / 2 - t, z1 = room.cz + room.d / 2 + t;
+  const half = ridgeAlongX ? (z1 - z0) / 2 : (x1 - x0) / 2;
+  const rise = half * Math.tan(pitchDeg * Math.PI / 180), top = H + rise;
+  const ov = 0.25;
+  const uvR = (v, n) => ridgeAlongX ? [v.x, v.y * 1.4] : [v.z, v.y * 1.4];
+  if (ridgeAlongX) {
+    const zc = (z0 + z1) / 2;
+    const q = (a, b, c, d) => { accTri(R, a, b, c, uvR({ x: a[0], y: a[1] }), uvR({ x: b[0], y: b[1] }), uvR({ x: c[0], y: c[1] })); accTri(R, a, c, d, uvR({ x: a[0], y: a[1] }), uvR({ x: c[0], y: c[1] }), uvR({ x: d[0], y: d[1] })); };
+    q([x1 + ov, H - 0.05, z0 - ov * 0.3], [x0 - ov, H - 0.05, z0 - ov * 0.3], [x0 - ov, top, zc], [x1 + ov, top, zc]);
+    q([x0 - ov, H - 0.05, z1 + ov * 0.3], [x1 + ov, H - 0.05, z1 + ov * 0.3], [x1 + ov, top, zc], [x0 - ov, top, zc]);
+    for (const [gx, sg] of [[x0, -1], [x1, 1]]) {
+      const a = [gx, H, z1], b = [gx, H, z0], c = [gx, top, zc];
+      if (sg > 0) accTri(S, b, a, c, stoneUV({ x: gx, y: H, z: z0 }, { x: 1 }), stoneUV({ x: gx, y: H, z: z1 }, { x: 1 }), stoneUV({ x: gx, y: top, z: zc }, { x: 1 }));
+      else accTri(S, a, b, c, stoneUV({ x: gx, y: H, z: z1 }, { x: 1 }), stoneUV({ x: gx, y: H, z: z0 }, { x: 1 }), stoneUV({ x: gx, y: top, z: zc }, { x: 1 }));
+      if (gableWins) accWindow(W, false, gx + sg * 0.012, H + rise * 0.42, zc, 'rose', Math.min(3.4, rise * 0.62), sg);
+    }
+  } else {
+    const xc = (x0 + x1) / 2;
+    const q = (a, b, c, d) => { accTri(R, a, b, c, uvR({ z: a[2], y: a[1] }), uvR({ z: b[2], y: b[1] }), uvR({ z: c[2], y: c[1] })); accTri(R, a, c, d, uvR({ z: a[2], y: a[1] }), uvR({ z: c[2], y: c[1] }), uvR({ z: d[2], y: d[1] })); };
+    q([x0 - ov * 0.3, H - 0.05, z0 - ov], [x0 - ov * 0.3, H - 0.05, z1 + ov], [xc, top, z1 + ov], [xc, top, z0 - ov]);
+    q([x1 + ov * 0.3, H - 0.05, z1 + ov], [x1 + ov * 0.3, H - 0.05, z0 - ov], [xc, top, z0 - ov], [xc, top, z1 + ov]);
+    for (const [gz, sg] of [[z0, -1], [z1, 1]]) {
+      const a = [x0, H, gz], b = [x1, H, gz], c = [xc, top, gz];
+      if (sg > 0) accTri(S, a, b, c, stoneUV({ x: x0, y: H, z: gz }, { z: 1 }), stoneUV({ x: x1, y: H, z: gz }, { z: 1 }), stoneUV({ x: xc, y: top, z: gz }, { z: 1 }));
+      else accTri(S, b, a, c, stoneUV({ x: x1, y: H, z: gz }, { z: 1 }), stoneUV({ x: x0, y: H, z: gz }, { z: 1 }), stoneUV({ x: xc, y: top, z: gz }, { z: 1 }));
+      if (gableWins && !inAnyRoom(xc, gz + sg * 0.6)) accWindow(W, true, xc, H + rise * 0.36, gz + sg * 0.012, gableWins, Math.min(gableWins === 'rose' ? 3.2 : 2.6, rise * 0.6), sg);
+    }
+  }
+  return top;
+}
+// A window quad from the atlas: 'lancet' (w × 2.2w) or 'rose' (size × size), facing sg along its axis
+function accWindow(W, alongX, x, y, z, kind, size, sg) {
+  const w = kind === 'rose' ? size : size * 0.45, h = kind === 'rose' ? size : size;
+  const u0 = kind === 'rose' ? 0.5 : 0, u1 = kind === 'rose' ? 1 : 0.25;
+  const P = (du, dv) => alongX ? [x + du, y + dv, z] : [x, y + dv, z + du];
+  const a = P(-w / 2, -h / 2), b = P(w / 2, -h / 2), c = P(w / 2, h / 2), d = P(-w / 2, h / 2);
+  const flip = alongX ? sg < 0 : sg > 0;          // face outward
+  const ua = flip ? u1 : u0, ub = flip ? u0 : u1;
+  if (!flip) { accTri(W, a, b, c, [ua, 0], [ub, 0], [ub, 1]); accTri(W, a, c, d, [ua, 0], [ub, 1], [ua, 1]); }
+  else { accTri(W, b, a, d, [ub, 0], [ua, 0], [ua, 1]); accTri(W, b, d, c, [ub, 0], [ua, 1], [ub, 1]); }
+}
+function buildCathedral() {
+  teardownCathedral(false);
+  if (!mirrorWorld || !arsenal.holes.some(h => h.breach && h.cut)) return;
+  const comic = arsenalStyle() !== 'stone';
+  const t = T();
+  const stoneMap = !comic && theme === 'duomo' && _stoneWallMaps ? _stoneWallMaps.map : null;
+  const mats = arsenal.extMats || (arsenal.extMats = {});
+  const fill = comic ? new THREE.Color(t.comic.wallBg) : null;
+  if (!mats.stone) mats.stone = extMaterial(stoneMap, 0xffffff);
+  mats.stone.uniforms.map.value = stoneMap || extWhiteTex();
+  mats.stone.uniforms.diffuse.value.set(comic ? fill : (stoneMap ? 0xf2ece2 : 0x9c958a));
+  if (!mats.roof) mats.roof = extMaterial(slateTexture(), 0xffffff, { side: THREE.DoubleSide });
+  mats.roof.uniforms.map.value = comic ? extWhiteTex() : slateTexture();
+  mats.roof.uniforms.diffuse.value.set(comic ? fill : 0xe6e8ee);
+  if (!mats.glass) mats.glass = extMaterial(glassTexture(), 0xffffff, { alphaTest: 0.5 });
+  EXT_COMIC.value = comic ? 1 : 0;
+  const S = geoAcc(), R = geoAcc(), W = geoAcc();
+  const obstacles = [];
+  const faces = exteriorFaces();
+  const H = LOBBY_H, T2 = WALL_THICKNESS / 2;
+  for (const f of faces) {
+    accSkin(S, f);
+    const len = f.u1 - f.u0, mid = (f.u0 + f.u1) / 2;
+    const P = (u, y, out) => f.alongX ? [u, y, f.at + f.sgn * (T2 + out)] : [f.at + f.sgn * (T2 + out), y, u];
+    const box = (u, y, out, su, sy, so) => {
+      const c = P(u, y, out);
+      if (f.alongX) accBox(S, c[0], c[1], c[2], su, sy, so); else accBox(S, c[0], c[1], c[2], so, sy, su);
+    };
+    // cornice, parapet and merlons along the top
+    box(mid, H - 0.16, 0.12, len + 0.5, 0.32, 0.3);
+    box(mid, H + 0.35, -0.02, len + 0.3, 0.7, 0.26);
+    for (let u = f.u0 + 0.35; u < f.u1 - 0.2; u += 1.0) box(u, H + 0.9, -0.02, 0.5, 0.4, 0.26);
+    // buttresses with pinnacles, and lancet windows between them
+    const posts = [];
+    const n = Math.max(1, Math.round((len - 0.7) / 3.6));
+    for (let i = 0; i <= n; i++) posts.push(f.u0 + 0.35 + (len - 0.7) * i / n);
+    for (const u of posts) {
+      if (nearBreach(f, u, 0.6)) continue;
+      box(u, 2.0, 0.47, 0.62, 4.0, 0.95);
+      box(u, 5.15, 0.31, 0.52, 2.3, 0.62);
+      box(u, 6.75, 0.25, 0.4, 0.9, 0.4);
+      const c = P(u, 7.8, 0.25);
+      accGeometry(S, new THREE.ConeGeometry(0.3, 1.3, 4), _m4.makeRotationY(Math.PI / 4).setPosition(c[0], c[1], c[2]), stoneUV);
+      const cc = P(u, 0, 0.47 + 0.05);
+      obstacles.push(f.alongX ? { x0: u - 0.31, x1: u + 0.31, z0: Math.min(f.at + f.sgn * T2, cc[2] + f.sgn * 0.48), z1: Math.max(f.at + f.sgn * T2, cc[2] + f.sgn * 0.48) }
+                              : { z0: u - 0.31, z1: u + 0.31, x0: Math.min(f.at + f.sgn * T2, cc[0] + f.sgn * 0.48), x1: Math.max(f.at + f.sgn * T2, cc[0] + f.sgn * 0.48) });
+    }
+    for (let i = 0; i + 1 < posts.length; i++) {
+      const u = (posts[i] + posts[i + 1]) / 2;
+      if (posts[i + 1] - posts[i] < 1.7 || nearBreach(f, u, 0.75)) continue;
+      const c = P(u, 3.7, 0.008);
+      accWindow(W, f.alongX, c[0], c[1], c[2], 'lancet', 2.9, f.sgn);
+    }
+  }
+  // roofs: the crossing (lobby) east–west with rose windows in its gables; the
+  // three northern halls and the southern chapel north–south, lancets or a rose
+  // in their outer gables; the middle hall the steepest, like a nave
+  let crossTop = H;
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    if (id === 'lobby') crossTop = accRoof(R, S, W, r, true, 52, true);
+    else if (id === 'older-work') accRoof(R, S, W, r, false, 48, 'rose');
+    else accRoof(R, S, W, r, false, r.w < 7 ? 58 : 42, 'lancet');
+  }
+  // the crossing tower and its spire
+  const lob = ROOMS.lobby, tx = lob.cx, tz = lob.cz, tw = 5.4, ty0 = crossTop - 3.2, ty1 = crossTop + 5.2;
+  accBox(S, tx, (ty0 + ty1) / 2, tz, tw, ty1 - ty0, tw);
+  accBox(S, tx, ty1 + 0.18, tz, tw + 0.5, 0.36, tw + 0.5);
+  for (const [sx, sz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const k of [-0.95, 0.95]) {
+      const alongX = sz !== 0;
+      const x = tx + sx * (tw / 2 + 0.01) + (alongX ? k : 0), z = tz + sz * (tw / 2 + 0.01) + (alongX ? 0 : k);
+      accWindow(W, alongX, x, ty1 - 2.0, z, 'lancet', 2.6, alongX ? sz : sx);
+    }
+  }
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const x = tx + sx * (tw / 2), z = tz + sz * (tw / 2);
+    accBox(S, x, ty1 + 0.75, z, 0.55, 1.1, 0.55);
+    accGeometry(S, new THREE.ConeGeometry(0.38, 2.2, 4), _m4.makeRotationY(Math.PI / 4).setPosition(x, ty1 + 2.4, z), stoneUV);
+  }
+  const spH = 12.5;
+  accGeometry(R, new THREE.ConeGeometry(2.45, spH, 8), _m4.makeRotationY(Math.PI / 8).setPosition(tx, ty1 + 0.36 + spH / 2, tz),
+    (v, n) => [Math.atan2(v.z - tz, v.x - tx) * 2.0, v.y * 1.2]);
+  accBox(S, tx, ty1 + 0.36 + spH + 0.6, tz, 0.12, 1.3, 0.12);
+  accBox(S, tx, ty1 + 0.36 + spH + 0.85, tz, 0.7, 0.12, 0.12);
+  const group = new THREE.Group();
+  const add = (A, mat) => { if (!A.p.length) return null; const m = new THREE.Mesh(accToGeometry(A), mat); m.raycast = () => {}; m.frustumCulled = false; group.add(m); return m; };
+  const stoneMesh = add(S, mats.stone), roofMesh = add(R, mats.roof);
+  add(W, mats.glass);
+  if (comic) {
+    if (!mats.ink) mats.ink = new THREE.LineBasicMaterial({ color: t.comic.wallLine });
+    mats.ink.color.set(t.comic.wallLine);
+    for (const m of [stoneMesh, roofMesh]) {
+      if (!m) continue;
+      const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 30), mats.ink);
+      e.raycast = () => {}; e.frustumCulled = false; group.add(e);
+    }
+  }
+  group.visible = false;
+  scene.add(group);
+  arsenal.cathedral = group;
+  arsenal.extObstacles = obstacles;
+  ensureShorebirds();
+  syncBeachWorld();
+}
+function teardownCathedral(all) {
+  const g = arsenal.cathedral;
+  if (g) {
+    if (g.parent) g.parent.remove(g);
+    g.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    arsenal.cathedral = null;
+  }
+  arsenal.extObstacles = [];
+  if (all && arsenal.birds) arsenal.birds.group.visible = false;
+}
+// Rebuild after breaches or the theme change, off the blast's own frame
+function scheduleCathedral() {
+  clearTimeout(arsenal.cathedralTimer);
+  arsenal.cathedralTimer = setTimeout(() => {
+    if (mirrorWorld && arsenal.holes.some(h => h.breach && h.cut)) buildCathedral();
+    else teardownCathedral(true);
+  }, 120);
+}
+
+/* ── The swash, in JS (same formula as the beach shader) ── */
+function beachShore(l) { return 26.0 + 2.6 * Math.sin(l * 0.07) + 0.9 * Math.sin(l * 0.23 + 1.7); }
+function waveEdge(l, t) {
+  const wph = t / WAVE_T + 0.15 * Math.sin(l * 0.045) + l * 0.006;
+  const ph = wph - Math.floor(wph);
+  const amp = 2.6 + 1.2 * (0.5 + 0.5 * Math.sin(l * 0.11 + Math.floor(wph) * 2.399));
+  const rx = 1 - ph / 0.3;
+  const sm = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+  const run = ph < 0.3 ? 1 - rx * rx : 1 - sm(0.3, 1.0, ph);
+  return { edge: beachShore(l) - amp * run, ph, rushing: ph < 0.3 };
+}
+// The beach's frame in world space for a breach: centre C, out O, along L
+function beachFrame(h) {
+  worldRoot.updateMatrixWorld();
+  const C = worldRoot.localToWorld(h.center.clone());
+  const O = h.normal.clone().negate().transformDirection(worldRoot.matrixWorld);
+  O.y = 0; O.normalize();
+  const L = new THREE.Vector3().crossVectors(_AX_Y, O).normalize();
+  return { C, O, L };
+}
+
+/* ── Shorebirds: sandpipers chasing the swash, gulls on the dry sand ──
+   Two instanced meshes (one draw call each), vertex-coloured, lit by the same
+   sun; positions in world space on the active breach's beach. */
+function birdGeometry(kind) {
+  const A = { p: [], n: [], u: [], c: [] };
+  const part = (geo, m, col, belly) => {
+    const g = geo.toNonIndexed(); const P = g.attributes.position, N = g.attributes.normal;
+    const nm = new THREE.Matrix3().getNormalMatrix(m), v = new THREE.Vector3(), n = new THREE.Vector3();
+    for (let i = 0; i < P.count; i++) {
+      v.fromBufferAttribute(P, i); const ly = v.y; v.applyMatrix4(m);
+      n.fromBufferAttribute(N, i).applyMatrix3(nm).normalize();
+      A.p.push(v.x, v.y, v.z); A.n.push(n.x, n.y, n.z); A.u.push(0.5, 0.5);
+      const cc = belly && ly < -0.15 ? belly : col;
+      A.c.push(cc[0], cc[1], cc[2]);
+    }
+    g.dispose(); geo.dispose();
+  };
+  const M = (x, y, z, sx, sy, sz, rz) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, rz || 0)), new THREE.Vector3(sx, sy, sz));
+  if (kind === 'piper') {
+    const back = [0.55, 0.49, 0.41], white = [0.93, 0.92, 0.89], dark = [0.1, 0.09, 0.08];
+    part(new THREE.SphereGeometry(1, 8, 6), M(0, 0.1, 0, 0.1, 0.05, 0.055, -0.12), back, white);
+    part(new THREE.SphereGeometry(1, 6, 5), M(0.085, 0.135, 0, 0.032, 0.03, 0.03), back, white);
+    part(new THREE.CylinderGeometry(0.003, 0.005, 0.055, 4), M(0.135, 0.13, 0, 1, 1, 1, Math.PI / 2 + 0.25), dark);
+    for (const z of [-0.016, 0.016]) part(new THREE.CylinderGeometry(0.004, 0.004, 0.07, 4), M(0.005, 0.035, z, 1, 1, 1), dark);
+  } else {
+    const white = [0.95, 0.95, 0.94], wing = [0.6, 0.63, 0.67], dark = [0.08, 0.08, 0.08], beak = [0.92, 0.75, 0.2], leg = [0.86, 0.66, 0.5];
+    part(new THREE.SphereGeometry(1, 10, 7), M(0, 0.2, 0, 0.21, 0.09, 0.09, -0.08), white);
+    part(new THREE.BoxGeometry(0.3, 0.025, 0.2), M(-0.03, 0.235, 0, 1, 1, 1, -0.1), wing);
+    part(new THREE.BoxGeometry(0.08, 0.02, 0.12), M(-0.21, 0.21, 0, 1, 1, 1, -0.1), dark);
+    part(new THREE.SphereGeometry(1, 8, 6), M(0.19, 0.27, 0, 0.06, 0.055, 0.055), white);
+    part(new THREE.ConeGeometry(0.014, 0.07, 5), M(0.27, 0.265, 0, 1, 1, 1, -Math.PI / 2), beak);
+    for (const z of [-0.035, 0.035]) part(new THREE.CylinderGeometry(0.006, 0.006, 0.13, 4), M(0.0, 0.065, z, 1, 1, 1), leg);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(A.p, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(A.n, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(A.u, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(A.c, 3));
+  g.computeBoundingSphere();
+  return g;
+}
+const N_PIPERS = 7, N_GULLS = 3;
+function ensureShorebirds() {
+  if (arsenal.birds) return arsenal.birds;
+  const mat = extMaterial(null, 0xffffff, { vertexColors: true });
+  const pipers = new THREE.InstancedMesh(birdGeometry('piper'), mat, N_PIPERS);
+  const gulls = new THREE.InstancedMesh(birdGeometry('gull'), mat, N_GULLS);
+  for (const m of [pipers, gulls]) { m.frustumCulled = false; m.raycast = () => {}; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); }
+  const group = new THREE.Group();
+  group.add(pipers); group.add(gulls);
+  group.visible = false;
+  addToRawScene(group);
+  const birds = [];
+  for (let i = 0; i < N_PIPERS + N_GULLS; i++) {
+    const gull = i >= N_PIPERS;
+    const k = gull ? i - N_PIPERS - (N_GULLS - 1) / 2 : i - (N_PIPERS - 1) / 2;
+    birds.push({ gull, s: 0, l: 0, home: k * (gull ? 6 : 1.6) + (Math.random() - 0.5), off: 0.5 + Math.random() * 0.9,
+      yaw: Math.random() * 6.28, peck: 0, phase: Math.random() * 6.28, tx: 0, tl: 0, wait: Math.random() * 3, placed: false });
+  }
+  arsenal.birds = { group, pipers, gulls, birds, mat, frameHole: null, F: null };
+  return arsenal.birds;
+}
+const _bQ = new THREE.Quaternion(), _bE = new THREE.Euler(0, 0, 0, 'YXZ'), _bP = new THREE.Vector3(), _bS = new THREE.Vector3(1, 1, 1), _bM = new THREE.Matrix4();
+function updateShorebirds(dt, t) {
+  const B = arsenal.birds;
+  if (!B || !B.group.visible) return;
+  const h = activeBreach();
+  if (!h) return;
+  if (B.frameHole !== h) { B.frameHole = h; B.F = beachFrame(h); for (const b of B.birds) b.placed = false; }
+  const { C, O, L } = B.F;
+  const cl = C.dot(L);
+  // the visitor in the beach frame
+  const ps = (camera.position.x - C.x) * O.x + (camera.position.z - C.z) * O.z;
+  const pl = camera.position.x * L.x + camera.position.z * L.z;
+  dt = Math.min(dt, 0.1);
+  for (let i = 0; i < B.birds.length; i++) {
+    const b = B.birds[i];
+    if (!b.placed) {
+      b.placed = true;
+      b.l = cl + b.home;
+      b.s = b.gull ? 9 + Math.random() * 9 : waveEdge(b.l, t).edge - b.off;
+      b.tl = b.l; b.tx = b.s;
+    }
+    let ts = b.tx, tl = b.tl, speed;
+    const dps = b.s - ps, dpl = b.l - pl, dp = Math.hypot(dps, dpl);
+    const flee = dp < (b.gull ? 3.2 : 2.3);
+    if (b.gull) {
+      speed = 0.45;
+      b.wait -= dt;
+      if (b.wait <= 0 && Math.hypot(b.tx - b.s, b.tl - b.l) < 0.1) {
+        b.wait = 2 + Math.random() * 5;
+        b.tx = Math.min(beachShore(b.l) - 5, Math.max(7, b.s + (Math.random() - 0.5) * 3));
+        b.tl = b.l + (Math.random() - 0.5) * 4;
+      }
+    } else {
+      // keep just above the water's edge: up the beach as a wave rushes in, down as it slides back
+      const w = waveEdge(b.l, t);
+      ts = w.edge - b.off;
+      speed = w.rushing ? 2.4 : 1.3;
+      if (!w.rushing && Math.abs(b.s - ts) < 0.15) { b.peck = Math.max(b.peck, Math.random() < dt * 0.9 ? 0.35 : 0); }
+      tl = cl + b.home + Math.sin(t * 0.13 + b.phase) * 1.5;
+    }
+    if (flee) {
+      const k = 1 / Math.max(dp, 0.01);
+      ts = b.s + dps * k * 3; tl = b.l + dpl * k * 3;
+      speed = b.gull ? 2.2 : 3.0;
+      if (b.gull) { b.tx = ts; b.tl = tl; b.wait = 3; }
+    }
+    ts = Math.min(beachShore(b.l) + 0.5, Math.max(1.5, ts));
+    const ds = ts - b.s, dl = tl - b.l, d = Math.hypot(ds, dl);
+    let moving = false;
+    if (d > 0.02) {
+      const step = Math.min(d, speed * dt);
+      b.s += ds / d * step; b.l += dl / d * step;
+      const wantYaw = Math.atan2(dl, ds);
+      let dy = wantYaw - b.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      b.yaw += dy * Math.min(1, dt * 10);
+      moving = step > speed * dt * 0.3;
+    }
+    b.peck = Math.max(0, b.peck - dt);
+    b.phase += dt * (moving ? (b.gull ? 9 : 26) : 2);
+    // world position: s along O from the breach, l along L absolute
+    const wx = C.x + O.x * b.s + L.x * (b.l - cl), wz = C.z + O.z * b.s + L.z * (b.l - cl);
+    const bob = moving ? Math.abs(Math.sin(b.phase)) * (b.gull ? 0.015 : 0.008) : 0;
+    _bP.set(wx, C.y - h.center.y + bob, wz);
+    // heading: O·s + L·l in the horizontal plane; the bird's forward is its +x
+    const fx = O.x * Math.cos(b.yaw) + L.x * Math.sin(b.yaw), fz = O.z * Math.cos(b.yaw) + L.z * Math.sin(b.yaw);
+    _bE.set(0, Math.atan2(-fz, fx), (b.peck > 0 ? -0.55 * Math.sin(Math.min(1, (0.35 - b.peck) / 0.35) * Math.PI) : 0) + (moving ? Math.sin(b.phase) * 0.06 : 0));
+    _bQ.setFromEuler(_bE);
+    const sc = b.gull ? 1 : 1.1;
+    _bS.set(sc, sc, sc);
+    _bM.compose(_bP, _bQ, _bS);
+    if (b.gull) B.gulls.setMatrixAt(i - N_PIPERS, _bM); else B.pipers.setMatrixAt(i, _bM);
+  }
+  B.pipers.instanceMatrix.needsUpdate = true;
+  B.gulls.instanceMatrix.needsUpdate = true;
 }
 
 /* ── Beach holes ── */
@@ -14852,21 +15471,35 @@ const BEACH_HOLE_FRAG = [
   '    float s = dot( p - vC, O ), l = dot( p, L );',
   '    vec2 sp = vec2( s, l );',
   '    float shore = 26.0 + 2.6 * sin( l * 0.07 ) + 0.9 * sin( l * 0.23 + 1.7 );',
-  '    float wl = shore + 0.9 * sin( uTime * 0.45 + l * 0.04 ) + 0.35 * sin( uTime * 0.93 + l * 0.11 );',
+  // The swash (mirrored in JS by waveEdge): every 7.5 s a wave rushes up the
+  // sand (a third of the cycle), then slides back; its reach varies wave to
+  // wave and along the beach. wl is the water's edge, hiw this wave's high mark.
+  '    float wph = uTime / 7.5 + 0.15 * sin( l * 0.045 ) + l * 0.006;',
+  '    float ph = fract( wph );',
+  '    float amp = 2.6 + 1.2 * ( 0.5 + 0.5 * sin( l * 0.11 + floor( wph ) * 2.399 ) );',
+  '    float rx = 1.0 - ph / 0.3;',
+  '    float run = ph < 0.3 ? 1.0 - rx * rx : 1.0 - smoothstep( 0.3, 1.0, ph );',
+  '    float wl = shore - amp * run;',
+  '    float hiw = shore - amp;',
   '    float fogK = 1.0 - exp( -tG * 0.0035 );',
   '    float dk = 1.0 - 0.9 * uComic;',
   '    if ( s < wl ) {',
   '      float rip = sin( s * 7.0 + fbm( sp * 0.8 ) * 6.0 ) * 0.5 + 0.5;',
   '      vec3 dry = vec3( 0.87, 0.77, 0.58 );',
-  '      vec3 wet = vec3( 0.50, 0.42, 0.31 );',
-  '      float wetK = smoothstep( wl - 4.5, wl - 0.3, s );',
+  // (comic: a darker cream that posterizes cleanly, not into a pink stripe)
+  '      vec3 wet = mix( vec3( 0.50, 0.42, 0.31 ), vec3( 0.66, 0.62, 0.45 ), uComic );',
+  // wet where this wave reached, drying back toward the high-water mark
+  '      float wetK = max( smoothstep( hiw - 0.9, hiw + 0.5, s ) * 0.85, smoothstep( wl - 1.2, wl - 0.1, s ) );',
   '      vec3 sand = mix( dry * ( 1.0 - 0.07 * dk + 0.07 * dk * rip ), wet, wetK );',
   '      sand *= 1.0 + dk * ( 0.12 * fbm( sp * 2.5 ) - 0.1 + 0.06 * ( hash( floor( sp * 90.0 ) ) - 0.5 ) * ( 1.0 - min( 1.0, fogK * 5.0 ) ) );',
   '      vec3 rr = reflect( rd, up );',
   '      float fr = pow( 1.0 - max( -rd.y, 0.0 ), 4.0 );',
-  '      sand = mix( sand, skyCol( rr, sun ), wetK * 0.4 * fr );',
-  '      sand += wetK * pow( max( dot( rr, sun ), 0.0 ), 60.0 ) * 0.6;',
+  '      sand = mix( sand, skyCol( rr, sun ), wetK * 0.4 * fr * dk );',
+  '      sand += wetK * dk * pow( max( dot( rr, sun ), 0.0 ), 60.0 ) * 0.6;',
   '      float foam = smoothstep( 0.9, 0.0, wl - s ) * ( 0.55 + 0.45 * fbm( sp * 3.0 + uTime * 0.3 ) );',
+  // the lacy line the wave leaves at its high mark as it slides back
+  '      float mark = ( 1.0 - smoothstep( 0.0, 0.22, abs( s - hiw - 0.1 ) ) ) * ( ph > 0.3 ? 1.0 - smoothstep( 0.35, 0.85, ph ) : 0.0 );',
+  '      foam = max( foam, mark * smoothstep( 0.42, 0.62, fbm( sp * 7.0 ) ) * 0.9 );',
   '      sand = mix( sand, vec3( 0.96, 0.97, 0.96 ), foam * 0.85 );',
   '      float grass = smoothstep( 0.58, 0.70, fbm( sp * 0.9 + 3.0 ) ) * ( 1.0 - smoothstep( 2.5, 6.5, s ) );',
   '      sand = mix( sand, vec3( 0.40, 0.44, 0.24 ) * ( 0.7 + 0.3 * fbm( sp * 9.0 ) ), grass );',
@@ -14910,11 +15543,19 @@ const BEACH_HOLE_FRAG = [
   '      vec3 rr = reflect( rd, wn ); rr.y = abs( rr.y );',
   '      vec3 water = mix( vec3( 0.14, 0.55, 0.52 ), vec3( 0.02, 0.16, 0.28 ), smoothstep( 0.0, 26.0, d ) );',
   '      vec3 c = mix( water, skyCol( rr, sun ), F );',
+  // the swash is a thin sheet: wet sand shows through it, most where it is thinnest
+  '      float thin = clamp( ( shore - s ) / max( amp, 0.5 ), 0.0, 1.0 );',
+  '      c = mix( c, vec3( 0.47, 0.40, 0.30 ) * 0.9 + skyCol( rr, sun ) * F * 0.6, thin * 0.6 );',
+  // the breaker: a line of white water rolling in to become the next wave's rush
+  '      float bd = ( 1.0 - ph ) / 0.35 * 8.0;',
+  '      float bore = ph > 0.65 ? ( 1.0 - smoothstep( 0.0, 1.1 + 0.4 * fbm( sp * 2.0 ), abs( s - shore - bd ) ) ) * smoothstep( 0.65, 0.72, ph ) : 0.0;',
+  '      float trail = ph > 0.65 ? ( 1.0 - smoothstep( 0.0, 4.0, bd - ( s - shore ) ) ) * step( s - shore, bd ) * 0.35 : 0.0;',
+  '      c = mix( c, vec3( 0.95, 0.97, 0.97 ), max( bore, trail * fbm( sp * 2.5 + uTime * 0.5 ) ) * dk );',
   '      c += vec3( 1.0, 0.9, 0.72 ) * pow( max( dot( rr, sun ), 0.0 ), 240.0 ) * 3.0 * dk;',
   '      float band = fract( d * 0.11 + uTime * 0.09 + 0.12 * sin( l * 0.05 ) );',
   '      float brk = smoothstep( 0.90, 0.985, band ) * ( 1.0 - smoothstep( 3.0, 22.0, d ) ) * ( 0.45 + 0.55 * fbm( sp * 1.5 + uTime * 0.2 ) );',
   '      c = mix( c, vec3( 0.93, 0.95, 0.95 ), brk );',
-  '      float edgeFoam = ( 1.0 - smoothstep( 0.0, 1.3, d ) ) * ( 0.6 + 0.4 * fbm( sp * 3.0 - uTime * 0.4 ) );',
+  '      float edgeFoam = ( 1.0 - smoothstep( 0.0, ph < 0.3 ? 0.9 : 1.3, d ) ) * ( 0.6 + 0.4 * fbm( sp * 3.0 - uTime * 0.4 ) );',
   '      c = mix( c, vec3( 0.96 ), edgeFoam * 0.8 );',
   '      col = c;',
   '    }',
@@ -15583,7 +16224,7 @@ function startBeachAmbience() {
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 620; lp.Q.value = 0.4;
   const swell = ctx.createGain(); swell.gain.value = 0.55;
   surfSrc.connect(lp); lp.connect(swell); swell.connect(master);
-  const lfo = ctx.createOscillator(); lfo.frequency.value = 0.085;
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 1 / WAVE_T;   // swells with the waves
   const lfoG = ctx.createGain(); lfoG.gain.value = 0.42;
   lfo.connect(lfoG); lfoG.connect(swell.gain);
   const lfo2 = ctx.createOscillator(); lfo2.frequency.value = 0.21;
@@ -15723,6 +16364,7 @@ function updateArsenal(now, dt) {
     }
   }
   if (arsenal.beachWorld) syncBeachWorld();
+  updateShorebirds(dt, _beachTime.value);
   if (arsenal.outside !== arsenal.shaftsHidden) {
     arsenal.shaftsHidden = arsenal.outside;
     const comic = arsenalStyle() !== 'stone';
