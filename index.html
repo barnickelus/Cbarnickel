@@ -14744,7 +14744,7 @@ const BEACH_HOLE_FRAG = [
   '  float u = dot( p - B, side ), v = p.y - B.y;',
   '  float k = clamp( v / H, 0.0, 1.0 );',
   '  float cx = lean * k * k * H * 0.22;',
-  '  float w = mix( 0.17, 0.09, k );',
+  '  float w = mix( 0.17, 0.09, k ) + 0.065 * exp( -v * 5.0 );',
   '  float m = 0.0; vec3 pc = vec3( 0.0 );',
   '  if ( v > 0.0 && v < H && abs( u - cx ) < w ) {',
   '    float ring = 0.75 + 0.25 * step( 0.5, fract( v * 3.2 ) );',
@@ -14877,6 +14877,23 @@ const BEACH_HOLE_FRAG = [
   '      psh = max( psh, palmShadow( p.xz, P3, 4.3, 0.6, L, sun ) );',
   '      psh = max( psh, palmShadow( p.xz, P4, 5.1, -0.5, L, sun ) );',
   '      sand *= mix( vec3( 1.0 ), vec3( 0.5, 0.55, 0.68 ), psh * 0.85 );',
+  // the trunk's round foot: the billboard trunk stands on the line through its
+  // centre, so the near half of the footprint is painted here, on the sand —
+  // together they meet the ground in an oval, not a flat cut
+  '      vec2 pc = P0.xz; float fd = length( p.xz - P0.xz ), dd;',
+  '      dd = length( p.xz - P1.xz ); if ( dd < fd ) { fd = dd; pc = P1.xz; }',
+  '      dd = length( p.xz - P2.xz ); if ( dd < fd ) { fd = dd; pc = P2.xz; }',
+  '      dd = length( p.xz - P3.xz ); if ( dd < fd ) { fd = dd; pc = P3.xz; }',
+  '      dd = length( p.xz - P4.xz ); if ( dd < fd ) { fd = dd; pc = P4.xz; }',
+  '      sand *= 1.0 - 0.36 * ( 1.0 - smoothstep( 0.2, 0.75, fd ) );',
+  '      if ( fd < 0.235 ) {',
+  // shaded exactly as the trunk's sides just above it (same band, same
+  // left-to-right light), darkening only at the very rim where it meets the sand
+  '        vec2 n2 = normalize( ro.xz - pc ), side2 = vec2( n2.y, -n2.x );',
+  '        float u = dot( p.xz - pc, side2 ) / 0.235;',
+  '        float lit = 0.6 + 0.4 * u * sign( dot( sun.xz, side2 ) );',
+  '        sand = vec3( 0.36, 0.28, 0.19 ) * 0.75 * lit * ( 0.82 + 0.18 * smoothstep( 0.235, 0.17, fd ) );',
+  '      }',
   '      col = sand;',
   '    } else {',
   '      float d = s - wl;',
