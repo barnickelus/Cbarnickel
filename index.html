@@ -14433,6 +14433,7 @@ function cutWallBreach(hole) {
   }
   g.computeVertexNormals();
   g.computeBoundingBox(); g.computeBoundingSphere();
+  g.parameters = P;                  // the box's size, for everything that still reads it (a second strike…)
   const mats = wall.userData.breachOrig.materials.slice();
   mats[6] = _rubbleMats().real;
   wall.geometry = g;
