@@ -16102,35 +16102,71 @@ function placeBoat(h) {
   const F = h._frame || (h._frame = beachFrame(h));
   const l = 13;
   const lw = worldRoot.localToWorld(_sailW.set(h.center.x + ax * l, 0, h.center.z + az * l)).dot(F.L);
-  const s = beachShore(lw) + 0.3;                                  // her bows run up on the sand
+  const s = beachShore(lw) + 0.3;                                  // her stern up on the sand…
   B.lx = h.center.x + ox * s + ax * l; B.lz = h.center.z + oz * s + az * l;
-  B.hx = -ox; B.hz = -oz;                                          // bows up the beach
-  B.hole = h; B.placed = true; B.vx = B.vz = B.speed = 0; B.armed = true;
+  B.hx = ox; B.hz = oz;                                            // …her bows to the sea
+  B.hole = h; B.placed = true; B.vx = B.vz = B.speed = B.spd = 0; B.armed = true;
 }
-function startBoatHop(B, tx, tz, dur, ty) {
+function startBoatHop(B, tx, tz, dur, ty, toYaw) {
   const c = camLocal();
-  B.tween = { fx: c.x, fz: c.z, tx, tz, t: 0, dur, fy: camera.position.y, ty };
+  const dy = toYaw == null ? 0 : Math.atan2(Math.sin(toYaw - yaw), Math.cos(toYaw - yaw));
+  B.tween = { fx: c.x, fz: c.z, tx, tz, t: 0, dur, fy: camera.position.y, ty, y0: yaw, dy, p0: pitch, turn: toYaw != null };
 }
+// Her heading as the angle of her model's turn in world space (θ), and back
+function boatTheta(B) { const sx = worldRoot.scale.x < 0 ? -1 : 1; return Math.atan2(-B.hz, B.hx * sx); }
+function setBoatTheta(B, th) { const sx = worldRoot.scale.x < 0 ? -1 : 1; B.hx = Math.cos(th) * sx; B.hz = -Math.sin(th); }
 function boardBoat() {
   const B = arsenal.boat;
   B.aboard = true; B.armed = false; B.vx = B.vz = B.speed = 0;
   tapWalkTarget = null;
   B.baseY = camera.position.y;
   const o = helmOffset(B), c = camLocal(), tx = B.lx + o.x, tz = B.lz + o.z;
-  startBoatHop(B, tx, tz, 0.5 + Math.hypot(tx - c.x, tz - c.z) / 12, B.baseY + BOAT_DECK);
+  B.spd = 0; B.throttle = B.rudder = 0; B.lastCam = null;
+  // up at the helm, facing her bows
+  startBoatHop(B, tx, tz, 0.5 + Math.hypot(tx - c.x, tz - c.z) / 12, B.baseY + BOAT_DECK, boatTheta(B) - Math.PI / 2);
   if (!arsenal.sailHinted) {
     arsenal.sailHinted = true;
-    flashCustomHint('aboard — sail anywhere; steer back onto the sand to land', 4200);
+    flashCustomHint(hasTouch ? 'aboard — ▲ to sail · ◀ ▶ to steer · run her onto the sand to land'
+                             : 'aboard — W / ▲ to sail · A D / ◀ ▶ to steer · run her onto the sand to land', 5200);
   }
 }
-function landBoat(h) {
+function landBoat(h, end) {
   const B = arsenal.boat;
-  B.aboard = false; B.armed = false; B.vx = B.vz = B.speed = 0;
-  // her bows run up on the sand: go forward along the hull and jump down off the bow
-  const c = camLocal(), run = BOAT_HL - HELM_U + 1.2;
+  B.aboard = false; B.armed = false; B.vx = B.vz = B.speed = B.spd = 0;
+  // one end of her runs up on the sand: go along the hull and jump down off it
+  // (forward off the bows, or back off the stern when she's backed in)
+  const c = camLocal(), run = end < 0 ? -(BOAT_HL + HELM_U + 1.2) : BOAT_HL - HELM_U + 1.2;
   const tx = c.x + B.hx * run + h.normal.x * 0.8, tz = c.z + B.hz * run + h.normal.z * 0.8;
-  startBoatHop(B, tx, tz, 0.5 + run / 12, B.baseY);
+  startBoatHop(B, tx, tz, 0.5 + Math.abs(run) / 12, B.baseY);
   return { x: c.x, z: c.z, roomId: h.room || currentRoomId };
+}
+// Under her own way: rotate her about her middle (by dth, in θ) and move her
+// along her heading by ds; she stays within reach, and grounds — and you hop
+// off — when the end she's moving toward runs up onto the sand
+function sailHelmStep(B, dth, ds) {
+  const h = B.hole, F = h._frame || (h._frame = beachFrame(h));
+  const shoreAt = (px, pz) => beachShore(worldRoot.localToWorld(_sailW.set(px, 0, pz)).dot(F.L));
+  const hx0 = B.hx, hz0 = B.hz;
+  setBoatTheta(B, boatTheta(B) + dth);
+  let cx = B.lx + B.hx * ds, cz = B.lz + B.hz * ds;
+  const f = BOAT_HL - 0.6;
+  for (const sg of [1, -1]) {
+    const ex = cx + B.hx * f * sg, ez = cz + B.hz * f * sg;
+    const se = breachSL(h, ex, ez).s, se0 = breachSL(h, B.lx + B.hx * f * sg, B.lz + B.hz * f * sg).s;
+    if (se < shoreAt(ex, ez) - 0.8 && se < se0 - 1e-5) {
+      B.hx = hx0; B.hz = hz0;
+      landBoat(h, sg);
+      return false;
+    }
+  }
+  const BB = buildingBox(), mx = (BB.x0 + BB.x1) / 2, mz = (BB.z0 + BB.z1) / 2;
+  const dx = cx - mx, dz = cz - mz, d = Math.hypot(dx, dz);
+  if (d > SAIL_REACH) { cx = mx + dx / d * SAIL_REACH; cz = mz + dz / d * SAIL_REACH; B.spd *= 0.5; }
+  B.lx = cx; B.lz = cz;
+  yaw += dth;                                  // you turn with her
+  const o = helmOffset(B), w = worldRoot.localToWorld(_sailW.set(B.lx + o.x, 0, B.lz + o.z));
+  camera.position.x = w.x; camera.position.z = w.z;
+  return true;
 }
 // Aboard: anywhere on the water within reach; a step onto the sand lands her
 function clampSail(h, x, z, move) {
@@ -16145,7 +16181,7 @@ function clampSail(h, x, z, move) {
     const o = helmOffset(B), c = camLocal(), f = BOAT_HL - 0.6;
     const bx = x - o.x + B.hx * f, bz = z - o.z + B.hz * f;
     const sb = breachSL(h, bx, bz).s, sb0 = breachSL(h, c.x - o.x + B.hx * f, c.z - o.z + B.hz * f).s;
-    if (sb < shoreAt(bx, bz) - 0.8 && sb < sb0 - 1e-4) return landBoat(h);
+    if (sb < shoreAt(bx, bz) - 0.8 && sb < sb0 - 1e-4) return landBoat(h, 1);
   }
   const BB = buildingBox(), mx = (BB.x0 + BB.x1) / 2, mz = (BB.z0 + BB.z1) / 2;
   const dx = x - mx, dz = z - mz, d = Math.hypot(dx, dz);
@@ -16172,32 +16208,33 @@ function updateSail(dt, t) {
     const w = worldRoot.localToWorld(_sailW.set(T.fx + (T.tx - T.fx) * e, 0, T.fz + (T.tz - T.fz) * e));
     camera.position.x = w.x; camera.position.z = w.z;
     camera.position.y = T.fy + (T.ty - T.fy) * e + Math.sin(T.t * Math.PI) * 0.45;   // a hop
-    if (T.t >= 1) { B.tween = null; camera.position.y = T.ty; }
+    if (T.turn) { yaw = T.y0 + T.dy * e; pitch = T.p0 * (1 - e); }
+    if (T.t >= 1) { B.tween = null; camera.position.y = T.ty; B.lastCam = null; }
   } else if (B.aboard) {
-    const c = camLocal(), o = helmOffset(B);
-    const mx = c.x - (B.lx + o.x), mz = c.z - (B.lz + o.z);
-    if (Math.hypot(mx, mz) > 1e-4 && dt > 0) {
-      // driven: the boat takes up the pace
-      const k = Math.min(1, dt * 5);
-      B.vx += (mx / dt - B.vx) * k; B.vz += (mz / dt - B.vz) * k;
-    } else if (Math.hypot(B.vx, B.vz) > 0.05) {
-      // let go: she glides on and slows
-      const w = worldRoot.localToWorld(_sailW.set(c.x + B.vx * dt, 0, c.z + B.vz * dt));
-      const q = clampToRooms(w.x, w.z, true);
-      camera.position.x = q.x; camera.position.z = q.z; currentRoomId = q.roomId;
-      const f = Math.exp(-dt * 0.55); B.vx *= f; B.vz *= f;
-    } else { B.vx = B.vz = 0; }
+    const c = camLocal();
+    const moved = B.lastCam ? Math.hypot(c.x - B.lastCam.x, c.z - B.lastCam.z) : 0;
+    if (moved > 1e-4 && dt > 0) {
+      // a tap, a pinch or the wheel moved us: she follows, her bows swinging to the course
+      const mx = c.x - B.lastCam.x, mz = c.z - B.lastCam.z;
+      B.spd = Math.min(9, moved / dt);
+      const a0 = Math.atan2(B.hz, B.hx), a1 = Math.atan2(mz, mx);
+      const da = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
+      const a = a0 + Math.max(-dt * 1.0, Math.min(dt * 1.0, da));
+      B.hx = Math.cos(a); B.hz = Math.sin(a);
+      const o = helmOffset(B); B.lx = c.x - o.x; B.lz = c.z - o.z;
+    } else {
+      // the helm: ▲▼ (W S, the stick) for way on, ◀▶ (A D, ← →) for the rudder;
+      // she carries her way when you let go, and answers the rudder better moving
+      const thr = B.throttle || 0, rud = B.rudder || 0;
+      if (thr > 0) B.spd = Math.min(B.spd + 2.4 * dt, WALK_SPEED * SAIL_SPEED * thr);
+      else if (thr < 0) B.spd = Math.max(B.spd - 2.4 * dt, -1.6);
+      else { B.spd *= Math.exp(-dt * 0.35); if (Math.abs(B.spd) < 0.03) B.spd = 0; }
+      const dth = -rud * (0.35 + 0.45 * Math.min(1, Math.abs(B.spd) / 3)) * dt;
+      if (B.spd || dth) sailHelmStep(B, dth, B.spd * dt);
+    }
     if (B.aboard) {
-      B.speed = Math.hypot(B.vx, B.vz);
-      // the bows swing round to the way she's moving
-      if (B.speed > 0.25) {
-        const a0 = Math.atan2(B.hz, B.hx), a1 = Math.atan2(B.vz, B.vx);
-        const da = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
-        const a = a0 + Math.max(-dt * 1.0, Math.min(dt * 1.0, da));
-        B.hx = Math.cos(a); B.hz = Math.sin(a);
-      }
-      const c2 = camLocal(), o2 = helmOffset(B);
-      B.lx = c2.x - o2.x; B.lz = c2.z - o2.z;
+      B.speed = Math.max(0, B.spd);
+      B.lastCam = camLocal().clone();
       camera.position.y = B.baseY + BOAT_DECK + 0.025 * Math.sin(t * 1.2) + 0.01 * Math.sin(t * 2.3 + 1);
     }
   }
@@ -18909,7 +18946,13 @@ function animate() {
     mz += joyVec.y - dpad.fwd;
     const len = Math.hypot(mx, mz);
     if (len > 1) { mx /= len; mz /= len; }
-    if (mx !== 0 || mz !== 0) {
+    const helm = arsenal.boat && arsenal.boat.aboard && !arsenal.boat.tween ? arsenal.boat : null;
+    if (helm) {
+      // aboard: forward/back is way on her, left/right (and the turn keys) her rudder
+      helm.throttle = Math.max(-1, Math.min(1, -mz));
+      helm.rudder = Math.max(-1, Math.min(1, mx + (keys.tr ? 1 : 0) - (keys.tl ? 1 : 0) + dpad.turn));
+      if (mx || mz || helm.rudder) { tapWalkTarget = null; noteUserInput(); }
+    } else if (mx !== 0 || mz !== 0) {
       tapWalkTarget = null;
       const sin = Math.sin(yaw), cos = Math.cos(yaw);
       const sp = WALK_SPEED * moveSpeedScale() * dt;
@@ -18923,12 +18966,12 @@ function animate() {
     }
 
     // Turn keys — arrows / Q / E rotate in place at a steady rate
-    if (keys.tl || keys.tr) {
+    if (!helm && (keys.tl || keys.tr)) {
       yaw += ((keys.tl ? 1 : 0) - (keys.tr ? 1 : 0)) * 1.9 * dt;
       noteUserInput();
     }
     // D-pad turn: eases in, so a tap nudges the view and a hold swings it round
-    if (dpad.turn) {
+    if (dpad.turn && !helm) {
       dpad.turnHeld += dt;
       yaw -= dpad.turn * 1.7 * Math.min(1, 0.35 + dpad.turnHeld * 2.2) * dt;
       noteUserInput();
