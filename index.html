@@ -554,6 +554,35 @@ body { overscroll-behavior: none; }
   pointer-events: none;
 }
 
+/* ─── D-pad: walk (▲▼) and turn (◀▶), bottom-left ───
+   No backdrop blur: it's on screen the whole time, over the 3D view, and a
+   blur would cost the GPU every frame. */
+.dpad {
+  position: fixed;
+  left: calc(22px + env(safe-area-inset-left, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  width: 150px; height: 150px;
+  display: none;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+.dpad.show { display: block; }
+.dpad svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.dpad-body { fill: rgba(10, 9, 8, 0.5); stroke: rgba(201, 169, 110, 0.38); stroke-width: 1.2; }
+.dpad-hl { fill: rgba(201, 169, 110, 0); transition: fill 0.08s; }
+.dpad-hl.on { fill: rgba(201, 169, 110, 0.3); }
+.dpad-hub { fill: rgba(201, 169, 110, 0.14); stroke: rgba(201, 169, 110, 0.3); stroke-width: 1; }
+.dpad-arrow { fill: none; stroke: var(--ink-dim); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; transition: stroke 0.08s; }
+.dpad-arrow.on { stroke: var(--gold); }
+@media (max-width: 600px) {
+  /* phones: a little smaller, and clear of the painting tour pill */
+  .dpad { width: 128px; height: 128px; bottom: calc(70px + env(safe-area-inset-bottom, 0px)); left: calc(14px + env(safe-area-inset-left, 0px)); }
+}
+
 /* ─── Skip intro button ─── */
 .skip-intro {
   position: fixed;
@@ -1359,6 +1388,22 @@ body { overscroll-behavior: none; }
   <div class="stick" id="joy-stick"></div>
 </div>
 
+<!-- D-pad: ▲▼ walk, ◀▶ turn (bottom-left, in every navigation mode) -->
+<div class="dpad" id="dpad" role="group" aria-label="Walk and turn">
+  <svg viewBox="0 0 150 150" aria-hidden="true">
+    <path class="dpad-body" d="M59 3H91Q99 3 99 11V51H139Q147 51 147 59V91Q147 99 139 99H99V139Q99 147 91 147H59Q51 147 51 139V99H11Q3 99 3 91V59Q3 51 11 51H51V11Q51 3 59 3Z"/>
+    <path class="dpad-hl" data-dir="up" d="M59 3H91Q99 3 99 11V51H51V11Q51 3 59 3Z"/>
+    <path class="dpad-hl" data-dir="down" d="M51 99H99V139Q99 147 91 147H59Q51 147 51 139Z"/>
+    <path class="dpad-hl" data-dir="left" d="M51 51V99H11Q3 99 3 91V59Q3 51 11 51Z"/>
+    <path class="dpad-hl" data-dir="right" d="M99 51H139Q147 51 147 59V91Q147 99 139 99H99Z"/>
+    <circle class="dpad-hub" cx="75" cy="75" r="7"/>
+    <path class="dpad-arrow" data-dir="up" d="M65 33L75 21L85 33"/>
+    <path class="dpad-arrow" data-dir="down" d="M65 117L75 129L85 117"/>
+    <path class="dpad-arrow" data-dir="left" d="M33 65L21 75L33 85"/>
+    <path class="dpad-arrow" data-dir="right" d="M117 65L129 75L117 85"/>
+  </svg>
+</div>
+
 <button class="skip-intro" id="skip-intro">Skip intro</button>
 
 <div class="tutorial-overlay" id="tutorial-overlay">
@@ -1727,6 +1772,8 @@ let entered = false;
 let hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 const keys = { w: false, a: false, s: false, d: false };
 let joyVec = { x: 0, y: 0 };
+// The D-pad: fwd +1 / -1 (▲ / ▼), turn +1 / -1 (▶ / ◀), how long a turn's been held
+const dpad = { fwd: 0, turn: 0, turnHeld: 0 };
 
 let tapWalkTarget = null;
 
@@ -9225,9 +9272,9 @@ function updateSpotPool(now, dt) {
 function setNavMode(mode) {
   if (!['tap-pinch', 'tap-art', 'tap-any', 'classic'].includes(mode)) mode = 'tap-pinch';
   navMode = mode;
-  // Joystick visibility — only in classic mode (and only on touch devices)
-  const joy = document.getElementById('joy');
-  joy.classList.toggle('show', mode === 'classic' && hasTouch && entered);
+  // The D-pad does the walking in every mode (it took the old joystick's place)
+  document.getElementById('joy').classList.remove('show');
+  updateDpadVis();
   // Cancel any active tap-walk or pinch when switching modes
   tapWalkTarget = null;
   pinchActive = false;
@@ -9410,6 +9457,7 @@ function attachInputHandlers() {
 
   // Joystick
   setupJoystick();
+  setupDpad();
 }
 
 let mouseLook = null;
@@ -9457,8 +9505,9 @@ function onWheel(e) {
 function onTouchStart(e) {
   if (intro.active) return;
   e.preventDefault();
-  if (navMode === 'tap-pinch' && e.touches.length >= 2) {
-    const t0 = e.touches[0], t1 = e.touches[1];
+  const vt = e.targetTouches;          // only fingers on the view: a thumb on the D-pad isn't half a pinch
+  if (navMode === 'tap-pinch' && vt.length >= 2) {
+    const t0 = vt[0], t1 = vt[1];
     pinchActive = true;
     pinchPrevDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
     pinchPrevMidX = (t0.clientX + t1.clientX) / 2;
@@ -9476,8 +9525,8 @@ function onTouchStart(e) {
 }
 function onTouchMove(e) {
   if (intro.active) return;
-  if (pinchActive && e.touches.length >= 2) {
-    const t0 = e.touches[0], t1 = e.touches[1];
+  if (pinchActive && e.targetTouches.length >= 2) {
+    const t0 = e.targetTouches[0], t1 = e.targetTouches[1];
     const d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
     const midX = (t0.clientX + t1.clientX) / 2;
     const forward = (d - pinchPrevDist) / PINCH_PX_PER_M;
@@ -9504,11 +9553,11 @@ function onTouchMove(e) {
 }
 function onTouchEnd(e) {
   if (pinchActive) {
-    if (e.touches.length < 2) {
+    if (e.targetTouches.length < 2) {
       pinchActive = false;
       touchLook = null;
     } else {
-      const t0 = e.touches[0], t1 = e.touches[1];
+      const t0 = e.targetTouches[0], t1 = e.targetTouches[1];
       pinchPrevDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
       pinchPrevMidX = (t0.clientX + t1.clientX) / 2;
     }
@@ -9618,6 +9667,53 @@ function setupJoystick() {
   joy.addEventListener('touchend', (e) => {
     for (const t of e.changedTouches) if (t.identifier === activeId) end();
   });
+}
+
+// The D-pad. A press anywhere on it counts by direction from its centre: within
+// 30° of an arm, that arm alone; between two arms, both (walk and turn at once).
+// Pointer events, so a thumb here and a finger dragging the view work together.
+function setupDpad() {
+  const el = document.getElementById('dpad');
+  if (!el) return;
+  const hls = el.querySelectorAll('[data-dir]');
+  let pid = null;
+  const show = (f, t) => {
+    const on = { up: f > 0, down: f < 0, left: t < 0, right: t > 0 };
+    hls.forEach(n => n.classList.toggle('on', on[n.dataset.dir]));
+  };
+  const aim = (x, y) => {
+    const r = el.getBoundingClientRect();
+    const ux = (x - (r.left + r.width / 2)) / (r.width / 2), uy = (y - (r.top + r.height / 2)) / (r.height / 2);
+    const ax = Math.abs(ux), ay = Math.abs(uy);
+    let f = 0, t = 0;
+    if (Math.hypot(ux, uy) > 0.14) {
+      if (ay > ax * 0.577) f = uy < 0 ? 1 : -1;
+      if (ax > ay * 0.577) t = ux > 0 ? 1 : -1;
+    }
+    if (t !== dpad.turn) dpad.turnHeld = 0;
+    dpad.fwd = f; dpad.turn = t;
+    show(f, t);
+    if (f || t) noteUserInput();
+  };
+  const release = () => { pid = null; dpad.fwd = dpad.turn = 0; dpad.turnHeld = 0; show(0, 0); };
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (pid !== null) return;
+    pid = e.pointerId;
+    try { el.setPointerCapture(pid); } catch (err) {}
+    aim(e.clientX, e.clientY);
+  });
+  el.addEventListener('pointermove', (e) => { if (e.pointerId === pid) { e.preventDefault(); aim(e.clientX, e.clientY); } });
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(ev, (e) => { if (e.pointerId === pid) release(); });
+  // no long-press menu, no double-tap zoom, no click reaching the page
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+  el.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+  el.addEventListener('click', (e) => e.stopPropagation());
+  window.addEventListener('blur', release);
+}
+function updateDpadVis() {
+  const el = document.getElementById('dpad');
+  if (el) el.classList.toggle('show', entered);
 }
 
 const ARMED_PUSH_REACH = 2.3;     // same reach handleMirrorPush allows
@@ -10180,10 +10276,7 @@ function endIntro() {
     showHintForCurrentMode(5000);
     hintHasShown = true;
   }
-  // Restore joystick if classic mode on touch
-  if (navMode === 'classic' && hasTouch) {
-    document.getElementById('joy').classList.add('show');
-  }
+  updateDpadVis();
   updatePaintNavVis();
   warmShaderPrograms(1500);   // the gallery is at rest now: build the remaining programs
 }
@@ -17419,6 +17512,7 @@ function showTutorial() {
   if (navMode === 'tap-pinch') {
     title = 'Tap + pinch';
     steps = hasTouch ? [
+      { icon: '✚', text: '<strong>D-pad</strong> (bottom-left): ▲ ▼ to walk, ◀ ▶ to turn.' },
       { icon: '◉', text: '<strong>Tap a painting or floor</strong> to walk there.' },
       { icon: '↔', text: '<strong>Pinch out</strong> to walk forward, <strong>pinch in</strong> to walk back.' },
       { icon: '⇄', text: '<strong>Two-finger swipe</strong> sideways to step left/right.' },
@@ -17426,6 +17520,7 @@ function showTutorial() {
       { icon: '◐', text: 'When you stop near a painting, the camera <strong>auto-positions</strong> for viewing.' },
     ] : [
       { icon: '◉', text: '<strong>Click a painting or floor</strong> to walk there.' },
+      { icon: '✚', text: '<strong>D-pad</strong> (bottom-left): ▲ ▼ to walk, ◀ ▶ to turn.' },
       { icon: '↔', text: '<strong>Scroll wheel</strong> to walk forward / back.' },
       { icon: '✥', text: '<strong>Click and drag</strong> to look around.' },
       { icon: '⌨', text: '<strong>WASD or arrow keys</strong> also work.' },
@@ -17445,7 +17540,7 @@ function showTutorial() {
   } else {
     title = 'Classic';
     steps = hasTouch ? [
-      { icon: '⊕', text: 'Use the <strong>joystick</strong> in the bottom-left to walk.' },
+      { icon: '✚', text: 'Use the <strong>D-pad</strong> in the bottom-left: ▲ ▼ to walk, ◀ ▶ to turn.' },
       { icon: '✥', text: '<strong>Drag the screen</strong> to look around.' },
       { icon: '◉', text: '<strong>Tap a painting</strong> to view details.' },
     ] : [
@@ -17697,10 +17792,7 @@ function enterGallery() {
   entry.classList.add('fade');
   setTimeout(() => entry.style.display = 'none', 800);
   entered = true;
-  // Show joystick now if we're in classic mode (otherwise the bottom-hint takes its place)
-  if (navMode === 'classic' && hasTouch) {
-    document.getElementById('joy').classList.add('show');
-  }
+  updateDpadVis();
   startIntro();
 }
 
@@ -18814,7 +18906,7 @@ function animate() {
     if (keys.a) mx -= 1;
     if (keys.d) mx += 1;
     mx += joyVec.x;
-    mz += joyVec.y;
+    mz += joyVec.y - dpad.fwd;
     const len = Math.hypot(mx, mz);
     if (len > 1) { mx /= len; mz /= len; }
     if (mx !== 0 || mz !== 0) {
@@ -18833,6 +18925,12 @@ function animate() {
     // Turn keys — arrows / Q / E rotate in place at a steady rate
     if (keys.tl || keys.tr) {
       yaw += ((keys.tl ? 1 : 0) - (keys.tr ? 1 : 0)) * 1.9 * dt;
+      noteUserInput();
+    }
+    // D-pad turn: eases in, so a tap nudges the view and a hold swings it round
+    if (dpad.turn) {
+      dpad.turnHeld += dt;
+      yaw -= dpad.turn * 1.7 * Math.min(1, 0.35 + dpad.turnHeld * 2.2) * dt;
       noteUserInput();
     }
 
