@@ -13943,19 +13943,22 @@ function fireRocket() {
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   const hits = raycaster.intersectObjects(rocketTargets(), false);
   const ray = raycaster.ray;
-  const aim = hits.length ? hits[0].point : ray.at(60, _arsV2);
+  // on the beach the cathedral's outside, the skull, the sand and the sea are targets too
+  const oh = arsenal.outside ? outsideHit(ray.origin, ray.direction, 60) : null;
+  const first = oh && (!hits.length || oh.distance < hits[0].distance) ? oh : (hits[0] || null);
+  const aim = first ? first.point : ray.at(60, _arsV2);
   camera.updateMatrixWorld();
   const start = _arsV1.set(0.11, -0.09, -0.55).applyMatrix4(camera.matrixWorld);
   // Up against a wall the shoulder offset sits in (or behind) it: launch
   // down the crosshair ray instead so the rocket can't fly off backwards.
-  let blocked = hits.length > 0 && hits[0].distance < 1.0;
+  let blocked = !!first && first.distance < 1.0;
   if (!blocked) {
     const d = _arsV3.copy(start).sub(ray.origin).length();
     _rocketRay.set(ray.origin, _arsV3.divideScalar(d));
     _rocketRay.far = d + 0.05;
     blocked = _rocketRay.intersectObjects(rocketTargets(), false).length > 0;
   }
-  if (blocked) start.copy(ray.origin).addScaledVector(ray.direction, hits.length ? Math.max(0.05, hits[0].distance - 0.35) : 0.3);
+  if (blocked) start.copy(ray.origin).addScaledVector(ray.direction, first ? Math.max(0.05, first.distance - 0.35) : 0.3);
   r.prev.copy(start);
   r.group.position.copy(start);
   r.vel.copy(aim).sub(start);
@@ -13963,7 +13966,7 @@ function fireRocket() {
   r.vel.normalize().multiplyScalar(24);
   r.group.quaternion.setFromUnitVectors(_AX_X, _arsV3.copy(r.vel).normalize());
   r.group.visible = true;
-  r.busy = true; r.age = 0; r.trailT = 0; r.escaped = false;
+  r.busy = true; r.age = 0; r.trailT = 0; r.escaped = false; r.out = !!arsenal.outside;
   arsenal.rockets.push(r);
   arsenal.targets = rocketTargets();
   // back-blast + muzzle flash
@@ -14015,6 +14018,13 @@ function updateRockets(dt) {
       _rocketRay.set(r.prev, seg.divideScalar(len));
       _rocketRay.far = len + 0.15;
       const hits = _rocketRay.intersectObjects(targets, false);
+      // fired on the beach: the cathedral, the skull, the sand, the sea
+      const oh = r.out ? outsideHit(r.prev, _rocketRay.ray.direction, len + 0.15) : null;
+      if (oh && (!hits.length || oh.distance < hits[0].distance)) {
+        retireRocket(r); arsenal.rockets.splice(i, 1);
+        rocketImpactOutside(oh, _rocketRay.ray.direction);
+        continue;
+      }
       if (hits.length) {
         const h = hits[0];
         if (h.object.userData.isWall && holeAt(h)) {
@@ -14026,13 +14036,97 @@ function updateRockets(dt) {
         continue;
       }
       // Out through a breach (real empty space, nothing to hit): down the beach
-      if (worldRoot) {
+      if (worldRoot && !r.out) {
         const lp = worldRoot.worldToLocal(_arsV1.copy(r.group.position));
         if (!portalRoomAt(lp.x, lp.z)) { r.escaped = true; r.escapeAge = r.age; continue; }
       }
     }
     if (r.age > 3) { retireRocket(r); arsenal.rockets.splice(i, 1); }
   }
+}
+/* ── Rockets fired on the beach ──
+   The cathedral's outside (its skin, buttresses, roofs and glass), the skull
+   (by its voxel grid), the sand and the sea. A low strike on a wall — on its
+   skin, or on the skull standing in front of it — breaches the wall behind
+   just as a strike from inside would; anything else leaves a scorch, and the
+   sea throws up a plume. */
+const _outRay = new THREE.Raycaster(), _wallRay = new THREE.Raycaster();
+function beachIsSea(p) {
+  const h = arsenal.outside || activeBreach();
+  if (!h) return false;
+  const F = h._frame || (h._frame = beachFrame(h));
+  const s = (p.x - F.C.x) * F.O.x + (p.z - F.C.z) * F.O.z;
+  return s > waveEdge(p.x * F.L.x + p.z * F.L.z, _beachTime.value).edge;
+}
+function outsideHit(origin, dir, far) {
+  if (!worldRoot) return null;
+  let best = null;
+  const consider = (o) => { if (o.distance <= far && (!best || o.distance < best.distance)) best = o; };
+  const g = arsenal.cathedral;
+  if (g && g.visible) {
+    _outRay.set(origin, dir); _outRay.far = far;
+    const hs = [];
+    for (const m of g.children) if (m.isMesh && !m.userData.skull) THREE.Mesh.prototype.raycast.call(m, _outRay, hs);
+    let h0 = null;
+    for (const h of hs) if (!h0 || h.distance < h0.distance) h0 = h;
+    if (h0) consider({ kind: 'building', point: h0.point, distance: h0.distance, object: h0.object, face: h0.face });
+    if (_skull.solid) {
+      const p0 = worldRoot.worldToLocal(origin.clone()), p1 = worldRoot.worldToLocal(origin.clone().addScaledVector(dir, far));
+      const sh = skullRayHit(p0, p1);
+      if (sh) {
+        const pw = worldRoot.localToWorld(sh.point.clone());
+        consider({ kind: 'building', point: pw, distance: pw.distanceTo(origin), object: worldRoot, face: { normal: sh.normal } });
+      }
+    }
+  }
+  if (dir.y < -1e-4) {
+    const t = -origin.y / dir.y;
+    if (t > 0 && t <= far) {
+      const p = origin.clone().addScaledVector(dir, t), lp = worldRoot.worldToLocal(p.clone());
+      if (!inAnyRoom(lp.x, lp.z)) consider({ kind: beachIsSea(p) ? 'sea' : 'sand', point: p, distance: t, object: worldRoot, face: { normal: new THREE.Vector3(0, 1, 0) } });
+    }
+  }
+  return best;
+}
+function splashSea(p, dist) {
+  for (let i = 0; i < 16; i++) {
+    spawnFxSprite('smoke', p, (Math.random() - 0.5) * 2.4, 3 + Math.random() * 5, (Math.random() - 0.5) * 2.4,
+      0.4, 1.6 + Math.random(), 0.9, 1.0 + Math.random() * 0.6, 0xf2f7f8);
+  }
+  for (let i = 0; i < 10; i++) {
+    spawnFxSprite('smoke', p, (Math.random() - 0.5) * 6, 0.4 + Math.random(), (Math.random() - 0.5) * 6, 0.5, 2.6, 0.7, 1.4, 0xe8f2f3);
+  }
+  playRocketBoom(dist, true);
+}
+// A low strike from outside: breach the wall behind (from its room's side)
+function breachFromOutside(oh, dirW) {
+  const lp = worldRoot.worldToLocal(oh.point.clone());
+  if (lp.y > BREACH_STRIKE_Y + 0.3) return false;
+  _wallRay.set(oh.point.clone().addScaledVector(dirW, -0.05), dirW); _wallRay.far = 6;
+  const wh = _wallRay.intersectObjects(wallMeshes.filter(w => w.visible && w.userData.isWall), false)[0];
+  if (!wh || !wh.face) return false;
+  const nOut = wh.face.normal.clone(), dL = worldDirToLocal(dirW.clone());
+  if (nOut.dot(dL) > -0.5) return false;                                   // not its outer face
+  if (arsenal.holes.length >= MAX_BEACH_HOLES && arsenal.holes[0] === arsenal.outside) return false;   // that would close our way out
+  const inner = { object: wh.object, face: { normal: nOut.clone().negate() }, distance: wh.distance,
+    point: wh.point.clone().addScaledVector(dirW, WALL_THICKNESS / Math.max(0.3, -nOut.dot(dL))) };
+  const before = arsenal.holes.slice();
+  if (!blowBeachHole(inner, 'wall')) return false;
+  for (const hh of arsenal.holes) {
+    if (!before.includes(hh) && !hh.breach) { removeBeachHole(hh); return false; }   // only a breach shows from out here
+  }
+  const c = worldRoot.worldToLocal(inner.point.clone());
+  return arsenal.holes.some(hh => hh.breach && hh.wall === wh.object && hh.center.distanceTo(c) < hh.radius + 0.8);
+}
+function rocketImpactOutside(oh, dirW) {
+  const dist = oh.point.distanceTo(camera.position);
+  if (oh.kind === 'sea') { splashSea(oh.point, dist); return; }
+  const n = new THREE.Vector3().copy(oh.face.normal).transformDirection(oh.object.matrixWorld);
+  if (n.dot(dirW) > 0) n.negate();
+  spawnExplosion(oh.point, n, oh.kind === 'sand' ? 'floor' : 'wall', dist);
+  if (oh.kind === 'building' && breachFromOutside(oh, dirW)) { updateClearButton(); return; }
+  addRocketScorch(oh, oh.kind === 'sand' ? 1.7 : 1.2);
+  updateClearButton();
 }
 function hitWorldNormal(h, out) {
   if (h.face) out.copy(h.face.normal).transformDirection(h.object.matrixWorld);
@@ -14623,8 +14717,10 @@ function warmBeachPrograms() {
   stone.visible = false; stone.raycast = () => {};
   m.add(stone);
   // the cathedral's outside (stone, glass; the roof is double-sided) and the shorebirds
-  for (const side of [THREE.FrontSide, THREE.DoubleSide]) {
-    const ext = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), extMaterial(null, 0xffffff, { side }));
+  for (const opts of [{}, { side: THREE.DoubleSide }, { vertexColors: true }]) {
+    const eg = new THREE.PlaneGeometry(0.01, 0.01);
+    if (opts.vertexColors) eg.setAttribute('color', new THREE.Float32BufferAttribute(new Array(12).fill(1), 3));
+    const ext = new THREE.Mesh(eg, extMaterial(null, 0xffffff, opts));
     ext.visible = false; ext.raycast = () => {};
     m.add(ext);
   }
@@ -14634,6 +14730,7 @@ function warmBeachPrograms() {
   birdWarm.visible = false; birdWarm.raycast = () => {};
   m.add(birdWarm);
   warmShaderPrograms(600);              // the queue: one program per frame, done long before the first shot lands
+  warmSkull();
 }
 // Half the width of the opening at walking height, less a shoulder's margin
 function breachHalfWidth(h) {
@@ -14745,6 +14842,9 @@ function clampOutside(h, x, z, move) {
     const w = ways.find(c => !footRoom(x + c[0], z + c[1])) || ways[0];
     x += w[0]; z += w[1];
   }
+  // the skull, at walking height
+  const sp = skullPush(x, z);
+  if (sp) { x = sp.x; z = sp.z; }
   // the palm trunks nearest the breach (same spots the shader plants them)
   for (const t of breachPalms(h)) {
     const dx = x - t.x, dz = z - t.z, d = Math.hypot(dx, dz);
@@ -14823,8 +14923,8 @@ const EXT_FRAG = `
     vec3 n = normalize( vN );
     if ( !gl_FrontFacing ) n = -n;
     float ndl = max( dot( n, uSun ), 0.0 );
-    vec3 amb = mix( vec3( 0.46, 0.41, 0.34 ), vec3( 0.52, 0.6, 0.72 ), 0.5 + 0.5 * n.y ) * 0.66;
-    vec3 lit = amb + vec3( 1.0, 0.93, 0.8 ) * ndl * 1.0;
+    vec3 amb = mix( vec3( 0.5, 0.44, 0.36 ), vec3( 0.52, 0.6, 0.72 ), 0.5 + 0.5 * n.y ) * 0.9;
+    vec3 lit = amb + vec3( 1.0, 0.93, 0.8 ) * ndl * 0.85;
     if ( uComic > 0.5 ) lit = vec3( ndl > 0.3 ? 1.0 : 0.82 );
     gl_FragColor = vec4( diffuse * tx.rgb * vCol * lit, 1.0 );
   }`;
@@ -14909,6 +15009,7 @@ function accTri(A, a, b, c, uva, uvb, uvc) {
   let nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
   const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
   A.p.push(...a, ...b, ...c); A.n.push(nx, ny, nz, nx, ny, nz, nx, ny, nz); A.u.push(...uva, ...uvb, ...uvc);
+  if (A.c) A.c.push(1, 1, 1, 1, 1, 1, 1, 1, 1);
 }
 // world-space stone UVs, like the walls' own (_uvSetsFor)
 function stoneUV(v, n) {
@@ -14927,6 +15028,7 @@ function accGeometry(A, geo, m, uvFn) {
     _gaN.fromBufferAttribute(N, i).applyMatrix3(_gaM3).normalize();
     A.p.push(_gaV.x, _gaV.y, _gaV.z); A.n.push(_gaN.x, _gaN.y, _gaN.z);
     A.u.push(...uvFn(_gaV, _gaN));
+    if (A.c) A.c.push(1, 1, 1);
   }
   if (g !== geo) g.dispose();
   geo.dispose();
@@ -14936,6 +15038,7 @@ function accToGeometry(A) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(A.p, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(A.n, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(A.u, 2));
+  if (A.c) g.setAttribute('color', new THREE.Float32BufferAttribute(A.c, 3));
   g.computeBoundingSphere();
   return g;
 }
@@ -14967,7 +15070,7 @@ function exteriorFaces() {
       for (let u = c - half + 0.1; u <= c + half - 0.1 + 1e-6; u += 0.2) {
         const px = alongX ? u : at + sgn * off, pz = alongX ? at + sgn * off : u;
         const qx = alongX ? u : at - sgn * off, qz = alongX ? at - sgn * off : u;
-        const ext = !inAnyRoom(px, pz) && inAnyRoom(qx, qz);
+        const ext = !inAnyRoom(px, pz) && inAnyRoom(qx, qz) && !skullCovers(px, pz);
         if (ext) { if (!run) run = { u0: u, u1: u }; else run.u1 = u; }
         if ((!ext || u + 0.2 > c + half - 0.1 + 1e-6) && run) {
           out.push({ mesh: m, alongX, at, sgn, u0: Math.max(c - half, run.u0 - 0.1), u1: Math.min(c + half, run.u1 + 0.1),
@@ -15088,6 +15191,323 @@ function accWindow(W, alongX, x, y, z, kind, size, sg) {
   if (!flip) { accTri(W, a, b, c, [ua, 0], [ub, 0], [ub, 1]); accTri(W, a, c, d, [ua, 0], [ub, 1], [ua, 1]); }
   else { accTri(W, b, a, d, [ub, 0], [ua, 0], [ua, 1]); accTri(W, b, d, c, [ub, 0], [ua, 1], [ub, 1]); }
 }
+/* ── The skull: the south end of the cathedral, over the older-work hall ──
+   A great stone skull in blocks (0.4 m voxels) facing the south: rose windows
+   deep in its eye sockets, a nose cavity, cheekbones, a row of teeth at the
+   ground, and a slate-capped cranium latticed with stone diamonds, a stepped
+   spire on its crown. Shaped by a distance field over the older-work hall
+   (whose walls it encloses, with the hall's interior left hollow), sampled
+   once into a grid — a few layers at a time from the launcher's pick-up, so
+   the first breach doesn't wait on it. The grid is also what the visitor
+   bumps into outside and what a rocket strikes; a breach in a wall under the
+   skull bores a tunnel through it. */
+const SK_VS = 0.4;                                     // voxel size
+const SK_X0 = -7.6, SK_Y0 = 0, SK_Z0 = 3.6;            // grid origin (local)
+const SK_NX = 38, SK_NY = 41, SK_NZ = 39;
+const SK_CR = [0, 6.3, 10.6], SK_CRR = [6.9, 8.2, 6.4]; // the cranium's dome over the hall
+const _skull = { grid: null, cav: null, layer: 0, timer: 0, ground: null, solid: null };
+function _sdEll(x, y, z, c, r) {
+  const px = (x - c[0]) / r[0], py = (y - c[1]) / r[1], pz = (z - c[2]) / r[2];
+  const k0 = Math.hypot(px, py, pz), k1 = Math.hypot(px / r[0], py / r[1], pz / r[2]);
+  return k1 > 1e-6 ? k0 * (k0 - 1) / k1 : -Math.min(r[0], r[1], r[2]);
+}
+function _sdBox(x, y, z, cx, cy, cz, bx, by, bz, rad) {
+  const qx = Math.abs(x - cx) - bx, qy = Math.abs(y - cy) - by, qz = Math.abs(z - cz) - bz;
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0) - (rad || 0);
+}
+function _smin(a, b, k) { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * 0.25; }
+// The carved-out hollows: eye sockets, nose, mouth (negative inside)
+function skullHollow(x, y, z) {
+  let d = Math.min(_sdEll(x, y, z, [-2.6, 9.0, 18.3], [2.0, 1.9, 1.6]), _sdEll(x, y, z, [2.6, 9.0, 18.3], [2.0, 1.9, 1.6]));
+  d = Math.min(d, _sdEll(x, y, z, [-0.45, 6.4, 17.8], [0.7, 1.3, 1.2]), _sdEll(x, y, z, [0.45, 6.4, 17.8], [0.7, 1.3, 1.2]));
+  return Math.min(d, _sdBox(x, y, z, 0, 1.3, 18.4, 3.7, 1.3, 1.6));
+}
+// The skull before its hollows: a rounded cranium over the front of the hall,
+// running back into a dome over the rest of it (both from the wall tops up,
+// except where the face comes down to the ground); a backing over the south
+// wall; and the face proud of it — brow ridge, cheekbones and their arches
+// back to the temples, the midface, and the upper jaw
+function skullBase(x, y, z) {
+  const cut = 5.6 - y - Math.max(0, z - 14.0) * 4;
+  let d = Math.max(_sdEll(x, y, z, [0, 9.5, 12.0], [6.8, 6.3, 6.0]), cut);
+  d = _smin(d, Math.max(_sdEll(x, y, z, SK_CR, SK_CRR), 6.1 - y), 1.5);
+  if (z < 13.5 && d > 2) return d;
+  d = _smin(d, _sdBox(x, y, z, 0, 3.6, 15.4, 5.6, 3.6, 0.3, 0.6), 1.0);                          // backing over the south wall
+  d = _smin(d, Math.hypot(Math.max(Math.abs(x) - 4.2, 0), y - 10.8, z - 17.6) - 0.95, 0.9);      // brow ridge
+  d = _smin(d, Math.hypot(Math.abs(x) - 4.8, y - 6.4, z - 16.4) - 1.7, 0.9);                    // cheekbones
+  const ax = Math.abs(x), tz = Math.min(1, Math.max(0, (16.0 - z) / 3.0));
+  d = _smin(d, Math.hypot(ax - (5.4 + 0.9 * tz), y - (6.4 + 0.3 * tz), z - (16.0 - 3.0 * tz)) - 0.85, 0.8);   // the arches to the temples
+  d = _smin(d, _sdBox(x, y, z, 0, 5.4, 16.6, 2.6, 1.6, 0.9, 0.6), 0.9);                         // midface
+  return _smin(d, _sdBox(x, y, z, 0, 2.8, 16.9, 3.7, 1.0, 0.6, 0.5), 0.6);                      // upper jaw
+}
+// Teeth: two voxels wide, a voxel apart, an upper row over a lower one
+function skullTeeth(x, y, z) {
+  if (z < 16.2 || z > 17.9 || y > 2.8 || Math.abs(x) > 4.1) return 1;
+  const tx = Math.round(x / 1.2) * 1.2;
+  if (Math.abs(tx) > 3.6) return 1;
+  return Math.min(_sdBox(x, y, z, tx, 2.0, 17.15, 0.4, 0.6, 0.45), _sdBox(x, y, z, tx, 0.5, 17.1, 0.4, 0.5, 0.45));
+}
+function skullSDF(x, y, z) { return Math.min(Math.max(skullBase(x, y, z), -skullHollow(x, y, z)), skullTeeth(x, y, z)); }
+function skullCell(i, j, k) { return [SK_X0 + (i + 0.5) * SK_VS, SK_Y0 + (j + 0.5) * SK_VS, SK_Z0 + (k + 0.5) * SK_VS]; }
+// Inside a room's hollow (its floor plan, up to just over its ceiling)?
+function _inHall(x, y, z) {
+  if (y > LOBBY_H + 0.45) return false;
+  for (const id of Object.keys(ROOMS)) {
+    const r = ROOMS[id];
+    if (Math.abs(x - r.cx) < r.w / 2 + WALL_THICKNESS / 2 && Math.abs(z - r.cz) < r.d / 2 + WALL_THICKNESS / 2) return true;
+  }
+  return false;
+}
+// Sample some layers of the grid: 1 solid, 2 hollow (cavity), 0 air or hall
+function skullSampleLayers(n) {
+  const S = _skull;
+  if (!S.grid) { S.grid = new Uint8Array(SK_NX * SK_NY * SK_NZ); S.layer = 0; }
+  for (let c = 0; c < n && S.layer < SK_NY; c++, S.layer++) {
+    const j = S.layer;
+    for (let k = 0; k < SK_NZ; k++) for (let i = 0; i < SK_NX; i++) {
+      const [x, y, z] = skullCell(i, j, k);
+      let v = 0;
+      if (!_inHall(x, y, z)) {
+        const base = skullBase(x, y, z);
+        if (skullTeeth(x, y, z) < 0) v = 1;
+        else if (base < 0) v = skullHollow(x, y, z) < 0 ? 2 : 1;   // 2: a hollow carved out of it
+      }
+      S.grid[i + SK_NX * (j + SK_NY * k)] = v;
+    }
+  }
+  return S.layer >= SK_NY;
+}
+// From the launcher's pick-up, a little per tick off the visitor's frames: the
+// grid a few layers at a time, then (no breach yet) the unbroken skull's faces
+// a few slices at a time — so the first breach finds it all made
+function warmSkull() {
+  if (_skull.timer || _skull.geos) return;
+  const gen = _skull.gen = (_skull.gen || 0) + 1;
+  let G = null, acc = null, k = 0;
+  const tick = () => {
+    _skull.timer = 0;
+    if (gen !== _skull.gen || _skull.geos) return;            // a build got there first
+    if (!_skull.grid || _skull.layer < SK_NY) {
+      if (!skullSampleLayers(4)) { _skull.timer = setTimeout(tick, 30); return; }
+      _skull.timer = setTimeout(tick, 30); return;
+    }
+    if (arsenal.holes.some(h => h.breach && h.cut)) return;  // the build will make its own
+    if (!acc) { G = skullCarve(); acc = [0, 1, 2].map(() => ({ p: [], n: [], u: [], c: [] })); }
+    accSkull(G, acc[0], acc[1], acc[2], k, Math.min(SK_NZ, k + 4));
+    k += 4;
+    if (k < SK_NZ) { _skull.timer = setTimeout(tick, 30); return; }
+    accSkullSpire(G, acc[1], acc[0]);
+    _skull.geos = acc.map(A => A.p.length ? accToGeometry(A) : null);
+    _skull.geoKey = '';
+  };
+  _skull.timer = setTimeout(tick, 400);
+}
+function skullReady() {
+  if (!_skull.grid || _skull.layer < SK_NY) skullSampleLayers(SK_NY);
+  return _skull.grid;
+}
+// Does the skull cover this point of an outer wall face?
+function skullCovers(x, z) {
+  return skullBase(x, 1.0, z) < -0.05 && skullBase(x, 4.0, z) < -0.05 && skullBase(x, 7.4, z) < -0.05;
+}
+// Bore one breach's tunnel through the grid (3: tunnel air); with apply false,
+// only say whether it would cut anything
+function skullTunnel(G, h, apply) {
+  const ox = -h.normal.x, oz = -h.normal.z, ax = oz, az = -ox;
+  const R = h.radius * 0.95 + 0.3, hw = breachHalfWidth(h) + 0.55, Rm = Math.max(R, hw);
+  // only the cells the tunnel can reach
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const sd of [-0.3, 6]) for (const ud of [-Rm, Rm]) {
+    const x = h.center.x + ox * sd + ax * ud, z = h.center.z + oz * sd + az * ud;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+  }
+  const i0 = Math.max(0, Math.floor((x0 - SK_X0) / SK_VS)), i1 = Math.min(SK_NX - 1, Math.floor((x1 - SK_X0) / SK_VS));
+  const k0 = Math.max(0, Math.floor((z0 - SK_Z0) / SK_VS)), k1 = Math.min(SK_NZ - 1, Math.floor((z1 - SK_Z0) / SK_VS));
+  const j1 = Math.min(SK_NY - 1, Math.floor((Math.max(h.center.y + R, 2.6) - SK_Y0) / SK_VS));
+  let cut = false;
+  for (let k = k0; k <= k1; k++) for (let j = 0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const idx = i + SK_NX * (j + SK_NY * k);
+    if (G[idx] !== 1 && G[idx] !== 2) continue;
+    const x = SK_X0 + (i + 0.5) * SK_VS, y = SK_Y0 + (j + 0.5) * SK_VS, z = SK_Z0 + (k + 0.5) * SK_VS;
+    const dx = x - h.center.x, dz = z - h.center.z;
+    const s = dx * ox + dz * oz, u = dx * ax + dz * az, v = y - h.center.y;
+    if (s < -0.3 || s > 6) continue;
+    if (u * u + v * v < R * R || (y < 2.6 && Math.abs(u) < hw)) {
+      if (!apply) return true;
+      G[idx] = 3; cut = true;
+    }
+  }
+  return cut;
+}
+// Which breaches bore through the skull (its geometry is kept until they change)
+function skullKey() {
+  const G = skullReady(), ks = [];
+  for (const h of arsenal.holes) {
+    if (!h.breach || !h.cut || !skullTunnel(G, h, false)) continue;
+    ks.push([h.center.x, h.center.y, h.center.z, h.radius, h.normal.x, h.normal.z].map(v => v.toFixed(3)).join(','));
+  }
+  return ks.join('|');
+}
+// The working grid for this build: the sampled skull with a tunnel bored
+// through it at every breach in a wall it covers
+function skullCarve() {
+  const G = skullReady().slice();
+  for (const h of arsenal.holes) if (h.breach && h.cut) skullTunnel(G, h, true);
+  // what stands at walking height, for bumping into
+  const ground = new Uint8Array(SK_NX * SK_NZ);
+  const top = Math.ceil(2.0 / SK_VS);
+  for (let k = 0; k < SK_NZ; k++) for (let i = 0; i < SK_NX; i++) {
+    for (let j = 0; j < top; j++) if (G[i + SK_NX * (j + SK_NY * k)] === 1) { ground[i + SK_NX * k] = 1; break; }
+  }
+  _skull.solid = G; _skull.ground = ground;
+  return G;
+}
+// The skull's meshes for the current breaches: made once, kept across rebuilds
+// (the theme's restyles, breaches elsewhere) until a breach bores through it
+function skullGeometries() {
+  const key = skullKey();
+  if (_skull.geos && _skull.geoKey === key) return _skull.geos;
+  clearTimeout(_skull.timer); _skull.timer = 0; _skull.gen = (_skull.gen || 0) + 1;   // (the warm-up's no longer needed)
+  if (_skull.geos) for (const g of _skull.geos) if (g) g.dispose();
+  const G = skullCarve();
+  const SKA = { p: [], n: [], u: [], c: [] }, SKL = { p: [], n: [], u: [], c: [] }, DK = { p: [], n: [], u: [], c: [] };
+  accSkull(G, SKA, SKL, DK);
+  accSkullSpire(G, SKL, SKA);
+  _skull.geos = [SKA, SKL, DK].map(A => A.p.length ? accToGeometry(A) : null);
+  _skull.geoKey = key;
+  return _skull.geos;
+}
+// The skull's faces: stone, slate and the dark of its hollows, each corner
+// shaded by the blocks around it (ambient occlusion, in the vertex colour)
+// and each block a shade apart from its neighbours
+const SK_AO = [0.42, 0.6, 0.8, 1.0];
+function accSkull(G, SK, SL, DK, kFrom, kTo) {
+  const at = (i, j, k) => (i < 0 || j < 0 || k < 0 || i >= SK_NX || j >= SK_NY || k >= SK_NZ) ? 0 : G[i + SK_NX * (j + SK_NY * k)];
+  const solid = (i, j, k) => at(i, j, k) === 1 ? 1 : 0;
+  const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  const h = SK_VS / 2;
+  for (let k = kFrom || 0; k < (kTo == null ? SK_NZ : kTo); k++) for (let j = 0; j < SK_NY; j++) for (let i = 0; i < SK_NX; i++) {
+    if (G[i + SK_NX * (j + SK_NY * k)] !== 1) continue;
+    const [x, y, z] = skullCell(i, j, k);
+    const hash = ((i * 73856093) ^ (j * 19349663) ^ (k * 83492791)) >>> 0;
+    const tone = 0.86 + 0.14 * ((hash >>> 8) % 1000) / 1000;
+    // slate above the hairline (lower at the back), latticed with stone diamonds
+    let slate = false;
+    if (y > 6.0 + Math.max(0, z - 12.5) * 1.9) {
+      const u = Math.atan2(x, z - SK_CR[2]) * 7.0;
+      const a = ((u + y * 1.2) / 5.2) % 1, b = ((u - y * 1.2) / 5.2) % 1;
+      const fa = Math.abs((a + 1) % 1 - 0.5), fb = Math.abs((b + 1) % 1 - 0.5);
+      slate = !(fa < 0.36 && fb < 0.36);
+    }
+    for (const [dx, dy, dz] of DIRS) {
+      const fi = i + dx, fj = j + dy, fk = k + dz, nb = at(fi, fj, fk);
+      if (nb === 1) continue;
+      if (nb === 0 && _inHall(x + dx * SK_VS, y + dy * SK_VS, z + dz * SK_VS)) continue;   // against the hall's own walls
+      if (dy === -1 && j === 0) continue;                                                  // on the sand
+      const A = nb >= 2 ? DK : slate ? SL : SK;
+      const T1 = dx !== 0 ? [0, 1, 0] : [1, 0, 0], T2 = dz !== 0 ? [0, 1, 0] : [0, 0, 1];
+      const cx = x + dx * h, cy = y + dy * h, cz = z + dz * h;
+      const corner = (a, b) => {
+        const s1 = solid(fi + T1[0] * a, fj + T1[1] * a, fk + T1[2] * a), s2 = solid(fi + T2[0] * b, fj + T2[1] * b, fk + T2[2] * b);
+        const sc = solid(fi + T1[0] * a + T2[0] * b, fj + T1[1] * a + T2[1] * b, fk + T1[2] * a + T2[2] * b);
+        const ao = SK_AO[s1 && s2 ? 0 : 3 - s1 - s2 - sc] * tone;
+        return { p: [cx + (T1[0] * a + T2[0] * b) * h, cy + (T1[1] * a + T2[1] * b) * h, cz + (T1[2] * a + T2[2] * b) * h], c: ao };
+      };
+      let q = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+      // wound outward
+      const e1 = [q[1].p[0] - q[0].p[0], q[1].p[1] - q[0].p[1], q[1].p[2] - q[0].p[2]], e2 = [q[3].p[0] - q[0].p[0], q[3].p[1] - q[0].p[1], q[3].p[2] - q[0].p[2]];
+      const crs = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      if (crs[0] * dx + crs[1] * dy + crs[2] * dz < 0) q = [q[0], q[3], q[2], q[1]];
+      // split along the brighter diagonal, so the shading doesn't streak
+      const tris = q[0].c + q[2].c >= q[1].c + q[3].c ? [[0, 1, 2], [0, 2, 3]] : [[1, 2, 3], [1, 3, 0]];
+      const nrm = { x: dx, y: dy, z: dz };
+      for (const t of tris) for (const vi of t) {
+        const v = q[vi];
+        A.p.push(v.p[0], v.p[1], v.p[2]); A.n.push(dx, dy, dz);
+        A.u.push(...(A === SL ? [(Math.abs(dx) ? v.p[2] : v.p[0]) * 0.5, v.p[1] * 0.7] : stoneUV({ x: v.p[0], y: v.p[1], z: v.p[2] }, nrm)));
+        A.c.push(v.c, v.c, v.c);
+      }
+    }
+  }
+}
+// Rose windows in the eye sockets — set where the socket is still wide; their
+// clear corners show the dark behind
+function accSkullWindows(W) {
+  for (const ex of [-2.6, 2.6]) accWindow(W, true, ex, 9.0, 17.62, 'rose', 3.2, 1);
+}
+// The stepped spire on the crown
+function accSkullSpire(G, SL, S) {
+  // the crown's top, then a stepped spire of slate with a stone cross
+  let top = 14;
+  const ci = Math.floor((0 - SK_X0) / SK_VS), ck = Math.floor((SK_CR[2] - SK_Z0) / SK_VS);
+  for (let j = SK_NY - 1; j >= 0; j--) if (G[ci + SK_NX * (j + SK_NY * ck)] === 1) { top = SK_Y0 + (j + 1) * SK_VS; break; }
+  const base = top - 0.8, n = 30, uvS = (v, nn) => [(Math.abs(nn.x) > 0.5 ? v.z : v.x) * 0.5, v.y * 0.7];
+  accBox(S, 0, base + 0.3, SK_CR[2], 4.6, 0.6, 4.6);
+  for (let k = 0; k < n; k++) {
+    const r = 2.1 * (1 - k / n) + 0.12;
+    accBox(SL, 0, base + 0.6 + (k + 0.5) * SK_VS, SK_CR[2], r * 2, SK_VS, r * 2, uvS);
+  }
+  const tipY = base + 0.6 + n * SK_VS;
+  accBox(S, 0, tipY + 0.7, SK_CR[2], 0.16, 1.4, 0.16);
+  accBox(S, 0, tipY + 0.95, SK_CR[2], 0.8, 0.16, 0.16);
+}
+// Bump into the skull at walking height (local coordinates): the visitor a
+// circle against its blocks, so a corner turns you aside instead of stopping you
+function skullPush(x, z) {
+  const Gd = _skull.ground;
+  if (!Gd) return null;
+  const pr = 0.35;
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    const i0 = Math.floor((x - pr - SK_X0) / SK_VS), i1 = Math.floor((x + pr - SK_X0) / SK_VS);
+    const k0 = Math.floor((z - pr - SK_Z0) / SK_VS), k1 = Math.floor((z + pr - SK_Z0) / SK_VS);
+    for (let k = k0; k <= k1; k++) for (let i = i0; i <= i1; i++) {
+      if (i < 0 || k < 0 || i >= SK_NX || k >= SK_NZ || !Gd[i + SK_NX * k]) continue;
+      const bx0 = SK_X0 + i * SK_VS, bx1 = bx0 + SK_VS, bz0 = SK_Z0 + k * SK_VS, bz1 = bz0 + SK_VS;
+      const cx = Math.min(bx1, Math.max(bx0, x)), cz = Math.min(bz1, Math.max(bz0, z));
+      const dx = x - cx, dz = z - cz, d = Math.hypot(dx, dz);
+      if (d >= pr) continue;
+      if (d > 1e-6) { x = cx + dx / d * pr; z = cz + dz / d * pr; }
+      else {                                   // inside the block: out by its nearest side
+        const px = bx1 + pr - x, nx = x - (bx0 - pr), pz = bz1 + pr - z, nz = z - (bz0 - pr);
+        const least = Math.min(px, nx, pz, nz);
+        if (least === px) x += px; else if (least === nx) x -= nx; else if (least === pz) z += pz; else z -= nz;
+      }
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return { x, z };
+}
+// Where a rocket's step (local p0 → p1) first enters the skull: { point, normal } (local)
+function skullRayHit(p0, p1) {
+  const G = _skull.solid;
+  if (!G) return null;
+  const d = p1.clone().sub(p0), len = d.length();
+  if (len < 1e-6) return null;
+  const cell = (p) => {
+    const i = Math.floor((p.x - SK_X0) / SK_VS), j = Math.floor((p.y - SK_Y0) / SK_VS), k = Math.floor((p.z - SK_Z0) / SK_VS);
+    return (i < 0 || j < 0 || k < 0 || i >= SK_NX || j >= SK_NY || k >= SK_NZ) ? null : [i, j, k];
+  };
+  let prev = cell(p0);
+  const n = Math.ceil(len / 0.12), q = new THREE.Vector3();
+  for (let s = 1; s <= n; s++) {
+    q.copy(p0).addScaledVector(d, s / n);
+    const c = cell(q);
+    if (c && G[c[0] + SK_NX * (c[1] + SK_NY * c[2])] === 1) {
+      const nrm = new THREE.Vector3();
+      if (prev) {
+        const di = [c[0] - prev[0], c[1] - prev[1], c[2] - prev[2]];
+        const ax = [0, 1, 2].filter(a => di[a] !== 0).sort((a, b) => Math.abs(d.getComponent(b)) - Math.abs(d.getComponent(a)))[0];
+        if (ax !== undefined) nrm.setComponent(ax, -Math.sign(di[ax]));
+      }
+      if (nrm.lengthSq() === 0) nrm.copy(d).negate().normalize();
+      return { point: q.clone(), normal: nrm };
+    }
+    prev = c;
+  }
+  return null;
+}
 function buildCathedral() {
   teardownCathedral(false);
   if (!mirrorWorld || !arsenal.holes.some(h => h.breach && h.cut)) return;
@@ -15103,6 +15523,17 @@ function buildCathedral() {
   mats.roof.uniforms.map.value = comic ? extWhiteTex() : slateTexture();
   mats.roof.uniforms.diffuse.value.set(comic ? fill : 0xe6e8ee);
   if (!mats.glass) mats.glass = extMaterial(glassTexture(), 0xffffff, { alphaTest: 0.5 });
+  // the skull's: vertex-coloured (its shading), one program between them
+  if (!mats.skStone) {
+    mats.skStone = extMaterial(stoneMap, 0xffffff, { vertexColors: true });
+    mats.skSlate = extMaterial(slateTexture(), 0xffffff, { vertexColors: true });
+    mats.skDark = extMaterial(stoneMap, 0xffffff, { vertexColors: true });
+  }
+  mats.skStone.uniforms.map.value = mats.skDark.uniforms.map.value = mats.stone.uniforms.map.value;
+  mats.skStone.uniforms.diffuse.value.copy(mats.stone.uniforms.diffuse.value).multiplyScalar(comic ? 1 : 1.12);
+  mats.skSlate.uniforms.map.value = mats.roof.uniforms.map.value;
+  mats.skSlate.uniforms.diffuse.value.copy(mats.roof.uniforms.diffuse.value);
+  mats.skDark.uniforms.diffuse.value.set(comic ? t.comic.wallLine : (stoneMap ? 0x4a4038 : 0x3a352f));
   // the skin lies a few millimetres off the walls' own faces: from far out at
   // sea that is within the depth buffer's step, so pull it (and its glass) forward
   mats.stone.polygonOffset = true; mats.stone.polygonOffsetFactor = -1; mats.stone.polygonOffsetUnits = -2;
@@ -15153,34 +15584,22 @@ function buildCathedral() {
   for (const id of Object.keys(ROOMS)) {
     const r = ROOMS[id];
     if (id === 'lobby') crossTop = accRoof(R, S, W, r, true, 52, true);
-    else if (id === 'older-work') accRoof(R, S, W, r, false, 48, 'rose');
+    else if (id === 'older-work') continue;                               // under the skull
     else accRoof(R, S, W, r, false, r.w < 7 ? 58 : 42, 'lancet');
   }
-  // the crossing tower and its spire
-  const lob = ROOMS.lobby, tx = lob.cx, tz = lob.cz, tw = 5.4, ty0 = crossTop - 3.2, ty1 = crossTop + 5.2;
-  accBox(S, tx, (ty0 + ty1) / 2, tz, tw, ty1 - ty0, tw);
-  accBox(S, tx, ty1 + 0.18, tz, tw + 0.5, 0.36, tw + 0.5);
-  for (const [sx, sz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    for (const k of [-0.95, 0.95]) {
-      const alongX = sz !== 0;
-      const x = tx + sx * (tw / 2 + 0.01) + (alongX ? k : 0), z = tz + sz * (tw / 2 + 0.01) + (alongX ? 0 : k);
-      accWindow(W, alongX, x, ty1 - 2.0, z, 'lancet', 2.6, alongX ? sz : sx);
-    }
-  }
-  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-    const x = tx + sx * (tw / 2), z = tz + sz * (tw / 2);
-    accBox(S, x, ty1 + 0.75, z, 0.55, 1.1, 0.55);
-    accGeometry(S, new THREE.ConeGeometry(0.38, 2.2, 4), _m4.makeRotationY(Math.PI / 4).setPosition(x, ty1 + 2.4, z), stoneUV);
-  }
-  const spH = 12.5;
-  accGeometry(R, new THREE.ConeGeometry(2.45, spH, 8), _m4.makeRotationY(Math.PI / 8).setPosition(tx, ty1 + 0.36 + spH / 2, tz),
-    (v, n) => [Math.atan2(v.z - tz, v.x - tx) * 2.0, v.y * 1.2]);
-  accBox(S, tx, ty1 + 0.36 + spH + 0.6, tz, 0.12, 1.3, 0.12);
-  accBox(S, tx, ty1 + 0.36 + spH + 0.85, tz, 0.7, 0.12, 0.12);
+  // the skull, its rose-window eyes and its spire
+  const skGeos = skullGeometries();
+  accSkullWindows(W);
   const group = new THREE.Group();
   const add = (A, mat) => { if (!A.p.length) return null; const m = new THREE.Mesh(accToGeometry(A), mat); m.raycast = () => {}; m.frustumCulled = false; group.add(m); return m; };
   const stoneMesh = add(S, mats.stone), roofMesh = add(R, mats.roof);
   add(W, mats.glass);
+  [mats.skStone, mats.skSlate, mats.skDark].forEach((mat, i) => {
+    if (!skGeos[i]) return;
+    const m = new THREE.Mesh(skGeos[i], mat);
+    m.raycast = () => {}; m.frustumCulled = false; m.userData.skull = true; m.userData.keepGeo = true;
+    group.add(m);
+  });
   if (comic) {
     if (!mats.ink) mats.ink = new THREE.LineBasicMaterial({ color: t.comic.wallLine });
     mats.ink.color.set(t.comic.wallLine);
@@ -15201,7 +15620,7 @@ function teardownCathedral(all) {
   const g = arsenal.cathedral;
   if (g) {
     if (g.parent) g.parent.remove(g);
-    g.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    g.traverse(o => { if (o.geometry && !o.userData.keepGeo) o.geometry.dispose(); });   // the skull's are kept (skullGeometries)
     arsenal.cathedral = null;
   }
   arsenal.extObstacles = [];
@@ -15299,25 +15718,69 @@ function birdGeometry(kind) {
         rod(V(x - 0.01, 0.06, sz * 0.13), V(x - 0.02, 0.0, sz * 0.165), 0.005, 0.003, leg);
       }
     }
-  } else if (kind === 'cat') {
-    // a beach catamaran, 4.6 m: bow +x, waterline y = 0, the boom out to -z
-    const white = [0.95, 0.95, 0.93], stripe = [0.12, 0.32, 0.62], net = [0.1, 0.13, 0.2], metal = [0.72, 0.74, 0.77];
-    const cloth = [0.97, 0.96, 0.91], band = [0.92, 0.36, 0.16];
-    for (const sz of [-0.95, 0.95]) {
-      part(new THREE.SphereGeometry(1, 18, 8), M(0, 0.13, sz, 2.3, 0.32, 0.19), white);
-      part(new THREE.BoxGeometry(3.7, 0.07, 0.02), M(-0.1, 0.27, sz * 1.19, 1, 1, 1), stripe);
-      part(new THREE.BoxGeometry(0.3, 0.55, 0.03), M(-2.25, 0.0, sz, 1, 1, 1), white);       // rudders
+  } else if (kind === 'tiki') {
+    // A Wharram Tiki 46 "Contiki": 14 m Polynesian double canoe — two V hulls
+    // with upswept ends, crossbeams lashed across them, a slatted deck and the
+    // deck-pod cabin, little cabins on the hulls, and a schooner rig of two
+    // masts with tanbark wingsails (curved gaff, boom). Bow +x, waterline
+    // y = 0, the sails sheeted out to -z.
+    const white = [0.94, 0.93, 0.89], bottom = [0.58, 0.16, 0.12], hdeck = [0.78, 0.7, 0.56], beam = [0.47, 0.33, 0.2];
+    const slat = [0.66, 0.5, 0.32], pod = [0.92, 0.88, 0.78], roof = [0.18, 0.4, 0.48], dark = [0.08, 0.1, 0.12];
+    const spar = [0.55, 0.42, 0.28], tan = [0.74, 0.43, 0.25], tan2 = [0.8, 0.55, 0.34], stripe = [0.15, 0.3, 0.55];
+    const quad = (a, b, c, d, col) => { tri(a, b, c, col); tri(a, c, d, col); };
+    for (const zc of [-2.7, 2.7]) {
+      const N = 26, st = [];
+      for (let s = 0; s <= N; s++) {
+        const x = -7 + 14 * s / N, t = Math.abs(x / 7);
+        const w = Math.max(0.04, 0.62 * Math.pow(Math.max(0, 1 - Math.pow(t, 3.2)), 0.6));
+        const top = 1.05 + 1.3 * Math.pow(t, 6), keel = -0.55 + 0.8 * Math.pow(t, 3);
+        const kn = Math.min(0.3, top - 0.1);
+        st.push({ dl: V(x, top, zc - w), kl: V(x, kn, zc - w * 0.9), k: V(x, keel, zc), kr: V(x, kn, zc + w * 0.9), dr: V(x, top, zc + w),
+          sl: V(x, top - 0.12, zc - w * 0.995), sr: V(x, top - 0.12, zc + w * 0.995) });
+      }
+      for (let s = 0; s < N; s++) {
+        const a = st[s], b = st[s + 1];
+        quad(a.dl, b.dl, b.sl, a.sl, stripe); quad(a.sr, b.sr, b.dr, a.dr, stripe);        // sheer stripe
+        quad(a.sl, b.sl, b.kl, a.kl, white); quad(a.kr, b.kr, b.sr, a.sr, white);          // topsides
+        quad(a.kl, b.kl, b.k, a.k, bottom); quad(a.k, b.k, b.kr, a.kr, bottom);            // below the waterline
+        quad(a.dr, b.dr, b.dl, a.dl, hdeck);                                                // hull deck
+      }
+      // the little cabin on each hull, with its windows; the rudder
+      part(new THREE.BoxGeometry(4.6, 0.45, 0.86), M(-0.6, 1.27, zc, 1, 1, 1), white);
+      for (const sg of [-1, 1]) part(new THREE.BoxGeometry(3.6, 0.13, 0.02), M(-0.6, 1.3, zc + sg * 0.44, 1, 1, 1), dark);
+      part(new THREE.BoxGeometry(0.08, 1.3, 0.55), M(-6.75, 0.35, zc, 1, 1, 1), beam);
     }
-    part(new THREE.BoxGeometry(0.12, 0.1, 2.15), M(1.05, 0.47, 0, 1, 1, 1), metal);
-    part(new THREE.BoxGeometry(0.12, 0.1, 2.15), M(-1.55, 0.47, 0, 1, 1, 1), metal);
-    part(new THREE.BoxGeometry(2.5, 0.025, 1.72), M(-0.25, 0.46, 0, 1, 1, 1), net);
-    rod(V(0.62, 0.5, 0), V(0.62, 7.4, 0), 0.055, 0.035, metal);                                    // mast
-    const bc = Math.cos(0.42), bs = Math.sin(0.42);
-    const tack = V(0.62, 1.4, 0), clew = V(0.62 - 2.6 * bc, 1.4, -2.6 * bs), head = V(0.62, 7.3, 0);
-    rod(tack, clew, 0.035, 0.03, metal);                                                            // boom
-    rod(V(2.3, 0.45, 0), V(0.62, 5.6, 0), 0.008, 0.008, metal);                                     // forestay
-    sail(tack, head, clew, V(bs, 0, -bc).multiplyScalar(0.32), 5, k => k === 0 ? band : cloth);
-    sail(V(2.2, 0.62, 0), V(0.66, 5.5, 0), V(1.05, 1.15, -0.75), V(0.4, 0, -0.9).multiplyScalar(0.14), 3, () => cloth);
+    // crossbeams, and the slatted deck between the hulls
+    for (const x of [-4.6, -1.5, 1.8, 4.4]) part(new THREE.BoxGeometry(0.28, 0.24, 6.1), M(x, 1.2, 0, 1, 1, 1), beam);
+    for (let i = 0; i < 12; i++) part(new THREE.BoxGeometry(7.4, 0.05, 0.25), M(-1.3, 1.345, -1.87 + i * 0.34, 1, 1, 1), slat);
+    // the deck pod: a cabin with a rounded roof, windows, a door aft
+    part(new THREE.BoxGeometry(4.6, 1.55, 3.2), M(-1.1, 2.14, 0, 1, 1, 1), pod);
+    const rf = new THREE.CylinderGeometry(1.75, 1.75, 4.9, 14, 1, false, 0, Math.PI);
+    part(rf, new THREE.Matrix4().compose(V(-1.1, 2.9, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2)), V(0.42, 1, 1)), roof);
+    for (const sg of [-1, 1]) for (const x of [-2.4, -1.1, 0.2]) part(new THREE.BoxGeometry(0.85, 0.45, 0.02), M(x, 2.35, sg * 1.61, 1, 1, 1), dark);
+    part(new THREE.BoxGeometry(0.02, 0.5, 2.2), M(1.21, 2.35, 0, 1, 1, 1), dark);
+    part(new THREE.BoxGeometry(0.02, 1.25, 0.8), M(-3.41, 1.98, 0, 1, 1, 1), dark);
+    // two masts, each with a wingsail: luff on the mast, a curved gaff above, a boom below
+    const wing = (mx, y0, y1, len, gl, sheet, belly) => {
+      const c = Math.cos(sheet), s = Math.sin(sheet), back = (d) => V(mx - d * c, 0, -d * s);
+      const tack = V(mx, y0, 0), throat = V(mx, y1, 0);
+      const peak = back(gl).add(V(0, y1 + gl * 0.42, 0)), clew = back(len).add(V(0, y0 + 0.15, 0));
+      rod(V(mx, 1.3, 0), V(mx, y1 + gl * 0.42 + 0.5, 0), 0.09, 0.06, spar);
+      rod(tack, clew, 0.05, 0.045, spar);
+      const gm = throat.clone().lerp(peak, 0.5).add(V(0, 0.28, 0));
+      rod(throat, gm, 0.045, 0.04, spar); rod(gm, peak, 0.04, 0.035, spar);
+      const bel = V(s, 0, -c).multiplyScalar(belly), rows = 6;
+      const at = (k, j) => {
+        const a = k / rows, l = tack.clone().lerp(throat, a), e = clew.clone().lerp(peak, a);
+        if (k === rows) { const g = throat.clone().lerp(peak, j / 2); return j === 1 ? g.add(V(0, 0.28, 0)) : g; }
+        const m = l.clone().lerp(e, j / 2);
+        return j === 1 ? m.addScaledVector(bel, Math.sin(Math.PI * (0.15 + 0.7 * a))) : m;
+      };
+      for (let k = 0; k < rows; k++) for (let j = 0; j < 2; j++) quad(at(k, j), at(k, j + 1), at(k + 1, j + 1), at(k + 1, j), k % 3 === 1 ? tan2 : tan);
+    };
+    wing(4.4, 2.3, 10.6, 3.5, 3.3, 0.42, 0.4);
+    wing(1.8, 3.7, 11.4, 4.2, 3.7, 0.46, 0.45);
+    tri(V(1.8, 13.4, 0), V(1.8, 13.0, 0), V(0.9, 13.2, -0.05), [0.85, 0.15, 0.12]);                  // pennant
   } else if (kind === 'piper') {
     const back = [0.55, 0.49, 0.41], white = [0.93, 0.92, 0.89], dark = [0.1, 0.09, 0.08];
     part(new THREE.SphereGeometry(1, 8, 6), M(0, 0.1, 0, 0.1, 0.05, 0.055, -0.12), back, white);
@@ -15349,7 +15812,7 @@ function ensureShorebirds() {
   const gulls = new THREE.InstancedMesh(birdGeometry('gull'), mat, N_GULLS);
   // the crabs and the catamaran share the birds' material and program
   const crabs = new THREE.InstancedMesh(birdGeometry('crab'), mat, N_CRABS);
-  const boatMesh = new THREE.InstancedMesh(birdGeometry('cat'), mat, 1);
+  const boatMesh = new THREE.InstancedMesh(birdGeometry('tiki'), mat, 1);
   for (const m of [pipers, gulls, crabs, boatMesh]) { m.frustumCulled = false; m.raycast = () => {}; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); }
   const group = new THREE.Group();
   group.add(pipers); group.add(gulls); group.add(crabs); group.add(boatMesh);
@@ -15511,9 +15974,9 @@ function updateCrabs(B, h, dt, t, ps, pl) {
   B.crabs.instanceMatrix.needsUpdate = true;
 }
 
-/* ── The catamaran ──
+/* ── The catamaran: a Wharram Tiki 46 "Contiki" ──
    Beached at the water's edge beside the breach. Walk into it to climb
-   aboard (you stand aft of the mast on the windward hull); then the usual
+   aboard (you stand aft on the windward hull's deck); then the usual
    controls sail it — a little faster than walking, gliding on when you let
    go, the bows turning to follow the way it moves. Steer back onto the
    sand to run it ashore and hop off. Kept in local (unflipped) coordinates
@@ -15521,8 +15984,9 @@ function updateCrabs(B, h, dt, t, ps, pl) {
 const SAIL_REACH = 82;                 // no farther than this from the building's middle…
 const SAIL_FAR = 110;                  // …so with this far plane outside, the cathedral stays in view
 const SAIL_SPEED = 1.8;                // × walking pace
-const BOAT_HL = 2.35, BOAT_HW = 1.2;   // half length, half beam
-const HELM_U = -1.0, HELM_V = 0.9;     // where you stand: aft of the mast, on the windward hull
+const BOAT_HL = 7.0, BOAT_HW = 3.35;   // half length, half beam
+const HELM_U = -5.6, HELM_V = 2.7;     // where you stand: aft of the deck pod, on the windward hull…
+const BOAT_DECK = 1.1;                 // …this far above the sand's level
 const _sailV = new THREE.Vector3(), _sailW = new THREE.Vector3();
 function moveSpeedScale() { return arsenal.boat && arsenal.boat.aboard ? SAIL_SPEED : 1; }
 function camLocal() { return worldRoot.worldToLocal(_sailV.copy(camera.position)); }
@@ -15543,24 +16007,24 @@ function placeBoat(h) {
   const B = arsenal.boat;
   const ox = -h.normal.x, oz = -h.normal.z, ax = oz, az = -ox;   // out to sea; along the wall
   const F = h._frame || (h._frame = beachFrame(h));
-  const l = 8.5;
+  const l = 13;
   const lw = worldRoot.localToWorld(_sailW.set(h.center.x + ax * l, 0, h.center.z + az * l)).dot(F.L);
-  const s = beachShore(lw) - 1.1;
+  const s = beachShore(lw) + 0.3;                                  // her bows run up on the sand
   B.lx = h.center.x + ox * s + ax * l; B.lz = h.center.z + oz * s + az * l;
   B.hx = -ox; B.hz = -oz;                                          // bows up the beach
   B.hole = h; B.placed = true; B.vx = B.vz = B.speed = 0; B.armed = true;
 }
-function startBoatHop(B, tx, tz, dur) {
+function startBoatHop(B, tx, tz, dur, ty) {
   const c = camLocal();
-  B.tween = { fx: c.x, fz: c.z, tx, tz, t: 0, dur, fy: camera.position.y };
+  B.tween = { fx: c.x, fz: c.z, tx, tz, t: 0, dur, fy: camera.position.y, ty };
 }
 function boardBoat() {
   const B = arsenal.boat;
   B.aboard = true; B.armed = false; B.vx = B.vz = B.speed = 0;
   tapWalkTarget = null;
   B.baseY = camera.position.y;
-  const o = helmOffset(B);
-  startBoatHop(B, B.lx + o.x, B.lz + o.z, 0.55);
+  const o = helmOffset(B), c = camLocal(), tx = B.lx + o.x, tz = B.lz + o.z;
+  startBoatHop(B, tx, tz, 0.5 + Math.hypot(tx - c.x, tz - c.z) / 12, B.baseY + BOAT_DECK);
   if (!arsenal.sailHinted) {
     arsenal.sailHinted = true;
     flashCustomHint('aboard — sail anywhere; steer back onto the sand to land', 4200);
@@ -15569,22 +16033,26 @@ function boardBoat() {
 function landBoat(h) {
   const B = arsenal.boat;
   B.aboard = false; B.armed = false; B.vx = B.vz = B.speed = 0;
-  // the hulls run up on the sand where they are; hop off the windward side, up the beach
-  const c = camLocal(), o = helmOffset(B);
-  const px = -B.hz, pz = B.hx, side = Math.sign(o.x * px + o.z * pz) || 1;
-  startBoatHop(B, c.x + px * side * 1.1 + h.normal.x * 0.9, c.z + pz * side * 1.1 + h.normal.z * 0.9, 0.5);
+  // her bows run up on the sand: go forward along the hull and jump down off the bow
+  const c = camLocal(), run = BOAT_HL - HELM_U + 1.2;
+  const tx = c.x + B.hx * run + h.normal.x * 0.8, tz = c.z + B.hz * run + h.normal.z * 0.8;
+  startBoatHop(B, tx, tz, 0.5 + run / 12, B.baseY);
   return { x: c.x, z: c.z, roomId: h.room || currentRoomId };
 }
 // Aboard: anywhere on the water within reach; a step onto the sand lands her
 function clampSail(h, x, z, move) {
   const B = arsenal.boat;
   const F = h._frame || (h._frame = beachFrame(h));
-  const lw = worldRoot.localToWorld(_sailW.set(x, 0, z)).dot(F.L);
-  if (breachSL(h, x, z).s < beachShore(lw) - 0.3) {
-    if (move) return landBoat(h);
+  const shoreAt = (px, pz) => beachShore(worldRoot.localToWorld(_sailW.set(px, 0, pz)).dot(F.L));
+  if (!move) {
     // a tap on the sand: sail in and walk on to it
-    B.aboard = false; const r = clampOutside(h, x, z, false); B.aboard = true;
-    return r;
+    if (breachSL(h, x, z).s < shoreAt(x, z) - 0.3) { B.aboard = false; const r = clampOutside(h, x, z, false); B.aboard = true; return r; }
+  } else {
+    // heading in, her bows reach the sand: she's ashore
+    const o = helmOffset(B), c = camLocal(), f = BOAT_HL - 0.6;
+    const bx = x - o.x + B.hx * f, bz = z - o.z + B.hz * f;
+    const sb = breachSL(h, bx, bz).s, sb0 = breachSL(h, c.x - o.x + B.hx * f, c.z - o.z + B.hz * f).s;
+    if (sb < shoreAt(bx, bz) - 0.8 && sb < sb0 - 1e-4) return landBoat(h);
   }
   const BB = buildingBox(), mx = (BB.x0 + BB.x1) / 2, mz = (BB.z0 + BB.z1) / 2;
   const dx = x - mx, dz = z - mz, d = Math.hypot(dx, dz);
@@ -15597,7 +16065,7 @@ function updateSail(dt, t) {
   if (!B || !BR || !worldRoot) return;
   if ((B.aboard || B.tween) && !arsenal.outside) {
     // the beach closed under us (the damage was cleared): back to the start
-    B.aboard = false; B.tween = null; B.placed = false; camera.position.y = B.baseY;
+    B.aboard = false; B.tween = null; B.placed = false; camera.position.y = B.baseY;   // (baseY: the walking height)
   }
   const h = activeBreach();
   if (!B.aboard && !B.tween && (!B.placed || B.hole !== h)) {
@@ -15610,8 +16078,8 @@ function updateSail(dt, t) {
     const e = T.t * T.t * (3 - 2 * T.t);
     const w = worldRoot.localToWorld(_sailW.set(T.fx + (T.tx - T.fx) * e, 0, T.fz + (T.tz - T.fz) * e));
     camera.position.x = w.x; camera.position.z = w.z;
-    camera.position.y = T.fy + (B.baseY - T.fy) * e + Math.sin(T.t * Math.PI) * 0.22;   // a little hop
-    if (T.t >= 1) { B.tween = null; camera.position.y = B.baseY; }
+    camera.position.y = T.fy + (T.ty - T.fy) * e + Math.sin(T.t * Math.PI) * 0.45;   // a hop
+    if (T.t >= 1) { B.tween = null; camera.position.y = T.ty; }
   } else if (B.aboard) {
     const c = camLocal(), o = helmOffset(B);
     const mx = c.x - (B.lx + o.x), mz = c.z - (B.lz + o.z);
@@ -15632,12 +16100,12 @@ function updateSail(dt, t) {
       if (B.speed > 0.25) {
         const a0 = Math.atan2(B.hz, B.hx), a1 = Math.atan2(B.vz, B.vx);
         const da = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
-        const a = a0 + Math.max(-dt * 1.6, Math.min(dt * 1.6, da));
+        const a = a0 + Math.max(-dt * 1.0, Math.min(dt * 1.0, da));
         B.hx = Math.cos(a); B.hz = Math.sin(a);
       }
       const c2 = camLocal(), o2 = helmOffset(B);
       B.lx = c2.x - o2.x; B.lz = c2.z - o2.z;
-      camera.position.y = B.baseY + 0.03 * Math.sin(t * 1.5) + 0.015 * Math.sin(t * 2.6 + 1);
+      camera.position.y = B.baseY + BOAT_DECK + 0.025 * Math.sin(t * 1.2) + 0.01 * Math.sin(t * 2.3 + 1);
     }
   }
   // draw her, and tell the sea where her wake goes
@@ -15647,9 +16115,9 @@ function updateSail(dt, t) {
   const dwx = B.hx * sx, dwz = B.hz;
   const F = B.hole._frame || (B.hole._frame = beachFrame(B.hole));
   const afloat = B.aboard || breachSL(B.hole, B.lx, B.lz).s > beachShore(cw.dot(F.L)) + 0.6;
-  _bP.set(cw.x, afloat ? 0.03 * Math.sin(t * 1.5) : -0.06, cw.z);
-  _boatE.set(afloat ? 0.03 * Math.sin(t * 1.3 + 1) - 0.07 * Math.min(1, B.speed / 6) : 0.02,
-    Math.atan2(-dwz, dwx), afloat ? 0.025 * Math.sin(t * 1.1) : 0.035);
+  _bP.set(cw.x, afloat ? 0.025 * Math.sin(t * 1.2) : -0.08, cw.z);
+  _boatE.set(afloat ? 0.012 * Math.sin(t * 1.1 + 1) - 0.015 * Math.min(1, B.speed / 6) : 0.006,
+    Math.atan2(-dwz, dwx), afloat ? 0.008 * Math.sin(t * 0.9) : 0.012);
   _bQ.setFromEuler(_boatE);
   _bS.set(1, 1, 1);
   _bM.compose(_bP, _bQ, _bS);
@@ -15889,10 +16357,10 @@ const BEACH_HOLE_FRAG = [
   '        sand = vec3( 0.36, 0.28, 0.19 ) * 0.75 * lit * ( 0.82 + 0.18 * smoothstep( 0.235, 0.17, fd ) );',
   '      }',
   // the catamaran's shadow: two hulls and the trampoline, cast with the sun
-  '      { vec2 bh = uBoat.zw, br = p.xz - uBoat.xy + sun.xz / max( sun.y, 0.2 ) * 0.4;',
+  '      { vec2 bh = uBoat.zw, br = p.xz - uBoat.xy + sun.xz / max( sun.y, 0.2 ) * 1.0;',
   '        float bu = dot( br, bh ), bv = abs( br.x * bh.y - br.y * bh.x );',
-  '        float hs = ( 1.0 - smoothstep( 0.12, 0.32, abs( bv - 0.95 ) ) ) * ( 1.0 - smoothstep( 1.9, 2.35, abs( bu ) ) );',
-  '        float ts = ( 1.0 - smoothstep( 0.7, 0.9, bv ) ) * ( 1.0 - smoothstep( 1.2, 1.45, abs( bu + 0.25 ) ) ) * 0.45;',
+  '        float hs = ( 1.0 - smoothstep( 0.4, 0.75, abs( bv - 2.7 ) ) ) * ( 1.0 - smoothstep( 5.8, 6.8, abs( bu ) ) );',
+  '        float ts = ( 1.0 - smoothstep( 1.9, 2.2, bv ) ) * ( 1.0 - smoothstep( 3.4, 3.8, abs( bu + 1.3 ) ) ) * 0.7;',
   '        sand *= 1.0 - 0.42 * max( hs, ts ); }',
   '      col = sand;',
   '    } else {',
@@ -15927,14 +16395,14 @@ const BEACH_HOLE_FRAG = [
   // the catamaran's wake: foam off her two hulls, and a widening V behind
   '      if ( uBoatV > 0.2 ) {',
   '        vec2 bh = uBoat.zw, br = p.xz - uBoat.xy;',
-  '        float bu = -dot( br, bh ) - 1.6, bv = abs( br.x * bh.y - br.y * bh.x );',
-  '        if ( bu > -1.2 && bu < 24.0 ) {',
+  '        float bu = -dot( br, bh ) - 6.0, bv = abs( br.x * bh.y - br.y * bh.x );',
+  '        if ( bu > -5.0 && bu < 28.0 ) {',
   '          float ba = max( bu, 0.0 );',
-  '          float bk = smoothstep( 0.2, 3.0, uBoatV ) * smoothstep( -1.2, 0.2, bu );',
+  '          float bk = smoothstep( 0.2, 3.0, uBoatV ) * smoothstep( -5.0, 0.2, bu );',
   // churned white water off each hull, spreading and breaking up as it falls behind
-  '          float hull = ( 1.0 - smoothstep( 0.05, 0.3 + 0.09 * ba, abs( bv - 0.95 - 0.06 * ba ) ) ) * exp( -ba * 0.22 );',
+  '          float hull = ( 1.0 - smoothstep( 0.1, 0.45 + 0.09 * ba, abs( bv - 2.7 - 0.06 * ba ) ) ) * exp( -ba * 0.2 );',
   // the V: thin broken lines of foam, fainter, a little farther
-  '          float vee = ( 1.0 - smoothstep( 0.0, 0.16 + 0.025 * ba, abs( bv - 1.3 - 0.34 * ba ) ) ) * exp( -ba * 0.16 ) * 0.55;',
+  '          float vee = ( 1.0 - smoothstep( 0.0, 0.2 + 0.025 * ba, abs( bv - 3.3 - 0.34 * ba ) ) ) * exp( -ba * 0.14 ) * 0.55;',
   '          float n = fbm( sp * 4.0 + uTime * 0.7 );',
   '          float wk = ( hull * smoothstep( 0.25 + 0.025 * ba, 0.65, n ) + vee * smoothstep( 0.4, 0.7, fbm( sp * 6.0 - uTime * 0.4 ) ) ) * bk;',
   '          c = mix( c, vec3( 0.95, 0.97, 0.97 ), wk );',
